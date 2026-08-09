@@ -360,6 +360,23 @@ function applyModel(gltf, name) {
   updateUI()
 }
 
+function styleBundledHuman(gltf) {
+  gltf.scene.traverse((object) => {
+    if (!object.isMesh) return
+    object.geometry.computeVertexNormals()
+    const styleMaterial = (material) => {
+      const styled = material.clone()
+      if (!styled.map) styled.color.set(0xc58f73)
+      styled.metalness = 0
+      styled.roughness = 0.78
+      return styled
+    }
+    object.material = Array.isArray(object.material)
+      ? object.material.map(styleMaterial)
+      : styleMaterial(object.material)
+  })
+}
+
 async function loadDefaultModel() {
   try {
     const modelUrl = new URL('../models/human.glb', import.meta.url)
@@ -367,6 +384,7 @@ async function loadDefaultModel() {
       if (!event.total) return
       $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
+    styleBundledHuman(gltf)
     applyModel(gltf, '人體模型')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('人體模型已就緒')
