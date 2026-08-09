@@ -1,10 +1,9 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import pointsData from './data/points-data.json'
+import pointsData from './data/points-data.json' with { type: 'json' }
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
-import './style.css'
 
 const $ = (selector) => document.querySelector(selector)
 const makeId = () => crypto.randomUUID()
