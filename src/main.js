@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import pointsData from './data/points-data.json' with { type: 'json' }
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
@@ -47,7 +48,7 @@ $('#app').innerHTML = `
     <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯屬性</p></form></div>
   </aside>
 </main>
-<footer><span id="model-status">正在載入 OxiHuman…</span><span id="status">就緒</span><span>WebGL · 本機資料</span></footer>
+<footer><span id="model-status">正在載入人體模型…</span><span id="status">就緒</span><span>WebGL · 本機資料</span></footer>
 <div id="toast" role="status"></div>`
 
 const viewport = $('#viewport')
@@ -114,6 +115,7 @@ let draftNodes = []
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 let pointerDown = null
+const createModelLoader = () => new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
 
 const sideLabel = (side) => ({ left: '左側', right: '右側', midline: '中線', bilateral: '雙側' })[side] || side
 const offsetPosition = (node, amount = 0.012) =>
@@ -358,11 +360,35 @@ function applyModel(gltf, name) {
   updateUI()
 }
 
+function styleBundledHuman(gltf) {
+  gltf.scene.traverse((object) => {
+    if (!object.isMesh) return
+    const styleMaterial = (material) => {
+      const styled = material.clone()
+      if (!styled.map) styled.color.set(0xc58f73)
+      styled.emissive.set(0x21110d)
+      styled.emissiveIntensity = 0.45
+      styled.metalness = 0
+      styled.roughness = 0.78
+      return styled
+    }
+    object.material = Array.isArray(object.material)
+      ? object.material.map(styleMaterial)
+      : styleMaterial(object.material)
+  })
+}
+
 async function loadDefaultModel() {
   try {
-    const modelUrl = new URL('../models/oxihuman.glb', import.meta.url)
-    applyModel(await new GLTFLoader().loadAsync(modelUrl.href), 'OxiHuman CC0')
-    setStatus('OxiHuman 人體模型已就緒')
+    const modelUrl = new URL('../models/human.glb', import.meta.url)
+    const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
+      if (!event.total) return
+      $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
+    })
+    styleBundledHuman(gltf)
+    applyModel(gltf, '人體模型')
+    $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
+    setStatus('人體模型已就緒')
   } catch (error) {
     buildMannequin()
     $('#model-status').textContent = '簡易備援人體'
@@ -374,7 +400,7 @@ async function loadModel(file) {
   if (!file?.name.toLowerCase().endsWith('.glb')) return toast('目前僅支援二進位 .glb 模型', 'error')
   const url = URL.createObjectURL(file)
   try {
-    applyModel(await new GLTFLoader().loadAsync(url), file.name)
+    applyModel(await createModelLoader().loadAsync(url), file.name)
     toast(`已載入 ${file.name}`)
   } catch (error) {
     toast(`模型載入失敗：${error.message}`, 'error')

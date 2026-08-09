@@ -1,16 +1,15 @@
 # Third-party assets
 
-## OxiHuman default body model
+## `human_glb` body model
 
-- Project: [OxiHuman](https://github.com/cool-japan/oxihuman)
-- Author: COOLJAPAN OU (Team Kitasan)
-- Model data license: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
-- Upstream provenance: [OxiHuman PROVENANCE.md](https://github.com/cool-japan/oxihuman/blob/master/PROVENANCE.md)
-- Export generator: OxiHuman 0.1.0
-- Export parameters: default adult, 172 cm, chest 96 cm, waist 82 cm, hip 98 cm
-- Local file: `models/oxihuman.glb`
-- SHA-256: `981a1c60bdcd0973ad6c14b10aa19d225b8a0a5c1eb028139b99a253ef25adcc`
+- Title: [`human_glb`](https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900)
+- Creator: [aaravparakh](https://sketchfab.com/aaravparakh)
+- License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
+- Local file: `models/human.glb`
+- SHA-256: `03631272f5a279579e6b55d48056d65648c25ed88b505f7a23b498d36a34e2f1`
 
-The bundled body-mesh data is derived from MakeHuman assets released under
-CC0-1.0. OxiHuman code is Apache-2.0, but no OxiHuman executable code is
-redistributed by this project.
+Changes made by this project: joined the original mesh primitives, welded
+equivalent vertices, simplified the geometry to 25% with a 0.0005 error
+tolerance, quantized vertex attributes, and applied Meshopt compression using
+glTF-Transform 4.4.2. The optimized model contains 197,408 uploaded vertices
+and 352,600 triangles. These changes are not endorsed by the original creator.
