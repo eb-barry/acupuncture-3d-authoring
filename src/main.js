@@ -47,7 +47,7 @@ $('#app').innerHTML = `
     <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯屬性</p></form></div>
   </aside>
 </main>
-<footer><span id="model-status">示範人體</span><span id="status">就緒</span><span>WebGL · 本機資料</span></footer>
+<footer><span id="model-status">正在載入 OxiHuman…</span><span id="status">就緒</span><span>WebGL · 本機資料</span></footer>
 <div id="toast" role="status"></div>`
 
 const viewport = $('#viewport')
@@ -104,7 +104,6 @@ function buildMannequin() {
   add(new THREE.CapsuleGeometry(0.14, 1.3, 8, 18), [-0.2, 0.52, 0], [1, 1, 1], [0, 0, -0.035])
   add(new THREE.CapsuleGeometry(0.14, 1.3, 8, 18), [0.2, 0.52, 0], [1, 1, 1], [0, 0, 0.035])
 }
-buildMannequin()
 
 let state = emptyDocument()
 const history = new History(state)
@@ -328,36 +327,54 @@ async function importJSON(file) {
   toast(`已匯入 ${state.meridians.length} 條經脈、${state.acupoints.length} 個穴位`)
 }
 
+function applyModel(gltf, name) {
+  const box = new THREE.Box3().setFromObject(gltf.scene)
+  const size = box.getSize(new THREE.Vector3())
+  if (!Number.isFinite(size.y) || size.y === 0) throw new Error('模型尺寸無效')
+  modelGroup.clear()
+  modelMeshes = []
+  modelGroup.add(gltf.scene)
+  gltf.scene.scale.multiplyScalar(3 / size.y)
+  gltf.scene.updateMatrixWorld(true)
+  const normalizedBox = new THREE.Box3().setFromObject(gltf.scene)
+  const center = normalizedBox.getCenter(new THREE.Vector3())
+  gltf.scene.position.x -= center.x
+  gltf.scene.position.y -= normalizedBox.min.y
+  gltf.scene.position.z -= center.z
+  gltf.scene.updateMatrixWorld(true)
+  gltf.scene.traverse((object) => {
+    if (object.isMesh) {
+      object.castShadow = true
+      object.receiveShadow = true
+      modelMeshes.push(object)
+    }
+  })
+  state = { ...state, model: { name } }
+  history.replace(state)
+  $('#model-status').textContent = name
+  controls.target.set(0, 1.5, 0)
+  camera.position.set(3.4, 1.7, 4.6)
+  controls.update()
+  updateUI()
+}
+
+async function loadDefaultModel() {
+  try {
+    const modelUrl = new URL('../models/oxihuman.glb', import.meta.url)
+    applyModel(await new GLTFLoader().loadAsync(modelUrl.href), 'OxiHuman CC0')
+    setStatus('OxiHuman 人體模型已就緒')
+  } catch (error) {
+    buildMannequin()
+    $('#model-status').textContent = '簡易備援人體'
+    toast(`預設人體載入失敗：${error.message}`, 'error')
+  }
+}
+
 async function loadModel(file) {
   if (!file?.name.toLowerCase().endsWith('.glb')) return toast('目前僅支援二進位 .glb 模型', 'error')
   const url = URL.createObjectURL(file)
   try {
-    const gltf = await new GLTFLoader().loadAsync(url)
-    const box = new THREE.Box3().setFromObject(gltf.scene)
-    const size = box.getSize(new THREE.Vector3())
-    if (!Number.isFinite(size.y) || size.y === 0) throw new Error('模型尺寸無效')
-    modelGroup.clear()
-    modelMeshes = []
-    modelGroup.add(gltf.scene)
-    gltf.scene.scale.setScalar(3 / size.y)
-    gltf.scene.updateMatrixWorld(true)
-    const normalizedBox = new THREE.Box3().setFromObject(gltf.scene)
-    const center = normalizedBox.getCenter(new THREE.Vector3())
-    gltf.scene.position.set(-center.x, -normalizedBox.min.y, -center.z)
-    gltf.scene.updateMatrixWorld(true)
-    gltf.scene.traverse((object) => {
-      if (object.isMesh) {
-        object.castShadow = true
-        object.receiveShadow = true
-        modelMeshes.push(object)
-      }
-    })
-    state = { ...state, model: { name: file.name } }
-    history.replace(state)
-    $('#model-status').textContent = file.name
-    controls.target.set(0, 1.5, 0)
-    camera.position.set(3.4, 1.7, 4.6)
-    controls.update()
+    applyModel(await new GLTFLoader().loadAsync(url), file.name)
     toast(`已載入 ${file.name}`)
   } catch (error) {
     toast(`模型載入失敗：${error.message}`, 'error')
@@ -447,3 +464,4 @@ renderCatalog()
 rebuildAnnotations()
 updateUI()
 resize()
+loadDefaultModel()
