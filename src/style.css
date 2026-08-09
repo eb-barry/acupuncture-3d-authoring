@@ -123,6 +123,8 @@ footer {
 }
 footer span:nth-child(2) { color: #a8b8b3; }
 footer span:last-child { text-align: right; }
+footer a { color: #a8b8b3; text-decoration: none; }
+footer a:hover { color: #f0c58e; text-decoration: underline; }
 #toast {
   position: fixed; z-index: 20; right: 16px; bottom: 38px; max-width: 420px; padding: 10px 14px;
   border: 1px solid #4b685f; border-radius: 5px; background: #1f302b; color: #dcece7; font-size: 12px;
