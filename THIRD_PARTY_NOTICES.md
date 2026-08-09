@@ -8,7 +8,7 @@
 - Upstream provenance: [OxiHuman PROVENANCE.md](https://github.com/cool-japan/oxihuman/blob/master/PROVENANCE.md)
 - Export generator: OxiHuman 0.1.0
 - Export parameters: default adult, 172 cm, chest 96 cm, waist 82 cm, hip 98 cm
-- Local file: `public/models/oxihuman.glb`
+- Local file: `models/oxihuman.glb`
 - SHA-256: `981a1c60bdcd0973ad6c14b10aa19d225b8a0a5c1eb028139b99a253ef25adcc`
 
 The bundled body-mesh data is derived from MakeHuman assets released under

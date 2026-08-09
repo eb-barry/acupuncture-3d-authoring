@@ -360,7 +360,7 @@ function applyModel(gltf, name) {
 
 async function loadDefaultModel() {
   try {
-    const modelUrl = new URL('./models/oxihuman.glb', document.baseURI)
+    const modelUrl = new URL('../models/oxihuman.glb', import.meta.url)
     applyModel(await new GLTFLoader().loadAsync(modelUrl.href), 'OxiHuman CC0')
     setStatus('OxiHuman 人體模型已就緒')
   } catch (error) {
