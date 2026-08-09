@@ -363,10 +363,11 @@ function applyModel(gltf, name) {
 function styleBundledHuman(gltf) {
   gltf.scene.traverse((object) => {
     if (!object.isMesh) return
-    object.geometry.computeVertexNormals()
     const styleMaterial = (material) => {
       const styled = material.clone()
       if (!styled.map) styled.color.set(0xc58f73)
+      styled.emissive.set(0x21110d)
+      styled.emissiveIntensity = 0.45
       styled.metalness = 0
       styled.roughness = 0.78
       return styled
