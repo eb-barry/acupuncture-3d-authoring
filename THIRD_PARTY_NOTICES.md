@@ -6,17 +6,15 @@
 - Creator: [aaravparakh](https://sketchfab.com/aaravparakh)
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/human.glb`
-- SHA-256: `60429653518265f35994504556c4ab4e416627e766dcd5c2839c1fb6fcb8cdb0`
+- SHA-256: `3de9a0a4ad23f96d6b7e04d4f5f8bb6a6d0ce13c67a0bb3d0f8842e0c1bf410a`
 
 Changes made by this project: joined the original mesh primitives, welded
 equivalent vertices, recalculated outward normals, applied region-weighted
-Laplacian smoothing only on the torso front/flank to reduce contour ridges,
-then hard-restored protected landmark vertices for the face, ears, hands,
-fingers, elbow crease bands, feet, and back so those details match the source
-mesh. Vertex attributes were quantized and Meshopt-compressed using
-glTF-Transform 4.4.2 without mesh simplification, preserving 705,208 uploaded
-vertices and 1,410,404 triangles. These changes are not endorsed by the
-original creator.
+Laplacian cleanup on back/inner-forearm/palm seam bands while locking face and
+fingertip neighborhoods, then added ten separate fingernail meshes with a
+distinct pink material for acupuncture orientation. Vertex attributes were
+quantized and Meshopt-compressed using glTF-Transform 4.4.2 without mesh
+simplification. These changes are not endorsed by the original creator.
 
 ## Acupuncture catalog
 
