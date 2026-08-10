@@ -230,7 +230,9 @@ function projectNearSurface(position, normal) {
     }
   }
   candidates.sort((a, b) => a.distance - b.distance)
-  return candidates[0] || { position, normal }
+  return candidates.length
+    ? { position: candidates[0].position, normal: candidates[0].normal }
+    : { position, normal }
 }
 
 function mirroredNode(node) {
@@ -722,15 +724,15 @@ function addEyes() {
   const whiteMaterial = new THREE.MeshPhysicalMaterial({ color: 0xf2eee5, roughness: 0.38, clearcoat: 0.25 })
   const irisMaterial = new THREE.MeshStandardMaterial({ color: 0x4b6f78, roughness: 0.3 })
   const pupilMaterial = new THREE.MeshBasicMaterial({ color: 0x111817 })
-  for (const x of [-0.092, 0.092]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.048, 28, 20), whiteMaterial)
-    eye.scale.set(1, 0.7, 0.68)
-    eye.position.set(x, 2.69, 0.215)
-    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.018, 20, 14), irisMaterial)
-    iris.scale.set(1, 1, 0.35)
-    iris.position.set(x, 2.69, 0.251)
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.008, 16, 10), pupilMaterial)
-    pupil.position.set(x, 2.69, 0.259)
+  for (const x of [-0.064, 0.064]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.029, 28, 20), whiteMaterial)
+    eye.scale.set(1, 0.68, 0.48)
+    eye.position.set(x, 2.675, 0.142)
+    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.011, 20, 14), irisMaterial)
+    iris.scale.set(1, 1, 0.3)
+    iris.position.set(x, 2.675, 0.157)
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 16, 10), pupilMaterial)
+    pupil.position.set(x, 2.675, 0.162)
     eyeGroup.add(eye, iris, pupil)
   }
   modelGroup.add(eyeGroup)
