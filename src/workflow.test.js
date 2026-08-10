@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { nextExpectedPoint, placementProgress, routeIncludesAllPoints } from './workflow.js'
+import {
+  isSurfaceFacingCamera,
+  nextExpectedPoint,
+  placementProgress,
+  routeIncludesAllPoints,
+} from './workflow.js'
 
 const required = [
   { code: 'LU1' },
@@ -37,5 +42,12 @@ describe('meridian authoring workflow', () => {
       { type: 'acupoint', code: 'LU1' },
       { type: 'acupoint', code: 'LU3' },
     ])).toBe(false)
+  })
+
+  it('hides front-surface labels from a rear camera', () => {
+    const frontPoint = [0.2, 1.5, 0.3]
+    const frontNormal = [0, 0, 1]
+    expect(isSurfaceFacingCamera(frontPoint, frontNormal, [0, 1.5, 5])).toBe(true)
+    expect(isSurfaceFacingCamera(frontPoint, frontNormal, [0, 1.5, -5])).toBe(false)
   })
 })

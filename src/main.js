@@ -10,7 +10,7 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-
 import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } from './catalog.js'
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
-import { nextExpectedPoint, placementProgress } from './workflow.js'
+import { isSurfaceFacingCamera, nextExpectedPoint, placementProgress } from './workflow.js'
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree
@@ -401,11 +401,7 @@ function updateLabelVisibility(time) {
   markerVisuals.forEach(({ mesh, label, point }) => {
     const direction = mesh.position.clone().sub(camera.position)
     const distance = direction.length()
-    const towardCamera = camera.position.clone().sub(mesh.position).normalize()
-    const radial = new THREE.Vector3(point.position[0], 0, point.position[2]).normalize()
-    const surfaceNormal = new THREE.Vector3(...point.normal).normalize()
-    const facesCamera = radial.dot(towardCamera) > 0.02
-      && surfaceNormal.dot(towardCamera) > 0.05
+    const facesCamera = isSurfaceFacingCamera(point.position, point.normal, toArray(camera.position))
     const caster = new THREE.Raycaster(camera.position, direction.normalize(), 0, distance)
     caster.firstHitOnly = true
     const obstruction = caster.intersectObjects(modelMeshes, false)[0]
