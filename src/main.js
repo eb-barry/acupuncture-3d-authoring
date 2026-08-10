@@ -268,7 +268,7 @@ function skinCurvePoints(route) {
     const t = index / Math.max(samples.length - 1, 1)
     const nodeIndex = Math.min(nodes.length - 1, Math.round(t * (nodes.length - 1)))
     const projected = projectNearSurface(toArray(sample), nodes[nodeIndex].normal)
-    return offsetPosition(projected, 0.006)
+    return offsetPosition(projected, 0.012)
   })
 }
 
@@ -287,10 +287,12 @@ function rebuildAnnotations() {
       linewidth: route.width,
       transparent: true,
       opacity: selected?.type === 'meridian' && selected.id === route.id ? 1 : 0.86,
+      depthTest: true,
       resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
     })
     const line = new Line2(geometry, material)
     line.computeLineDistances()
+    line.renderOrder = 3
     line.userData = { type: 'meridian', id: route.id }
     annotationGroup.add(line)
     routeVisuals.push({ line, route })
@@ -727,12 +729,12 @@ function addEyes() {
   for (const x of [-0.064, 0.064]) {
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.029, 28, 20), whiteMaterial)
     eye.scale.set(1, 0.68, 0.48)
-    eye.position.set(x, 2.675, 0.142)
+    eye.position.set(x, 2.675, 0.112)
     const iris = new THREE.Mesh(new THREE.SphereGeometry(0.011, 20, 14), irisMaterial)
     iris.scale.set(1, 1, 0.3)
-    iris.position.set(x, 2.675, 0.157)
+    iris.position.set(x, 2.675, 0.128)
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 16, 10), pupilMaterial)
-    pupil.position.set(x, 2.675, 0.162)
+    pupil.position.set(x, 2.675, 0.133)
     eyeGroup.add(eye, iris, pupil)
   }
   modelGroup.add(eyeGroup)
