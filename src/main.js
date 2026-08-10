@@ -403,7 +403,9 @@ function updateLabelVisibility(time) {
     const distance = direction.length()
     const towardCamera = camera.position.clone().sub(mesh.position).normalize()
     const radial = new THREE.Vector3(point.position[0], 0, point.position[2]).normalize()
+    const surfaceNormal = new THREE.Vector3(...point.normal).normalize()
     const facesCamera = radial.dot(towardCamera) > 0.02
+      && surfaceNormal.dot(towardCamera) > 0.05
     const caster = new THREE.Raycaster(camera.position, direction.normalize(), 0, distance)
     caster.firstHitOnly = true
     const obstruction = caster.intersectObjects(modelMeshes, false)[0]
