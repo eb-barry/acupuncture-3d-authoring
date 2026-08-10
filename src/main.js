@@ -112,15 +112,15 @@ controls.dampingFactor = 0.08
 controls.minDistance = 1.2
 controls.maxDistance = 10
 
-scene.add(new THREE.HemisphereLight(0xf1faf6, 0x24332f, 2.4))
-const keyLight = new THREE.DirectionalLight(0xffead2, 2.4)
+scene.add(new THREE.HemisphereLight(0xf1faf6, 0x24332f, 2.8))
+const keyLight = new THREE.DirectionalLight(0xffead2, 3.2)
 keyLight.position.set(3, 5, 4)
 keyLight.castShadow = true
 scene.add(keyLight)
-const fillLight = new THREE.DirectionalLight(0xcde5ff, 1.6)
+const fillLight = new THREE.DirectionalLight(0xcde5ff, 2.0)
 fillLight.position.set(-3, 2, 4)
 scene.add(fillLight)
-const rimLight = new THREE.DirectionalLight(0x74b9b0, 1.2)
+const rimLight = new THREE.DirectionalLight(0x74b9b0, 1.6)
 rimLight.position.set(-4, 2, -3)
 scene.add(rimLight)
 scene.add(new THREE.GridHelper(8, 32, 0x38514d, 0x1d2c2a))
@@ -924,20 +924,20 @@ function applyModel(gltf, name, hash = null) {
 function styleBundledHuman(gltf) {
   gltf.scene.traverse((object) => {
     if (!object.isMesh) return
-    const styleMaterial = (material) => {
-      const styled = material.clone()
-      if (!styled.map) styled.color.set(0xc58f73)
-      styled.emissive.set(0x1a100c)
-      styled.emissiveIntensity = 0.18
-      styled.metalness = 0
-      styled.roughness = 0.92
-      styled.flatShading = false
-      if ('specularIntensity' in styled) styled.specularIntensity = 0.08
-      return styled
+    const styleMaterial = () => {
+      // Force a matte skin look so contour banding is not exaggerated by specular.
+      return new THREE.MeshStandardMaterial({
+        color: 0xc58f73,
+        emissive: 0x1a100c,
+        emissiveIntensity: 0.2,
+        metalness: 0,
+        roughness: 0.88,
+        flatShading: false,
+      })
     }
     object.material = Array.isArray(object.material)
-      ? object.material.map(styleMaterial)
-      : styleMaterial(object.material)
+      ? object.material.map(() => styleMaterial())
+      : styleMaterial()
     object.geometry.computeVertexNormals()
   })
 }
