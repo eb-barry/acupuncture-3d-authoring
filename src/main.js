@@ -199,6 +199,8 @@ function surfaceHit(event) {
   const normal = hit.face.normal.clone()
     .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
     .normalize()
+  const radial = new THREE.Vector3(hit.point.x, 0, hit.point.z)
+  if (radial.lengthSq() > 0.000001 && normal.dot(radial) < 0) normal.negate()
   return { position: toArray(hit.point), normal: toArray(normal) }
 }
 
@@ -229,6 +231,8 @@ function projectNearSurface(position, normal) {
       const hitNormal = hit.face.normal.clone()
         .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
         .normalize()
+      const radial = new THREE.Vector3(hit.point.x, 0, hit.point.z)
+      if (radial.lengthSq() > 0.000001 && hitNormal.dot(radial) < 0) hitNormal.negate()
       candidates.push({
         distance: hit.point.distanceTo(target),
         position: toArray(hit.point),
@@ -397,10 +401,13 @@ function updateLabelVisibility(time) {
   markerVisuals.forEach(({ mesh, label, point }) => {
     const direction = mesh.position.clone().sub(camera.position)
     const distance = direction.length()
+    const towardCamera = camera.position.clone().sub(mesh.position).normalize()
+    const radial = new THREE.Vector3(point.position[0], 0, point.position[2]).normalize()
+    const facesCamera = radial.dot(towardCamera) > 0.02
     const caster = new THREE.Raycaster(camera.position, direction.normalize(), 0, distance)
     caster.firstHitOnly = true
     const obstruction = caster.intersectObjects(modelMeshes, false)[0]
-    const visible = !obstruction || obstruction.distance >= distance - 0.025
+    const visible = facesCamera && (!obstruction || obstruction.distance >= distance - 0.025)
     label.element.style.display = visible ? '' : 'none'
   })
 }
