@@ -924,21 +924,18 @@ function applyModel(gltf, name, hash = null) {
 function styleBundledHuman(gltf) {
   gltf.scene.traverse((object) => {
     if (!object.isMesh) return
-    const styleMaterial = () => {
-      // Force a matte skin look so contour banding is not exaggerated by specular.
-      return new THREE.MeshStandardMaterial({
-        color: 0xc58f73,
-        emissive: 0x1a100c,
-        emissiveIntensity: 0.2,
-        metalness: 0,
-        roughness: 0.88,
-        flatShading: false,
-      })
-    }
+    const styleMaterial = () => new THREE.MeshStandardMaterial({
+      color: 0xc58f73,
+      emissive: 0x1a100c,
+      emissiveIntensity: 0.2,
+      metalness: 0,
+      roughness: 0.88,
+      flatShading: false,
+      side: THREE.FrontSide,
+    })
     object.material = Array.isArray(object.material)
       ? object.material.map(() => styleMaterial())
       : styleMaterial()
-    object.geometry.computeVertexNormals()
   })
 }
 
