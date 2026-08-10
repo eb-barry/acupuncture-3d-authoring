@@ -6,17 +6,17 @@
 - Creator: [aaravparakh](https://sketchfab.com/aaravparakh)
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/human.glb`
-- SHA-256: `59aa443292fc117ebc52bfd15fb5e79d13bc6d302e7b24eba0647d0addab60c9`
+- SHA-256: `60429653518265f35994504556c4ab4e416627e766dcd5c2839c1fb6fcb8cdb0`
 
 Changes made by this project: joined the original mesh primitives, welded
-equivalent vertices, recalculated outward normals, rebuilt the surface with a
-multi-pass Blender voxel remesh (coarse-to-fine) to remove concentric contour
-ridges on the torso sides, applied Smooth and Laplacian polishing while
-protecting recognisable body proportions, then simplified the cleaned surface
-with glTF-Transform. Vertex attributes were quantized and Meshopt-compressed
-using glTF-Transform 4.4.2. The optimized model contains 294,178 uploaded
-vertices and 587,206 triangles. These changes are not endorsed by the original
-creator.
+equivalent vertices, recalculated outward normals, applied region-weighted
+Laplacian smoothing only on the torso front/flank to reduce contour ridges,
+then hard-restored protected landmark vertices for the face, ears, hands,
+fingers, elbow crease bands, feet, and back so those details match the source
+mesh. Vertex attributes were quantized and Meshopt-compressed using
+glTF-Transform 4.4.2 without mesh simplification, preserving 705,208 uploaded
+vertices and 1,410,404 triangles. These changes are not endorsed by the
+original creator.
 
 ## Acupuncture catalog
 
