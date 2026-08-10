@@ -946,7 +946,7 @@ async function loadDefaultModel() {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', '59aa443292fc117ebc52bfd15fb5e79d13bc6d302e7b24eba0647d0addab60c9')
+    applyModel(gltf, '人體模型', '60429653518265f35994504556c4ab4e416627e766dcd5c2839c1fb6fcb8cdb0')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('平滑人體模型已就緒')
   } catch (error) {
