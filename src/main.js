@@ -922,31 +922,55 @@ function applyModel(gltf, name, hash = null) {
 }
 
 function styleBundledHuman(gltf) {
+  const skin = () => new THREE.MeshStandardMaterial({
+    color: 0xc58f73,
+    emissive: 0x1a100c,
+    emissiveIntensity: 0.2,
+    metalness: 0,
+    roughness: 0.88,
+    flatShading: false,
+    side: THREE.FrontSide,
+  })
+  const nail = () => new THREE.MeshStandardMaterial({
+    color: 0xffc8bc,
+    emissive: 0x5a241c,
+    emissiveIntensity: 0.22,
+    metalness: 0.15,
+    roughness: 0.32,
+    flatShading: false,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+    polygonOffsetUnits: -4,
+  })
   gltf.scene.traverse((object) => {
     if (!object.isMesh) return
-    const styleMaterial = () => new THREE.MeshStandardMaterial({
-      color: 0xc58f73,
-      emissive: 0x1a100c,
-      emissiveIntensity: 0.2,
-      metalness: 0,
-      roughness: 0.88,
-      flatShading: false,
-      side: THREE.FrontSide,
-    })
-    object.material = Array.isArray(object.material)
-      ? object.material.map(() => styleMaterial())
-      : styleMaterial()
+    const materials = Array.isArray(object.material) ? object.material : [object.material]
+    const names = materials.map((material) => (material?.name || '').toLowerCase())
+    const objectName = `${object.name || ''} ${object.parent?.name || ''}`.toLowerCase()
+    const isNail = objectName.includes('nail')
+      || names.some((name) => name.includes('fingernail') || name.includes('nail'))
+    if (isNail) {
+      object.material = nail()
+      object.renderOrder = 5
+      object.scale.multiplyScalar(2.6)
+      object.frustumCulled = false
+    } else {
+      object.material = skin()
+    }
   })
 }
 
 async function loadDefaultModel() {
   try {
     const modelUrl = new URL('../models/human.glb', import.meta.url)
+    modelUrl.searchParams.set('v', 'nails-seams-2')
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', '60429653518265f35994504556c4ab4e416627e766dcd5c2839c1fb6fcb8cdb0')
+    applyModel(gltf, '人體模型', '3de9a0a4ad23f96d6b7e04d4f5f8bb6a6d0ce13c67a0bb3d0f8842e0c1bf410a')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('平滑人體模型已就緒')
   } catch (error) {
