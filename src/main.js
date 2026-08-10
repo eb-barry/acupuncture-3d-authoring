@@ -2,13 +2,25 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
-import pointsData from './data/points-data.json' with { type: 'json' }
+import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js'
+import { Line2 } from 'three/addons/lines/Line2.js'
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } from './catalog.js'
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
 
 const $ = (selector) => document.querySelector(selector)
 const makeId = () => crypto.randomUUID()
 const toArray = ({ x, y, z }) => [x, y, z]
+const PALETTE = [
+  ['#ef4444', '紅色'],
+  ['#3b82f6', '藍色'],
+  ['#22c55e', '綠色'],
+]
+const colorOptions = (selected) => PALETTE
+  .map(([value, name]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${name}</option>`)
+  .join('')
 
 $('#app').innerHTML = `
 <header class="topbar">
@@ -23,16 +35,24 @@ $('#app').innerHTML = `
 <main class="workspace">
   <aside class="panel catalog-panel">
     <div class="panel-heading"><span>穴位目錄</span><b id="catalog-count"></b></div>
-    <input id="catalog-search" class="search" type="search" placeholder="搜尋代碼、名稱、拼音…" autocomplete="off">
+    <div class="catalog-filters">
+      <label>選擇經脈<select id="meridian-filter">${MERIDIANS.map((item) => `<option value="${item.id}">${item.name} · ${item.id}</option>`).join('')}</select></label>
+      <input id="catalog-search" class="search" type="search" placeholder="搜尋代碼或穴位名稱…" autocomplete="off">
+    </div>
     <div id="catalog" class="catalog"></div>
+    <div id="point-details" class="point-details"></div>
     <div class="placement">
-      <label>放置側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option><option value="midline">中線</option></select></label>
-      <p>選取穴位後，使用「穴位」工具點擊人體表面。</p>
+      <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
+      <label>穴位直徑 <output id="marker-size-output">12 px</output><input id="marker-size" type="range" min="5" max="30" step="1" value="12"></label>
+      <label>穴位顏色<select id="marker-color">${colorOptions('#ef4444')}</select></label>
+      <label>經脈顏色<select id="line-color">${colorOptions('#3b82f6')}</select></label>
+      <label>經脈線寬 <output id="line-width-output">4 px</output><input id="line-width" type="range" min="1" max="10" step="1" value="4"></label>
+      <p>十二正經會自動建立並鎖定左右配對；任脈、督脈只建立中線穴位。</p>
     </div>
   </aside>
   <section class="stage">
     <nav class="tools" aria-label="編輯工具">
-      <button class="tool active" data-tool="navigate">◎ <span>檢視</span></button>
+      <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
       <button class="tool" data-tool="path">⌁ <span>經脈</span></button>
       <button class="tool" data-tool="point">＋ <span>穴位</span></button>
       <button id="finish-path" class="finish hidden">完成路徑</button>
@@ -57,11 +77,16 @@ scene.background = new THREE.Color(0x101817)
 scene.fog = new THREE.Fog(0x101817, 5, 11)
 const camera = new THREE.PerspectiveCamera(34, 1, 0.01, 50)
 camera.position.set(3.4, 1.7, 4.6)
+
 const renderer = new THREE.WebGLRenderer({ antialias: true })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.shadowMap.enabled = true
 viewport.append(renderer.domElement)
+
+const labelRenderer = new CSS2DRenderer()
+labelRenderer.domElement.className = 'label-layer'
+viewport.append(labelRenderer.domElement)
 
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.target.set(0, 1.45, 0)
@@ -70,11 +95,14 @@ controls.dampingFactor = 0.08
 controls.minDistance = 1.2
 controls.maxDistance = 10
 
-scene.add(new THREE.HemisphereLight(0xdaf4ed, 0x1a2725, 2.1))
-const keyLight = new THREE.DirectionalLight(0xfff1dc, 3.2)
+scene.add(new THREE.HemisphereLight(0xf1faf6, 0x24332f, 3))
+const keyLight = new THREE.DirectionalLight(0xffead2, 4)
 keyLight.position.set(3, 5, 4)
 keyLight.castShadow = true
 scene.add(keyLight)
+const fillLight = new THREE.DirectionalLight(0xcde5ff, 2.2)
+fillLight.position.set(-3, 2, 4)
+scene.add(fillLight)
 const rimLight = new THREE.DirectionalLight(0x74b9b0, 2)
 rimLight.position.set(-4, 2, -3)
 scene.add(rimLight)
@@ -83,43 +111,26 @@ scene.add(new THREE.GridHelper(8, 32, 0x38514d, 0x1d2c2a))
 const modelGroup = new THREE.Group()
 const annotationGroup = new THREE.Group()
 scene.add(modelGroup, annotationGroup)
+
 let modelMeshes = []
-
-function buildMannequin() {
-  const material = new THREE.MeshPhysicalMaterial({ color: 0xbfc8bd, roughness: 0.72, clearcoat: 0.12 })
-  const add = (geometry, position, scale = [1, 1, 1], rotation = [0, 0, 0]) => {
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.position.set(...position)
-    mesh.scale.set(...scale)
-    mesh.rotation.set(...rotation)
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    modelGroup.add(mesh)
-    modelMeshes.push(mesh)
-  }
-  add(new THREE.SphereGeometry(0.25, 32, 20), [0, 2.75, 0], [0.88, 1.08, 0.92])
-  add(new THREE.CapsuleGeometry(0.36, 0.95, 10, 24), [0, 1.85, 0], [1.05, 1, 0.66])
-  add(new THREE.SphereGeometry(0.39, 28, 20), [0, 1.28, 0], [0.8, 0.72, 0.68])
-  add(new THREE.CapsuleGeometry(0.105, 1.15, 8, 18), [-0.53, 1.87, 0], [1, 1, 1], [0, 0, -0.13])
-  add(new THREE.CapsuleGeometry(0.105, 1.15, 8, 18), [0.53, 1.87, 0], [1, 1, 1], [0, 0, 0.13])
-  add(new THREE.CapsuleGeometry(0.14, 1.3, 8, 18), [-0.2, 0.52, 0], [1, 1, 1], [0, 0, -0.035])
-  add(new THREE.CapsuleGeometry(0.14, 1.3, 8, 18), [0.2, 0.52, 0], [1, 1, 1], [0, 0, 0.035])
-}
-
+let markerVisuals = []
+let routeVisuals = []
+let handleVisuals = []
 let state = emptyDocument()
 const history = new History(state)
 let selected = null
-let selectedCatalog = pointsData.points.find((point) => point.code === 'LI4') || pointsData.points[0]
+let selectedCatalog = pointsForMeridian('LU')[0]
 let activeTool = 'navigate'
 let draftNodes = []
+let draftSide = null
+let pointerDown = null
+let dragging = null
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
-let pointerDown = null
 const createModelLoader = () => new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
 
-const sideLabel = (side) => ({ left: '左側', right: '右側', midline: '中線', bilateral: '雙側' })[side] || side
-const offsetPosition = (node, amount = 0.012) =>
-  new THREE.Vector3(...node.position).addScaledVector(new THREE.Vector3(...node.normal), amount)
+const sideLabel = (side) => ({ left: '左側', right: '右側', midline: '中線' })[side] || side
+const shortSide = (side) => ({ left: 'L', right: 'R', midline: 'M' })[side] || ''
 const escapeHtml = (value) => {
   const div = document.createElement('div')
   div.textContent = value
@@ -133,7 +144,7 @@ function toast(message, kind = 'ok') {
   element.textContent = message
   element.className = `show ${kind}`
   clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { element.className = '' }, 3200)
+  toastTimer = setTimeout(() => { element.className = '' }, 3600)
 }
 
 function commit(nextState, message) {
@@ -143,28 +154,190 @@ function commit(nextState, message) {
   setStatus(message)
 }
 
+function replaceWithoutHistory(nextState) {
+  state = structuredClone(nextState)
+  rebuildAnnotations()
+  updateUI()
+}
+
+function getPoint(id) {
+  return state.acupoints.find((point) => point.id === id)
+}
+
+function resolvedNode(node) {
+  if (node.type === 'acupoint' && node.pointId) {
+    const point = getPoint(node.pointId)
+    if (point) return { position: point.position, normal: point.normal }
+  }
+  return node
+}
+
+function offsetPosition(node, amount = 0.008) {
+  const resolved = resolvedNode(node)
+  return new THREE.Vector3(...resolved.position)
+    .addScaledVector(new THREE.Vector3(...resolved.normal), amount)
+}
+
+function screenPointer(event) {
+  const rect = renderer.domElement.getBoundingClientRect()
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+}
+
+function surfaceHit(event) {
+  screenPointer(event)
+  const hit = raycaster.intersectObjects(modelMeshes, false)[0]
+  if (!hit?.face) return null
+  const normal = hit.face.normal.clone()
+    .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
+    .normalize()
+  return { position: toArray(hit.point), normal: toArray(normal) }
+}
+
+function annotationHit(event, types) {
+  screenPointer(event)
+  const objects = [
+    ...markerVisuals.map((entry) => entry.mesh),
+    ...handleVisuals.map((entry) => entry.mesh),
+    ...routeVisuals.map((entry) => entry.line),
+  ]
+  return raycaster.intersectObjects(objects, false)
+    .find((hit) => types.includes(hit.object.userData.type))
+}
+
+function projectNearSurface(position, normal) {
+  const target = new THREE.Vector3(...position)
+  const direction = new THREE.Vector3(...normal).normalize()
+  const candidates = []
+  for (const sign of [1, -1]) {
+    const caster = new THREE.Raycaster(
+      target.clone().addScaledVector(direction, 0.25 * sign),
+      direction.clone().multiplyScalar(-sign),
+      0,
+      0.5,
+    )
+    const hit = caster.intersectObjects(modelMeshes, false)[0]
+    if (hit?.face) {
+      const hitNormal = hit.face.normal.clone()
+        .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
+        .normalize()
+      candidates.push({
+        distance: hit.point.distanceTo(target),
+        position: toArray(hit.point),
+        normal: toArray(hitNormal),
+      })
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance)
+  return candidates.length
+    ? { position: candidates[0].position, normal: candidates[0].normal }
+    : { position, normal }
+}
+
+function mirroredNode(node) {
+  const resolved = resolvedNode(node)
+  const mirroredPosition = [-resolved.position[0], resolved.position[1], resolved.position[2]]
+  const mirroredNormal = [-resolved.normal[0], resolved.normal[1], resolved.normal[2]]
+  return projectNearSurface(mirroredPosition, mirroredNormal)
+}
+
+function pairedPointId(pointId) {
+  const point = getPoint(pointId)
+  if (!point?.pairId) return null
+  return state.acupoints.find((item) => item.pairId === point.pairId && item.id !== point.id)?.id || null
+}
+
+function makeMirroredRouteNode(node) {
+  if (node.type === 'acupoint' && node.pointId) {
+    const mirrorId = pairedPointId(node.pointId)
+    const point = mirrorId && getPoint(mirrorId)
+    if (point) return { type: 'acupoint', pointId: mirrorId, position: point.position, normal: point.normal }
+  }
+  const mirrored = mirroredNode(node)
+  return { type: 'control', pointId: null, ...mirrored }
+}
+
+function skinCurvePoints(route) {
+  const nodes = route.nodes.map(resolvedNode)
+  const positions = nodes.map((node) => new THREE.Vector3(...node.position))
+  if (positions.length < 2) return positions
+  const curve = new THREE.CatmullRomCurve3(positions, false, 'centripetal', 0.4)
+  const samples = curve.getPoints(Math.max(24, (positions.length - 1) * 24))
+  return samples.map((sample, index) => {
+    const t = index / Math.max(samples.length - 1, 1)
+    const nodeIndex = Math.min(nodes.length - 1, Math.round(t * (nodes.length - 1)))
+    const projected = projectNearSurface(toArray(sample), nodes[nodeIndex].normal)
+    return offsetPosition(projected, 0.012)
+  })
+}
+
 function rebuildAnnotations() {
   annotationGroup.clear()
-  state.meridians.forEach((meridian) => {
-    const line = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints(meridian.nodes.map((node) => offsetPosition(node))),
-      new THREE.LineBasicMaterial({ color: meridian.color, transparent: true, opacity: selected?.id === meridian.id ? 1 : 0.82 }),
-    )
-    annotationGroup.add(line)
-    meridian.nodes.forEach((node) => {
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 8), new THREE.MeshBasicMaterial({ color: meridian.color }))
-      dot.position.copy(offsetPosition(node, 0.014))
-      annotationGroup.add(dot)
+  markerVisuals = []
+  routeVisuals = []
+  handleVisuals = []
+
+  state.meridians.forEach((route) => {
+    const points = skinCurvePoints(route)
+    const geometry = new LineGeometry()
+    geometry.setPositions(points.flatMap(toArray))
+    const material = new LineMaterial({
+      color: route.color,
+      linewidth: route.width,
+      transparent: true,
+      opacity: selected?.type === 'meridian' && selected.id === route.id ? 1 : 0.86,
+      depthTest: true,
+      resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
     })
+    const line = new Line2(geometry, material)
+    line.computeLineDistances()
+    line.renderOrder = 3
+    line.userData = { type: 'meridian', id: route.id }
+    annotationGroup.add(line)
+    routeVisuals.push({ line, route })
+
+    if (selected?.type === 'meridian' && selected.id === route.id) {
+      route.nodes.forEach((node, nodeIndex) => {
+        if (node.type !== 'control') return
+        const handle = new THREE.Mesh(
+          new THREE.SphereGeometry(0.5, 14, 10),
+          new THREE.MeshBasicMaterial({ color: 0xffd28c, depthTest: false }),
+        )
+        handle.position.copy(offsetPosition(node, 0.016))
+        handle.scale.setScalar(0.025)
+        handle.renderOrder = 5
+        handle.userData = { type: 'route-handle', routeId: route.id, nodeIndex }
+        annotationGroup.add(handle)
+        handleVisuals.push({ mesh: handle, routeId: route.id, nodeIndex })
+      })
+    }
   })
+
   state.acupoints.forEach((point) => {
-    const isSelected = selected?.type === 'acupoint' && selected.id === point.id
+    const isSelected = selected?.type === 'acupoint'
+      && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
     const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(isSelected ? 0.045 : 0.035, 18, 12),
-      new THREE.MeshStandardMaterial({ color: isSelected ? 0xffffff : 0xdba15d, emissive: isSelected ? 0x5c4425 : 0x29190a }),
+      new THREE.SphereGeometry(0.5, 20, 14),
+      new THREE.MeshStandardMaterial({
+        color: isSelected ? 0xffffff : point.color,
+        emissive: point.color,
+        emissiveIntensity: isSelected ? 0.8 : 0.32,
+        roughness: 0.35,
+        depthTest: true,
+      }),
     )
-    marker.position.copy(offsetPosition(point, 0.035))
+    marker.position.copy(offsetPosition(point, 0.014))
+    marker.userData = { type: 'acupoint', id: point.id }
     annotationGroup.add(marker)
+
+    const label = document.createElement('span')
+    label.className = `point-label ${isSelected ? 'selected' : ''}`
+    label.textContent = `${point.code}${shortSide(point.side)} · ${point.name}`
+    const labelObject = new CSS2DObject(label)
+    labelObject.position.copy(marker.position)
+    annotationGroup.add(labelObject)
+    markerVisuals.push({ mesh: marker, label: labelObject, point })
   })
   drawDraft()
 }
@@ -173,24 +346,60 @@ function drawDraft() {
   const previous = annotationGroup.getObjectByName('draft')
   if (previous) annotationGroup.remove(previous)
   if (!draftNodes.length) return
-  const draft = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(draftNodes.map((node) => offsetPosition(node))),
-    new THREE.LineDashedMaterial({ color: 0xefc67b, dashSize: 0.06, gapSize: 0.03 }),
-  )
+  const positions = draftNodes.map((node) => offsetPosition(node, 0.008))
+  const geometry = new LineGeometry()
+  geometry.setPositions(positions.flatMap(toArray))
+  const material = new LineMaterial({
+    color: state.settings.lineColor,
+    linewidth: state.settings.lineWidth,
+    dashed: true,
+    dashSize: 0.04,
+    gapSize: 0.025,
+    resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
+  })
+  const draft = new Line2(geometry, material)
   draft.name = 'draft'
   draft.computeLineDistances()
   annotationGroup.add(draft)
 }
 
-function renderCatalog(query = '') {
-  const normalized = query.trim().toLowerCase()
-  const points = pointsData.points.filter((point) =>
-    [point.code, point.name, point.pinyin, point.meridian].some((value) => value.toLowerCase().includes(normalized)))
+function updateMarkerScales() {
+  const viewportHeight = Math.max(viewport.clientHeight, 1)
+  const fov = THREE.MathUtils.degToRad(camera.fov)
+  markerVisuals.forEach(({ mesh, point }) => {
+    const distance = camera.position.distanceTo(mesh.position)
+    const diameter = 2 * distance * Math.tan(fov / 2) * point.size / viewportHeight
+    mesh.scale.setScalar(diameter)
+  })
+}
+
+function renderCatalog() {
+  const meridianId = $('#meridian-filter').value
+  const query = $('#catalog-search').value.trim().toLowerCase()
+  const points = pointsForMeridian(meridianId).filter((point) =>
+    !query || point.code.toLowerCase().includes(query) || point.name.includes(query))
   $('#catalog-count').textContent = points.length
-  $('#catalog').innerHTML = points.map((point) => `
-    <button class="catalog-item ${selectedCatalog?.code === point.code ? 'selected' : ''}" data-code="${point.code}">
-      <b>${point.code}</b><span><strong>${point.name}</strong><small>${point.pinyin} · ${point.meridian}</small></span>
-    </button>`).join('') || '<p class="empty">找不到符合的穴位</p>'
+  $('#catalog').innerHTML = points.map((point) => {
+    const placed = state.acupoints.some((item) => item.code === point.code)
+    return `<button class="catalog-item ${selectedCatalog?.code === point.code ? 'selected' : ''}" data-code="${point.code}">
+      <b>${point.code}</b><span><strong>${point.name}</strong><small>${point.meridianName}${placed ? ' · 已定位' : ''}</small></span>
+    </button>`
+  }).join('') || '<p class="empty">找不到符合的穴位</p>'
+  renderPointDetails()
+  updateSideControl()
+}
+
+function renderPointDetails() {
+  const details = selectedCatalog?.details
+  $('#point-details').innerHTML = selectedCatalog ? `
+    <strong>${selectedCatalog.code} · ${escapeHtml(selectedCatalog.name)}</strong>
+    <small>${escapeHtml(selectedCatalog.meridianName)}</small>
+    <p>${escapeHtml(details.simpleLocation || details.location || '尚無取穴說明')}</p>` : ''
+}
+
+function updateSideControl() {
+  const meridian = meridianById($('#meridian-filter').value)
+  $('#side-control').classList.toggle('hidden', !meridian?.bilateral)
 }
 
 function updateUI() {
@@ -199,103 +408,285 @@ function updateUI() {
   $('#object-count').textContent = state.meridians.length + state.acupoints.length
   $('#objects').innerHTML = [
     ...state.meridians.map((item) => `<button data-type="meridian" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
-      <i style="background:${item.color}"></i><span><b>${escapeHtml(item.name)}</b><small>${item.nodes.length} 個節點 · ${sideLabel(item.side)}</small></span></button>`),
+      <i style="background:${item.color}"></i><span><b>${escapeHtml(item.name)}</b><small>${item.nodes.length} 個錨點 · ${sideLabel(item.side)}</small></span></button>`),
     ...state.acupoints.map((item) => `<button data-type="acupoint" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
-      <i class="point-dot"></i><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b><small>${sideLabel(item.side)}</small></span></button>`),
+      <i class="point-dot" style="background:${item.color}"></i><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b><small>${sideLabel(item.side)} · ${item.size}px</small></span></button>`),
   ].join('') || '<p class="empty">尚未建立標註</p>'
   renderProperties()
-}
-
-function sideOptions(current, includeBilateral = false) {
-  const sides = [['left', '左側 L'], ['right', '右側 R'], ['midline', '中線']]
-  if (includeBilateral) sides.push(['bilateral', '雙側'])
-  return sides.map(([value, label]) => `<option value="${value}" ${current === value ? 'selected' : ''}>${label}</option>`).join('')
+  renderCatalog()
 }
 
 function renderProperties() {
   const form = $('#properties')
-  const item = selected && state[selected.type === 'meridian' ? 'meridians' : 'acupoints'].find((entry) => entry.id === selected.id)
+  const key = selected?.type === 'meridian' ? 'meridians' : 'acupoints'
+  const item = selected && state[key].find((entry) => entry.id === selected.id)
   if (!item) {
     form.innerHTML = '<p class="empty">選取經脈或穴位以編輯屬性</p>'
     return
   }
   form.innerHTML = selected.type === 'meridian' ? `
-    <label>經脈名稱<input name="name" value="${escapeHtml(item.name)}" required></label>
-    <label>線條顏色<input name="color" type="color" value="${item.color}"></label>
-    <label>側別<select name="side">${sideOptions(item.side, true)}</select></label>
-    <button class="save primary" type="submit">儲存變更</button><button class="danger" type="button" data-delete>刪除路徑</button>` : `
-    <label>穴位名稱<input name="name" value="${escapeHtml(item.name)}" required></label>
-    <label>國際代碼<input name="code" value="${escapeHtml(item.code)}" required></label>
-    <label>側別<select name="side">${sideOptions(item.side)}</select></label>
-    <button class="save primary" type="submit">儲存變更</button><button class="danger" type="button" data-delete>刪除穴位</button>`
+    <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.name)}</b></div>
+    <div class="readonly-field"><span>側別</span><b>${sideLabel(item.side)}</b></div>
+    <label>線條顏色<select name="color">${colorOptions(item.color)}</select></label>
+    <label>線寬 <output>${item.width}px</output><input name="width" type="range" min="1" max="10" value="${item.width}"></label>
+    <button class="save primary" type="submit">套用至左右路線</button>
+    <button class="danger" type="button" data-delete>刪除路線</button>
+    <p class="form-help">選取路線後拖曳金色控制點；使用經脈工具點擊線段可插入控制點。</p>` : `
+    <div class="readonly-field"><span>穴位</span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b></div>
+    <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.meridianName)}</b></div>
+    <div class="readonly-field"><span>側別</span><b>${item.pairId ? '左右鎖定配對' : '中線'}</b></div>
+    <label>穴位顏色<select name="color">${colorOptions(item.color)}</select></label>
+    <label>直徑 <output>${item.size}px</output><input name="size" type="range" min="5" max="30" value="${item.size}"></label>
+    <button class="save primary" type="submit">套用${item.pairId ? '至左右穴位' : ''}</button>
+    <button class="danger" type="button" data-delete>刪除穴位</button>
+    <p class="form-help">使用檢視／調整工具拖曳定位點；左右穴位會同步鏡射。</p>`
 }
 
 function setTool(tool) {
   activeTool = tool
-  document.querySelectorAll('.tool').forEach((button) => button.classList.toggle('active', button.dataset.tool === tool))
+  document.querySelectorAll('.tool').forEach((button) =>
+    button.classList.toggle('active', button.dataset.tool === tool))
   viewport.className = tool === 'navigate' ? '' : 'placing'
   $('#finish-path').classList.toggle('hidden', tool !== 'path' || draftNodes.length < 2)
   $('#stage-help').textContent = {
-    navigate: '拖曳旋轉 · Shift/右鍵平移 · 滾輪縮放',
-    path: '逐點點擊人體表面 · Enter 完成 · Esc 取消',
-    point: `點擊人體表面放置 ${selectedCatalog.code} ${selectedCatalog.name}`,
+    navigate: '拖曳旋轉 · 拖曳穴位或金色控制點調整位置',
+    path: '依序點擊同經脈穴位；點擊皮膚加入曲線控制點',
+    point: selectedCatalog
+      ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}`
+      : '請先選擇穴位',
   }[tool]
 }
 
-function surfaceHit(event) {
-  const rect = renderer.domElement.getBoundingClientRect()
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
-  const hit = raycaster.intersectObjects(modelMeshes, false)[0]
-  if (!hit?.face) return null
-  const normal = hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize()
-  return { position: toArray(hit.point), normal: toArray(normal) }
+function makePoint(catalog, side, pairId, hit) {
+  return {
+    id: makeId(),
+    pairId,
+    name: catalog.name,
+    code: catalog.code,
+    meridianId: catalog.meridianId,
+    meridianName: catalog.meridianName,
+    sequence: catalog.sequence,
+    side,
+    color: state.settings.markerColor,
+    size: state.settings.markerSize,
+    position: hit.position,
+    normal: hit.normal,
+  }
+}
+
+function placeAcupoint(hit) {
+  if (!selectedCatalog) return toast('請先選擇穴位', 'warn')
+  if (state.acupoints.some((point) => point.code === selectedCatalog.code)) {
+    return toast(`${selectedCatalog.code} 已定位；請先刪除原定位再重設`, 'warn')
+  }
+  const meridian = meridianById(selectedCatalog.meridianId)
+  let points
+  if (meridian.bilateral) {
+    const firstSide = $('#point-side').value
+    const otherSide = firstSide === 'left' ? 'right' : 'left'
+    const pairId = makeId()
+    const mirrored = mirroredNode(hit)
+    points = [
+      makePoint(selectedCatalog, firstSide, pairId, hit),
+      makePoint(selectedCatalog, otherSide, pairId, mirrored),
+    ]
+    selected = { type: 'acupoint', id: points[0].id, pairId }
+  } else {
+    const midlineHit = projectNearSurface([0, hit.position[1], hit.position[2]], [0, hit.normal[1], hit.normal[2]])
+    points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
+    selected = { type: 'acupoint', id: points[0].id, pairId: null }
+  }
+  commit({ ...state, acupoints: [...state.acupoints, ...points] },
+    meridian.bilateral ? `已建立 ${selectedCatalog.code} 左右配對` : `已定位 ${selectedCatalog.code}`)
+}
+
+function routeNodeFromMarker(hit) {
+  const point = hit && getPoint(hit.object.userData.id)
+  if (!point) return null
+  const activeMeridian = $('#meridian-filter').value
+  if (point.meridianId !== activeMeridian) {
+    toast(`路線屬於 ${meridianById(activeMeridian).name}，不能加入 ${point.code}`, 'warn')
+    return false
+  }
+  if (draftSide && point.side !== draftSide) {
+    toast(`目前正在繪製${sideLabel(draftSide)}路線`, 'warn')
+    return false
+  }
+  draftSide ||= point.side
+  return { type: 'acupoint', pointId: point.id, position: point.position, normal: point.normal }
+}
+
+function nearestNodeSegment(route, point) {
+  let best = { index: 0, distance: Infinity }
+  for (let index = 0; index < route.nodes.length - 1; index += 1) {
+    const start = new THREE.Vector3(...resolvedNode(route.nodes[index]).position)
+    const end = new THREE.Vector3(...resolvedNode(route.nodes[index + 1]).position)
+    const line = new THREE.Line3(start, end)
+    const closest = line.closestPointToPoint(new THREE.Vector3(...point), true, new THREE.Vector3())
+    const distance = closest.distanceTo(new THREE.Vector3(...point))
+    if (distance < best.distance) best = { index, distance }
+  }
+  return best.index
+}
+
+function insertRouteControl(routeId, hit) {
+  const route = state.meridians.find((item) => item.id === routeId)
+  if (!route || route.meridianId !== $('#meridian-filter').value) {
+    return toast('請先在左側選擇該路線所屬經脈', 'warn')
+  }
+  const index = nearestNodeSegment(route, hit.position)
+  const node = { type: 'control', pointId: null, ...hit }
+  const pairRoute = route.pairId && state.meridians.find((item) => item.pairId === route.pairId && item.id !== route.id)
+  const nextRoutes = state.meridians.map((item) => {
+    if (item.id === route.id) {
+      const nodes = [...item.nodes]
+      nodes.splice(index + 1, 0, node)
+      return { ...item, nodes }
+    }
+    if (pairRoute && item.id === pairRoute.id) {
+      const nodes = [...item.nodes]
+      nodes.splice(index + 1, 0, makeMirroredRouteNode(node))
+      return { ...item, nodes }
+    }
+    return item
+  })
+  selected = { type: 'meridian', id: route.id }
+  commit({ ...state, meridians: nextRoutes }, '已在線段加入曲度控制點')
 }
 
 function placeAt(event) {
-  if (activeTool === 'navigate') return
+  if (activeTool === 'navigate') {
+    const routeHit = annotationHit(event, ['meridian'])
+    if (routeHit) {
+      selected = { type: 'meridian', id: routeHit.object.userData.id }
+      rebuildAnnotations()
+      updateUI()
+    }
+    return
+  }
   const hit = surfaceHit(event)
   if (!hit) return toast('請點擊人體模型表面', 'warn')
-  if (activeTool === 'point') {
-    const point = { id: makeId(), name: selectedCatalog.name, code: selectedCatalog.code, side: $('#point-side').value, ...hit }
-    selected = { type: 'acupoint', id: point.id }
-    commit({ ...state, acupoints: [...state.acupoints, point] }, `已放置 ${point.code}`)
-  } else {
-    draftNodes.push(hit)
-    drawDraft()
-    $('#finish-path').classList.toggle('hidden', draftNodes.length < 2)
-    setStatus(`路徑節點：${draftNodes.length}`)
+  if (activeTool === 'point') return placeAcupoint(hit)
+
+  const existingRouteHit = annotationHit(event, ['meridian'])
+  if (existingRouteHit) return insertRouteControl(existingRouteHit.object.userData.id, hit)
+  const markerHit = annotationHit(event, ['acupoint'])
+  const markerNode = routeNodeFromMarker(markerHit)
+  if (markerNode === false) return
+  if (markerNode) draftNodes.push(markerNode)
+  else {
+    draftSide ||= meridianById($('#meridian-filter').value).bilateral ? $('#point-side').value : 'midline'
+    draftNodes.push({ type: 'control', pointId: null, ...hit })
   }
+  drawDraft()
+  $('#finish-path').classList.toggle('hidden', draftNodes.length < 2)
+  setStatus(`路徑錨點：${draftNodes.length}`)
 }
 
 function finishPath() {
-  if (draftNodes.length < 2) return toast('經脈路徑至少需要兩個節點', 'warn')
-  const count = state.meridians.length + 1
-  const meridian = {
-    id: makeId(), name: `經脈 ${count}`,
-    color: ['#dca35d', '#65b9a9', '#d26c66', '#8ea8d8'][count % 4],
-    side: 'left', nodes: draftNodes,
+  if (draftNodes.length < 2) return toast('經脈路徑至少需要兩個錨點', 'warn')
+  const meridian = meridianById($('#meridian-filter').value)
+  const pairId = meridian.bilateral ? makeId() : null
+  const side = meridian.bilateral ? (draftSide || $('#point-side').value) : 'midline'
+  const route = {
+    id: makeId(),
+    pairId,
+    meridianId: meridian.id,
+    name: meridian.name,
+    color: state.settings.lineColor,
+    width: state.settings.lineWidth,
+    side,
+    nodes: draftNodes,
+  }
+  const routes = [route]
+  if (meridian.bilateral) {
+    routes.push({
+      ...route,
+      id: makeId(),
+      side: side === 'left' ? 'right' : 'left',
+      nodes: route.nodes.map(makeMirroredRouteNode),
+    })
   }
   draftNodes = []
-  selected = { type: 'meridian', id: meridian.id }
-  commit({ ...state, meridians: [...state.meridians, meridian] }, `已建立 ${meridian.name}`)
+  draftSide = null
+  selected = { type: 'meridian', id: route.id }
+  commit({ ...state, meridians: [...state.meridians, ...routes] },
+    meridian.bilateral ? `已建立 ${meridian.name} 左右路線` : `已建立 ${meridian.name} 路線`)
   setTool('navigate')
 }
 
 function cancelDraft() {
   draftNodes = []
+  draftSide = null
   drawDraft()
   setTool('navigate')
   setStatus('已取消路徑')
 }
 
+function updatePairedPoint(pointId, hit) {
+  const point = getPoint(pointId)
+  if (!point) return state
+  const mirrored = point.pairId ? mirroredNode(hit) : null
+  return {
+    ...state,
+    acupoints: state.acupoints.map((item) => {
+      if (item.id === point.id) return { ...item, position: hit.position, normal: hit.normal }
+      if (point.pairId && item.pairId === point.pairId) {
+        return { ...item, position: mirrored.position, normal: mirrored.normal }
+      }
+      return item
+    }),
+  }
+}
+
+function updateRouteHandle(routeId, nodeIndex, hit) {
+  const route = state.meridians.find((item) => item.id === routeId)
+  const mirrored = mirroredNode(hit)
+  return {
+    ...state,
+    meridians: state.meridians.map((item) => {
+      if (item.id === routeId) {
+        const nodes = [...item.nodes]
+        nodes[nodeIndex] = { type: 'control', pointId: null, ...hit }
+        return { ...item, nodes }
+      }
+      if (route?.pairId && item.pairId === route.pairId) {
+        const nodes = [...item.nodes]
+        nodes[nodeIndex] = { type: 'control', pointId: null, ...mirrored }
+        return { ...item, nodes }
+      }
+      return item
+    }),
+  }
+}
+
 function removeSelected() {
   if (!selected) return
-  const key = selected.type === 'meridian' ? 'meridians' : 'acupoints'
-  const next = { ...state, [key]: state[key].filter((item) => item.id !== selected.id) }
+  if (selected.type === 'acupoint') {
+    const point = getPoint(selected.id)
+    const removedIds = new Set(state.acupoints
+      .filter((item) => item.id === point?.id || (point?.pairId && item.pairId === point.pairId))
+      .map((item) => item.id))
+    const nextRoutes = state.meridians.map((route) => ({
+      ...route,
+      nodes: route.nodes.map((node) => removedIds.has(node.pointId)
+        ? { ...node, type: 'control', pointId: null }
+        : node),
+    }))
+    selected = null
+    return commit({
+      ...state,
+      acupoints: state.acupoints.filter((item) => !removedIds.has(item.id)),
+      meridians: nextRoutes,
+    }, '已刪除鎖定穴位配對')
+  }
+  const route = state.meridians.find((item) => item.id === selected.id)
   selected = null
-  commit(next, '已刪除物件')
+  commit({
+    ...state,
+    meridians: state.meridians.filter((item) =>
+      item.id !== route?.id && !(route?.pairId && item.pairId === route.pairId)),
+  }, '已刪除經脈路線')
 }
 
 function applyHistory(nextState, message) {
@@ -312,10 +703,10 @@ function exportJSON() {
   if (!result.valid) return toast(`無法匯出：${result.errors[0]}`, 'error')
   const link = document.createElement('a')
   link.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }))
-  link.download = `meridian-map-${new Date().toISOString().slice(0, 10)}.json`
+  link.download = `meridian-map-v2-${new Date().toISOString().slice(0, 10)}.json`
   link.click()
   URL.revokeObjectURL(link.href)
-  toast('JSON 已匯出')
+  toast('JSON v2 已匯出，包含穴位配對與完整路線')
 }
 
 async function importJSON(file) {
@@ -326,10 +717,30 @@ async function importJSON(file) {
   selected = null
   rebuildAnnotations()
   updateUI()
-  toast(`已匯入 ${state.meridians.length} 條經脈、${state.acupoints.length} 個穴位`)
+  toast(`已匯入 ${state.meridians.length} 條路線、${state.acupoints.length} 個定位點`)
 }
 
-function applyModel(gltf, name) {
+function addEyes() {
+  const eyeGroup = new THREE.Group()
+  eyeGroup.name = 'decorative-eyes'
+  const whiteMaterial = new THREE.MeshPhysicalMaterial({ color: 0xf2eee5, roughness: 0.38, clearcoat: 0.25 })
+  const irisMaterial = new THREE.MeshStandardMaterial({ color: 0x4b6f78, roughness: 0.3 })
+  const pupilMaterial = new THREE.MeshBasicMaterial({ color: 0x111817 })
+  for (const x of [-0.064, 0.064]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.029, 28, 20), whiteMaterial)
+    eye.scale.set(1, 0.68, 0.48)
+    eye.position.set(x, 2.675, 0.112)
+    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.011, 20, 14), irisMaterial)
+    iris.scale.set(1, 1, 0.3)
+    iris.position.set(x, 2.675, 0.128)
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 16, 10), pupilMaterial)
+    pupil.position.set(x, 2.675, 0.133)
+    eyeGroup.add(eye, iris, pupil)
+  }
+  modelGroup.add(eyeGroup)
+}
+
+function applyModel(gltf, name, hash = null, decorate = false) {
   const box = new THREE.Box3().setFromObject(gltf.scene)
   const size = box.getSize(new THREE.Vector3())
   if (!Number.isFinite(size.y) || size.y === 0) throw new Error('模型尺寸無效')
@@ -351,7 +762,8 @@ function applyModel(gltf, name) {
       modelMeshes.push(object)
     }
   })
-  state = { ...state, model: { name } }
+  if (decorate) addEyes()
+  state = { ...state, model: { name, hash } }
   history.replace(state)
   $('#model-status').textContent = name
   controls.target.set(0, 1.5, 0)
@@ -367,9 +779,9 @@ function styleBundledHuman(gltf) {
       const styled = material.clone()
       if (!styled.map) styled.color.set(0xc58f73)
       styled.emissive.set(0x21110d)
-      styled.emissiveIntensity = 0.45
+      styled.emissiveIntensity = 0.25
       styled.metalness = 0
-      styled.roughness = 0.78
+      styled.roughness = 0.76
       return styled
     }
     object.material = Array.isArray(object.material)
@@ -382,16 +794,13 @@ async function loadDefaultModel() {
   try {
     const modelUrl = new URL('../models/human.glb', import.meta.url)
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
-      if (!event.total) return
-      $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
+      if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型')
+    applyModel(gltf, '人體模型', 'e8eaf344a64c40fc665cd2d32832673c95fb991582ffafac8befcbe140ef91a2', true)
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
-    setStatus('人體模型已就緒')
+    setStatus('平滑人體模型已就緒')
   } catch (error) {
-    buildMannequin()
-    $('#model-status').textContent = '簡易備援人體'
     toast(`預設人體載入失敗：${error.message}`, 'error')
   }
 }
@@ -414,34 +823,95 @@ function resize() {
   camera.aspect = clientWidth / clientHeight
   camera.updateProjectionMatrix()
   renderer.setSize(clientWidth, clientHeight, false)
+  labelRenderer.setSize(clientWidth, clientHeight)
+  routeVisuals.forEach(({ line }) => line.material.resolution.set(clientWidth, clientHeight))
 }
 new ResizeObserver(resize).observe(viewport)
 renderer.setAnimationLoop(() => {
   controls.update()
+  updateMarkerScales()
   renderer.render(scene, camera)
+  labelRenderer.render(scene, camera)
 })
 
-$('#catalog-search').addEventListener('input', (event) => renderCatalog(event.target.value))
+$('#meridian-filter').addEventListener('change', () => {
+  selectedCatalog = pointsForMeridian($('#meridian-filter').value)[0]
+  $('#catalog-search').value = ''
+  renderCatalog()
+  if (activeTool === 'point') setTool('point')
+})
+$('#catalog-search').addEventListener('input', renderCatalog)
 $('#catalog').addEventListener('click', (event) => {
   const button = event.target.closest('[data-code]')
   if (!button) return
-  selectedCatalog = pointsData.points.find((point) => point.code === button.dataset.code)
-  renderCatalog($('#catalog-search').value)
+  selectedCatalog = POINT_BY_CODE.get(button.dataset.code)
+  renderCatalog()
   if (activeTool === 'point') setTool('point')
 })
+
+for (const [input, output, setting] of [
+  ['#marker-size', '#marker-size-output', 'markerSize'],
+  ['#line-width', '#line-width-output', 'lineWidth'],
+]) {
+  $(input).addEventListener('input', (event) => {
+    $(output).textContent = `${event.target.value} px`
+    state = { ...state, settings: { ...state.settings, [setting]: Number(event.target.value) } }
+    history.present = structuredClone(state)
+  })
+}
+for (const [selector, setting] of [['#marker-color', 'markerColor'], ['#line-color', 'lineColor']]) {
+  $(selector).addEventListener('change', (event) => {
+    state = { ...state, settings: { ...state.settings, [setting]: event.target.value } }
+    history.present = structuredClone(state)
+  })
+}
+
 document.querySelectorAll('.tool').forEach((button) => button.addEventListener('click', () => {
   if (draftNodes.length && button.dataset.tool !== 'path') cancelDraft()
   setTool(button.dataset.tool)
 }))
 $('#finish-path').addEventListener('click', finishPath)
-renderer.domElement.addEventListener('pointerdown', (event) => { pointerDown = { x: event.clientX, y: event.clientY } })
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  pointerDown = { x: event.clientX, y: event.clientY }
+  if (activeTool !== 'navigate' || event.button !== 0) return
+  const hit = annotationHit(event, ['acupoint', 'route-handle'])
+  if (!hit) return
+  dragging = {
+    type: hit.object.userData.type,
+    id: hit.object.userData.id,
+    routeId: hit.object.userData.routeId,
+    nodeIndex: hit.object.userData.nodeIndex,
+  }
+  controls.enabled = false
+})
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (!dragging) return
+  const hit = surfaceHit(event)
+  if (!hit) return
+  const next = dragging.type === 'acupoint'
+    ? updatePairedPoint(dragging.id, hit)
+    : updateRouteHandle(dragging.routeId, dragging.nodeIndex, hit)
+  replaceWithoutHistory(next)
+})
 renderer.domElement.addEventListener('pointerup', (event) => {
+  if (dragging) {
+    dragging = null
+    controls.enabled = true
+    state = history.commit(state)
+    rebuildAnnotations()
+    updateUI()
+    setStatus('位置已更新並同步左右配對')
+    return
+  }
   if (pointerDown && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) <= 4 && event.button === 0) placeAt(event)
 })
+
 $('#objects').addEventListener('click', (event) => {
   const button = event.target.closest('[data-id]')
   if (!button) return
-  selected = { type: button.dataset.type, id: button.dataset.id }
+  const point = button.dataset.type === 'acupoint' && getPoint(button.dataset.id)
+  selected = { type: button.dataset.type, id: button.dataset.id, pairId: point?.pairId || null }
   rebuildAnnotations()
   updateUI()
 })
@@ -450,14 +920,25 @@ $('#properties').addEventListener('submit', (event) => {
   if (!selected) return
   const data = Object.fromEntries(new FormData(event.target))
   const key = selected.type === 'meridian' ? 'meridians' : 'acupoints'
-  commit({ ...state, [key]: state[key].map((item) => item.id === selected.id ? { ...item, ...data } : item) }, '屬性已更新')
+  const current = state[key].find((item) => item.id === selected.id)
+  const next = state[key].map((item) => {
+    const matches = item.id === current.id || (current.pairId && item.pairId === current.pairId)
+    if (!matches) return item
+    return selected.type === 'meridian'
+      ? { ...item, color: data.color, width: Number(data.width) }
+      : { ...item, color: data.color, size: Number(data.size) }
+  })
+  commit({ ...state, [key]: next }, '屬性已同步更新')
 })
-$('#properties').addEventListener('click', (event) => { if (event.target.matches('[data-delete]')) removeSelected() })
+$('#properties').addEventListener('click', (event) => {
+  if (event.target.matches('[data-delete]')) removeSelected()
+})
+
 $('#undo').addEventListener('click', () => applyHistory(history.undo(), '已復原'))
 $('#redo').addEventListener('click', () => applyHistory(history.redo(), '已重做'))
 $('#validate').addEventListener('click', () => {
   const result = validateDocument(state)
-  toast(result.valid ? 'JSON 結構有效' : result.errors.join('；'), result.valid ? 'ok' : 'error')
+  toast(result.valid ? 'JSON v2 結構有效' : result.errors.join('；'), result.valid ? 'ok' : 'error')
 })
 $('#export').addEventListener('click', exportJSON)
 $('#model-file').addEventListener('change', (event) => loadModel(event.target.files[0]))
