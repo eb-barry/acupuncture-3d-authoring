@@ -6,9 +6,15 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh'
 import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } from './catalog.js'
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
+import { isSurfaceFacingCamera, nextExpectedPoint, placementProgress } from './workflow.js'
+
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree
+THREE.Mesh.prototype.raycast = acceleratedRaycast
 
 const $ = (selector) => document.querySelector(selector)
 const makeId = () => crypto.randomUUID()
@@ -43,11 +49,8 @@ $('#app').innerHTML = `
     <div id="point-details" class="point-details"></div>
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
-      <label>穴位直徑 <output id="marker-size-output">12 px</output><input id="marker-size" type="range" min="5" max="30" step="1" value="12"></label>
-      <label>穴位顏色<select id="marker-color">${colorOptions('#ef4444')}</select></label>
-      <label>經脈顏色<select id="line-color">${colorOptions('#3b82f6')}</select></label>
-      <label>經脈線寬 <output id="line-width-output">4 px</output><input id="line-width" type="range" min="1" max="10" step="1" value="4"></label>
-      <p>十二正經會自動建立並鎖定左右配對；任脈、督脈只建立中線穴位。</p>
+      <div id="placement-progress" class="placement-progress"></div>
+      <p>完成此經脈所有穴位定位後，才會開放經脈繪製。</p>
     </div>
   </aside>
   <section class="stage">
@@ -64,6 +67,10 @@ $('#app').innerHTML = `
   </section>
   <aside class="panel inspector-panel">
     <div class="panel-heading"><span>場景物件</span><b id="object-count">0</b></div>
+    <div class="object-filters">
+      <input id="object-search" class="search" type="search" placeholder="搜尋物件名稱…">
+      <select id="object-type"><option value="all">全部</option><option value="acupoint">穴位</option><option value="meridian">經脈</option></select>
+    </div>
     <div id="objects" class="objects"></div>
     <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯屬性</p></form></div>
   </aside>
@@ -192,6 +199,8 @@ function surfaceHit(event) {
   const normal = hit.face.normal.clone()
     .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
     .normalize()
+  const radial = new THREE.Vector3(hit.point.x, 0, hit.point.z)
+  if (radial.lengthSq() > 0.000001 && normal.dot(radial) < 0) normal.negate()
   return { position: toArray(hit.point), normal: toArray(normal) }
 }
 
@@ -222,6 +231,8 @@ function projectNearSurface(position, normal) {
       const hitNormal = hit.face.normal.clone()
         .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
         .normalize()
+      const radial = new THREE.Vector3(hit.point.x, 0, hit.point.z)
+      if (radial.lengthSq() > 0.000001 && hitNormal.dot(radial) < 0) hitNormal.negate()
       candidates.push({
         distance: hit.point.distanceTo(target),
         position: toArray(hit.point),
@@ -320,20 +331,28 @@ function rebuildAnnotations() {
     const marker = new THREE.Mesh(
       new THREE.SphereGeometry(0.5, 20, 14),
       new THREE.MeshStandardMaterial({
-        color: isSelected ? 0xffffff : point.color,
+        color: point.color,
         emissive: point.color,
-        emissiveIntensity: isSelected ? 0.8 : 0.32,
+        emissiveIntensity: 0.42,
         roughness: 0.35,
         depthTest: true,
       }),
     )
     marker.position.copy(offsetPosition(point, 0.014))
     marker.userData = { type: 'acupoint', id: point.id }
+    if (isSelected) {
+      const halo = new THREE.Mesh(
+        new THREE.SphereGeometry(0.57, 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, depthTest: false }),
+      )
+      halo.renderOrder = 6
+      marker.add(halo)
+    }
     annotationGroup.add(marker)
 
     const label = document.createElement('span')
     label.className = `point-label ${isSelected ? 'selected' : ''}`
-    label.textContent = `${point.code}${shortSide(point.side)} · ${point.name}`
+    label.textContent = point.name
     const labelObject = new CSS2DObject(label)
     labelObject.position.copy(marker.position)
     annotationGroup.add(labelObject)
@@ -345,8 +364,8 @@ function rebuildAnnotations() {
 function drawDraft() {
   const previous = annotationGroup.getObjectByName('draft')
   if (previous) annotationGroup.remove(previous)
-  if (!draftNodes.length) return
-  const positions = draftNodes.map((node) => offsetPosition(node, 0.008))
+  if (draftNodes.length < 2) return
+  const positions = skinCurvePoints({ nodes: draftNodes })
   const geometry = new LineGeometry()
   geometry.setPositions(positions.flatMap(toArray))
   const material = new LineMaterial({
@@ -359,8 +378,10 @@ function drawDraft() {
   })
   const draft = new Line2(geometry, material)
   draft.name = 'draft'
+  draft.userData = { type: 'draft-meridian' }
   draft.computeLineDistances()
   annotationGroup.add(draft)
+  routeVisuals.push({ line: draft, route: null, isDraft: true })
 }
 
 function updateMarkerScales() {
@@ -371,6 +392,28 @@ function updateMarkerScales() {
     const diameter = 2 * distance * Math.tan(fov / 2) * point.size / viewportHeight
     mesh.scale.setScalar(diameter)
   })
+}
+
+let lastLabelCheck = 0
+function updateLabelVisibility(time) {
+  if (time - lastLabelCheck < 80) return
+  lastLabelCheck = time
+  markerVisuals.forEach(({ mesh, label, point }) => {
+    const direction = mesh.position.clone().sub(camera.position)
+    const distance = direction.length()
+    const facesCamera = isSurfaceFacingCamera(point.position, point.normal, toArray(camera.position))
+    const caster = new THREE.Raycaster(camera.position, direction.normalize(), 0, distance)
+    caster.firstHitOnly = true
+    const obstruction = caster.intersectObjects(modelMeshes, false)[0]
+    const visible = facesCamera && (!obstruction || obstruction.distance >= distance - 0.025)
+    label.element.style.display = visible ? '' : 'none'
+  })
+}
+
+function meridianProgress(meridianId = $('#meridian-filter').value) {
+  const required = pointsForMeridian(meridianId)
+  const placed = state.acupoints.filter((point) => point.meridianId === meridianId)
+  return placementProgress(required, placed)
 }
 
 function renderCatalog() {
@@ -391,10 +434,20 @@ function renderCatalog() {
 
 function renderPointDetails() {
   const details = selectedCatalog?.details
+  const progress = meridianProgress()
+  const meridian = meridianById($('#meridian-filter').value)
   $('#point-details').innerHTML = selectedCatalog ? `
     <strong>${selectedCatalog.code} · ${escapeHtml(selectedCatalog.name)}</strong>
     <small>${escapeHtml(selectedCatalog.meridianName)}</small>
     <p>${escapeHtml(details.simpleLocation || details.location || '尚無取穴說明')}</p>` : ''
+  $('#placement-progress').innerHTML = `
+    <span>${escapeHtml(meridian.name)}定位進度</span>
+    <b>${progress.placed} / ${progress.total}</b>
+    <meter min="0" max="${progress.total}" value="${progress.placed}"></meter>
+    <small>${progress.complete ? '已完成，可開始繪製經脈' : `尚缺 ${progress.total - progress.placed} 個穴位`}</small>`
+  const pathButton = document.querySelector('[data-tool="path"]')
+  pathButton.disabled = !progress.complete
+  pathButton.title = progress.complete ? '開始或編輯經脈' : '完成所有穴位定位後開放'
 }
 
 function updateSideControl() {
@@ -402,16 +455,25 @@ function updateSideControl() {
   $('#side-control').classList.toggle('hidden', !meridian?.bilateral)
 }
 
+function renderObjects() {
+  const query = $('#object-search').value.trim().toLowerCase()
+  const type = $('#object-type').value
+  const routes = type === 'acupoint' ? [] : state.meridians
+    .filter((item) => !query || `${item.name} ${item.meridianId} ${sideLabel(item.side)}`.toLowerCase().includes(query))
+    .map((item) => `<button data-type="meridian" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
+      <i style="background:${item.color}"></i><span><b>${escapeHtml(item.name)}</b><small>${item.nodes.length} 個錨點 · ${sideLabel(item.side)}</small></span></button>`)
+  const points = type === 'meridian' ? [] : state.acupoints
+    .filter((item) => !query || `${item.code} ${item.name} ${item.meridianName} ${sideLabel(item.side)}`.toLowerCase().includes(query))
+    .map((item) => `<button data-type="acupoint" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
+      <i class="point-dot" style="background:${item.color}"></i><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b><small>${sideLabel(item.side)} · ${item.size}px</small></span></button>`)
+  $('#objects').innerHTML = [...routes, ...points].join('') || '<p class="empty">沒有符合的場景物件</p>'
+}
+
 function updateUI() {
   $('#undo').disabled = !history.canUndo
   $('#redo').disabled = !history.canRedo
   $('#object-count').textContent = state.meridians.length + state.acupoints.length
-  $('#objects').innerHTML = [
-    ...state.meridians.map((item) => `<button data-type="meridian" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
-      <i style="background:${item.color}"></i><span><b>${escapeHtml(item.name)}</b><small>${item.nodes.length} 個錨點 · ${sideLabel(item.side)}</small></span></button>`),
-    ...state.acupoints.map((item) => `<button data-type="acupoint" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
-      <i class="point-dot" style="background:${item.color}"></i><span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b><small>${sideLabel(item.side)} · ${item.size}px</small></span></button>`),
-  ].join('') || '<p class="empty">尚未建立標註</p>'
+  renderObjects()
   renderProperties()
   renderCatalog()
 }
@@ -443,14 +505,21 @@ function renderProperties() {
 }
 
 function setTool(tool) {
+  if (tool === 'path' && !meridianProgress().complete) {
+    const progress = meridianProgress()
+    toast(`請先完成此經脈所有穴位定位（${progress.placed}/${progress.total}）`, 'warn')
+    return
+  }
   activeTool = tool
   document.querySelectorAll('.tool').forEach((button) =>
     button.classList.toggle('active', button.dataset.tool === tool))
   viewport.className = tool === 'navigate' ? '' : 'placing'
-  $('#finish-path').classList.toggle('hidden', tool !== 'path' || draftNodes.length < 2)
+  const required = pointsForMeridian($('#meridian-filter').value).length
+  const usedPoints = draftNodes.filter((node) => node.type === 'acupoint').length
+  $('#finish-path').classList.toggle('hidden', tool !== 'path' || usedPoints !== required)
   $('#stage-help').textContent = {
     navigate: '拖曳旋轉 · 拖曳穴位或金色控制點調整位置',
-    path: '依序點擊同經脈穴位；點擊皮膚加入曲線控制點',
+    path: '依國際代碼順序點擊穴位；點擊草稿線段加入曲度控制點',
     point: selectedCatalog
       ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}`
       : '請先選擇穴位',
@@ -504,12 +573,25 @@ function routeNodeFromMarker(hit) {
   const point = hit && getPoint(hit.object.userData.id)
   if (!point) return null
   const activeMeridian = $('#meridian-filter').value
+  if (!draftNodes.length && state.meridians.some((route) => route.meridianId === activeMeridian)) {
+    toast('此經脈已有固定路線；請點擊既有線段編輯，或先刪除後重畫', 'warn')
+    return false
+  }
   if (point.meridianId !== activeMeridian) {
     toast(`路線屬於 ${meridianById(activeMeridian).name}，不能加入 ${point.code}`, 'warn')
     return false
   }
   if (draftSide && point.side !== draftSide) {
     toast(`目前正在繪製${sideLabel(draftSide)}路線`, 'warn')
+    return false
+  }
+  const expected = nextExpectedPoint(pointsForMeridian(activeMeridian), draftNodes)
+  if (!expected) {
+    toast('此經脈所有穴位已加入，請調整曲線或按完成', 'warn')
+    return false
+  }
+  if (point.code !== expected.code) {
+    toast(`請依序點擊 ${expected.code} ${expected.name}`, 'warn')
     return false
   }
   draftSide ||= point.side
@@ -554,6 +636,14 @@ function insertRouteControl(routeId, hit) {
   commit({ ...state, meridians: nextRoutes }, '已在線段加入曲度控制點')
 }
 
+function insertDraftControl(hit) {
+  if (draftNodes.length < 2) return
+  const index = nearestNodeSegment({ nodes: draftNodes }, hit.position)
+  draftNodes.splice(index + 1, 0, { type: 'control', pointId: null, ...hit })
+  rebuildAnnotations()
+  setStatus('已在草稿線段加入曲度控制點')
+}
+
 function placeAt(event) {
   if (activeTool === 'navigate') {
     const routeHit = annotationHit(event, ['meridian'])
@@ -568,23 +658,26 @@ function placeAt(event) {
   if (!hit) return toast('請點擊人體模型表面', 'warn')
   if (activeTool === 'point') return placeAcupoint(hit)
 
+  const draftHit = annotationHit(event, ['draft-meridian'])
+  if (draftHit) return insertDraftControl(hit)
   const existingRouteHit = annotationHit(event, ['meridian'])
   if (existingRouteHit) return insertRouteControl(existingRouteHit.object.userData.id, hit)
   const markerHit = annotationHit(event, ['acupoint'])
   const markerNode = routeNodeFromMarker(markerHit)
   if (markerNode === false) return
   if (markerNode) draftNodes.push(markerNode)
-  else {
-    draftSide ||= meridianById($('#meridian-filter').value).bilateral ? $('#point-side').value : 'midline'
-    draftNodes.push({ type: 'control', pointId: null, ...hit })
-  }
+  else return toast('請點擊下一個穴位；需要曲度時請點擊已繪製的線段', 'warn')
   drawDraft()
-  $('#finish-path').classList.toggle('hidden', draftNodes.length < 2)
-  setStatus(`路徑錨點：${draftNodes.length}`)
+  const required = pointsForMeridian($('#meridian-filter').value).length
+  const used = draftNodes.filter((node) => node.type === 'acupoint').length
+  $('#finish-path').classList.toggle('hidden', used !== required)
+  setStatus(`經脈穴位：${used}/${required}`)
 }
 
 function finishPath() {
-  if (draftNodes.length < 2) return toast('經脈路徑至少需要兩個錨點', 'warn')
+  const required = pointsForMeridian($('#meridian-filter').value).length
+  const used = draftNodes.filter((node) => node.type === 'acupoint').length
+  if (used !== required) return toast(`必須包含此經脈全部穴位（${used}/${required}）`, 'warn')
   const meridian = meridianById($('#meridian-filter').value)
   const pairId = meridian.bilateral ? makeId() : null
   const side = meridian.bilateral ? (draftSide || $('#point-side').value) : 'midline'
@@ -720,27 +813,7 @@ async function importJSON(file) {
   toast(`已匯入 ${state.meridians.length} 條路線、${state.acupoints.length} 個定位點`)
 }
 
-function addEyes() {
-  const eyeGroup = new THREE.Group()
-  eyeGroup.name = 'decorative-eyes'
-  const whiteMaterial = new THREE.MeshPhysicalMaterial({ color: 0xf2eee5, roughness: 0.38, clearcoat: 0.25 })
-  const irisMaterial = new THREE.MeshStandardMaterial({ color: 0x4b6f78, roughness: 0.3 })
-  const pupilMaterial = new THREE.MeshBasicMaterial({ color: 0x111817 })
-  for (const x of [-0.064, 0.064]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.029, 28, 20), whiteMaterial)
-    eye.scale.set(1, 0.68, 0.48)
-    eye.position.set(x, 2.675, 0.112)
-    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.011, 20, 14), irisMaterial)
-    iris.scale.set(1, 1, 0.3)
-    iris.position.set(x, 2.675, 0.128)
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 16, 10), pupilMaterial)
-    pupil.position.set(x, 2.675, 0.133)
-    eyeGroup.add(eye, iris, pupil)
-  }
-  modelGroup.add(eyeGroup)
-}
-
-function applyModel(gltf, name, hash = null, decorate = false) {
+function applyModel(gltf, name, hash = null) {
   const box = new THREE.Box3().setFromObject(gltf.scene)
   const size = box.getSize(new THREE.Vector3())
   if (!Number.isFinite(size.y) || size.y === 0) throw new Error('模型尺寸無效')
@@ -759,10 +832,10 @@ function applyModel(gltf, name, hash = null, decorate = false) {
     if (object.isMesh) {
       object.castShadow = true
       object.receiveShadow = true
+      object.geometry.computeBoundsTree()
       modelMeshes.push(object)
     }
   })
-  if (decorate) addEyes()
   state = { ...state, model: { name, hash } }
   history.replace(state)
   $('#model-status').textContent = name
@@ -797,7 +870,7 @@ async function loadDefaultModel() {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', 'e8eaf344a64c40fc665cd2d32832673c95fb991582ffafac8befcbe140ef91a2', true)
+    applyModel(gltf, '人體模型', '4c4510b97bbce5cf7b88fa43ee9ff25ff0add5c940843d0af7449b9b932b3dc1')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('平滑人體模型已就緒')
   } catch (error) {
@@ -827,14 +900,16 @@ function resize() {
   routeVisuals.forEach(({ line }) => line.material.resolution.set(clientWidth, clientHeight))
 }
 new ResizeObserver(resize).observe(viewport)
-renderer.setAnimationLoop(() => {
+renderer.setAnimationLoop((time) => {
   controls.update()
   updateMarkerScales()
+  updateLabelVisibility(time)
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
 })
 
 $('#meridian-filter').addEventListener('change', () => {
+  if (activeTool === 'path') cancelDraft()
   selectedCatalog = pointsForMeridian($('#meridian-filter').value)[0]
   $('#catalog-search').value = ''
   renderCatalog()
@@ -848,23 +923,6 @@ $('#catalog').addEventListener('click', (event) => {
   renderCatalog()
   if (activeTool === 'point') setTool('point')
 })
-
-for (const [input, output, setting] of [
-  ['#marker-size', '#marker-size-output', 'markerSize'],
-  ['#line-width', '#line-width-output', 'lineWidth'],
-]) {
-  $(input).addEventListener('input', (event) => {
-    $(output).textContent = `${event.target.value} px`
-    state = { ...state, settings: { ...state.settings, [setting]: Number(event.target.value) } }
-    history.present = structuredClone(state)
-  })
-}
-for (const [selector, setting] of [['#marker-color', 'markerColor'], ['#line-color', 'lineColor']]) {
-  $(selector).addEventListener('change', (event) => {
-    state = { ...state, settings: { ...state.settings, [setting]: event.target.value } }
-    history.present = structuredClone(state)
-  })
-}
 
 document.querySelectorAll('.tool').forEach((button) => button.addEventListener('click', () => {
   if (draftNodes.length && button.dataset.tool !== 'path') cancelDraft()
@@ -915,6 +973,8 @@ $('#objects').addEventListener('click', (event) => {
   rebuildAnnotations()
   updateUI()
 })
+$('#object-search').addEventListener('input', renderObjects)
+$('#object-type').addEventListener('change', renderObjects)
 $('#properties').addEventListener('submit', (event) => {
   event.preventDefault()
   if (!selected) return
@@ -929,6 +989,12 @@ $('#properties').addEventListener('submit', (event) => {
       : { ...item, color: data.color, size: Number(data.size) }
   })
   commit({ ...state, [key]: next }, '屬性已同步更新')
+})
+$('#properties').addEventListener('input', (event) => {
+  if (event.target.type === 'range') {
+    const output = event.target.closest('label')?.querySelector('output')
+    if (output) output.textContent = `${event.target.value}px`
+  }
 })
 $('#properties').addEventListener('click', (event) => {
   if (event.target.matches('[data-delete]')) removeSelected()
