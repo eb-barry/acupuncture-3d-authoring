@@ -72,7 +72,17 @@ $('#app').innerHTML = `
       <select id="object-type"><option value="all">全部</option><option value="acupoint">穴位</option><option value="meridian">經脈</option></select>
     </div>
     <div id="objects" class="objects"></div>
-    <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯屬性</p></form></div>
+    <section class="style-panel">
+      <div class="panel-heading"><span>樣式設定</span></div>
+      <form id="style-settings" class="style-settings">
+        <label>穴位顏色<select name="markerColor"></select></label>
+        <label>穴位直徑 <output id="marker-size-out">12px</output><input name="markerSize" type="range" min="5" max="30" value="12"></label>
+        <label>經脈顏色<select name="lineColor"></select></label>
+        <label>經脈線寬 <output id="line-width-out">4px</output><input name="lineWidth" type="range" min="1" max="10" value="4"></label>
+        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。</p>
+      </form>
+    </section>
+    <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯或刪除</p></form></div>
   </aside>
 </main>
 <footer><span id="model-status">正在載入人體模型…</span><span id="status">就緒</span><span>WebGL · 本機資料</span></footer>
@@ -102,15 +112,15 @@ controls.dampingFactor = 0.08
 controls.minDistance = 1.2
 controls.maxDistance = 10
 
-scene.add(new THREE.HemisphereLight(0xf1faf6, 0x24332f, 3))
-const keyLight = new THREE.DirectionalLight(0xffead2, 4)
+scene.add(new THREE.HemisphereLight(0xf1faf6, 0x24332f, 2.8))
+const keyLight = new THREE.DirectionalLight(0xffead2, 3.2)
 keyLight.position.set(3, 5, 4)
 keyLight.castShadow = true
 scene.add(keyLight)
-const fillLight = new THREE.DirectionalLight(0xcde5ff, 2.2)
+const fillLight = new THREE.DirectionalLight(0xcde5ff, 2.0)
 fillLight.position.set(-3, 2, 4)
 scene.add(fillLight)
-const rimLight = new THREE.DirectionalLight(0x74b9b0, 2)
+const rimLight = new THREE.DirectionalLight(0x74b9b0, 1.6)
 rimLight.position.set(-4, 2, -3)
 scene.add(rimLight)
 scene.add(new THREE.GridHelper(8, 32, 0x38514d, 0x1d2c2a))
@@ -328,31 +338,28 @@ function rebuildAnnotations() {
   state.acupoints.forEach((point) => {
     const isSelected = selected?.type === 'acupoint'
       && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
+    const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
+    // Invisible picking sphere in world space; visible marker is CSS2D (always on top).
     const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.5, 20, 14),
-      new THREE.MeshStandardMaterial({
+      new THREE.SphereGeometry(0.5, 12, 10),
+      new THREE.MeshBasicMaterial({
         color: point.color,
-        emissive: point.color,
-        emissiveIntensity: 0.42,
-        roughness: 0.35,
-        depthTest: true,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.001,
       }),
     )
-    marker.position.copy(offsetPosition(point, 0.014))
+    marker.position.copy(offsetPosition(point, 0.03))
+    marker.renderOrder = 20
     marker.userData = { type: 'acupoint', id: point.id }
-    if (isSelected) {
-      const halo = new THREE.Mesh(
-        new THREE.SphereGeometry(0.57, 16, 12),
-        new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, depthTest: false }),
-      )
-      halo.renderOrder = 6
-      marker.add(halo)
-    }
     annotationGroup.add(marker)
 
     const label = document.createElement('span')
-    label.className = `point-label ${isSelected ? 'selected' : ''}`
-    label.textContent = point.name
+    label.className = `point-marker ${isSelected ? 'selected' : ''}`
+    label.style.setProperty('--marker-color', point.color)
+    label.style.setProperty('--marker-size', `${pixelSize}px`)
+    label.innerHTML = `<i class="marker-dot" aria-hidden="true"></i><b class="point-name">${escapeHtml(point.name)}</b>`
     const labelObject = new CSS2DObject(label)
     labelObject.position.copy(marker.position)
     annotationGroup.add(labelObject)
@@ -387,10 +394,16 @@ function drawDraft() {
 function updateMarkerScales() {
   const viewportHeight = Math.max(viewport.clientHeight, 1)
   const fov = THREE.MathUtils.degToRad(camera.fov)
-  markerVisuals.forEach(({ mesh, point }) => {
+  markerVisuals.forEach(({ mesh, label, point }) => {
     const distance = camera.position.distanceTo(mesh.position)
-    const diameter = 2 * distance * Math.tan(fov / 2) * point.size / viewportHeight
-    mesh.scale.setScalar(diameter)
+    const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
+    const diameter = 2 * distance * Math.tan(fov / 2) * Math.max(pixelSize, 14) / viewportHeight
+    // Keep an easy-to-hit picking sphere around the visible CSS marker.
+    mesh.scale.setScalar(Math.max(diameter, 0.03))
+    if (label?.element) {
+      label.element.style.setProperty('--marker-size', `${pixelSize}px`)
+      label.element.style.setProperty('--marker-color', point.color)
+    }
   })
 }
 
@@ -478,30 +491,85 @@ function updateUI() {
   renderCatalog()
 }
 
+function syncStyleSettings() {
+  const form = $('#style-settings')
+  if (!form) return
+  let markerColor = state.settings.markerColor
+  let markerSize = state.settings.markerSize
+  let lineColor = state.settings.lineColor
+  let lineWidth = state.settings.lineWidth
+  if (selected?.type === 'acupoint') {
+    const point = state.acupoints.find((entry) => entry.id === selected.id)
+    if (point) {
+      markerColor = point.color
+      markerSize = point.size
+    }
+  } else if (selected?.type === 'meridian') {
+    const route = state.meridians.find((entry) => entry.id === selected.id)
+    if (route) {
+      lineColor = route.color
+      lineWidth = route.width
+    }
+  }
+  form.markerColor.innerHTML = colorOptions(markerColor)
+  form.lineColor.innerHTML = colorOptions(lineColor)
+  form.markerSize.value = markerSize
+  form.lineWidth.value = lineWidth
+  $('#marker-size-out').textContent = `${markerSize}px`
+  $('#line-width-out').textContent = `${lineWidth}px`
+}
+
+function applyStyleSettings(data) {
+  const markerColor = data.markerColor
+  const markerSize = Number(data.markerSize)
+  const lineColor = data.lineColor
+  const lineWidth = Number(data.lineWidth)
+  const settings = { ...state.settings, markerColor, markerSize, lineColor, lineWidth }
+  if (selected?.type === 'acupoint') {
+    const current = state.acupoints.find((item) => item.id === selected.id)
+    if (!current) return
+    const acupoints = state.acupoints.map((item) => {
+      const matches = item.id === current.id || (current.pairId && item.pairId === current.pairId)
+      return matches ? { ...item, color: markerColor, size: markerSize } : item
+    })
+    commit({ ...state, settings, acupoints }, '穴位樣式已套用至左右配對')
+    return
+  }
+  if (selected?.type === 'meridian') {
+    const current = state.meridians.find((item) => item.id === selected.id)
+    if (!current) return
+    const meridians = state.meridians.map((item) => {
+      const matches = item.id === current.id
+        || (current.pairId && item.pairId === current.pairId)
+        || (!current.pairId && item.meridianId === current.meridianId && item.name === current.name)
+      return matches ? { ...item, color: lineColor, width: lineWidth } : item
+    })
+    commit({ ...state, settings, meridians }, '經脈樣式已套用')
+    return
+  }
+  commit({ ...state, settings }, '已更新新定位樣式預設值')
+}
+
 function renderProperties() {
+  syncStyleSettings()
   const form = $('#properties')
   const key = selected?.type === 'meridian' ? 'meridians' : 'acupoints'
   const item = selected && state[key].find((entry) => entry.id === selected.id)
   if (!item) {
-    form.innerHTML = '<p class="empty">選取經脈或穴位以編輯屬性</p>'
+    form.innerHTML = '<p class="empty">選取經脈或穴位後，可在上方調整顏色與尺寸，或在此刪除</p>'
     return
   }
   form.innerHTML = selected.type === 'meridian' ? `
     <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.name)}</b></div>
     <div class="readonly-field"><span>側別</span><b>${sideLabel(item.side)}</b></div>
-    <label>線條顏色<select name="color">${colorOptions(item.color)}</select></label>
-    <label>線寬 <output>${item.width}px</output><input name="width" type="range" min="1" max="10" value="${item.width}"></label>
-    <button class="save primary" type="submit">套用至左右路線</button>
+    <div class="readonly-field"><span>錨點</span><b>${item.nodes.length}</b></div>
     <button class="danger" type="button" data-delete>刪除路線</button>
-    <p class="form-help">選取路線後拖曳金色控制點；使用經脈工具點擊線段可插入控制點。</p>` : `
+    <p class="form-help">顏色與線寬請使用上方「樣式設定」。選取路線後可拖曳金色控制點。</p>` : `
     <div class="readonly-field"><span>穴位</span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b></div>
     <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.meridianName)}</b></div>
-    <div class="readonly-field"><span>側別</span><b>${item.pairId ? '左右鎖定配對' : '中線'}</b></div>
-    <label>穴位顏色<select name="color">${colorOptions(item.color)}</select></label>
-    <label>直徑 <output>${item.size}px</output><input name="size" type="range" min="5" max="30" value="${item.size}"></label>
-    <button class="save primary" type="submit">套用${item.pairId ? '至左右穴位' : ''}</button>
+    <div class="readonly-field"><span>側別</span><b>${item.pairId ? `${sideLabel(item.side)} · 左右鎖定配對` : '中線'}</b></div>
     <button class="danger" type="button" data-delete>刪除穴位</button>
-    <p class="form-help">使用檢視／調整工具拖曳定位點；左右穴位會同步鏡射。</p>`
+    <p class="form-help">顏色與直徑請使用上方「樣式設定」。使用檢視／調整工具拖曳定位點。</p>`
 }
 
 function setTool(tool) {
@@ -646,6 +714,14 @@ function insertDraftControl(hit) {
 
 function placeAt(event) {
   if (activeTool === 'navigate') {
+    const markerHit = annotationHit(event, ['acupoint'])
+    if (markerHit) {
+      const point = getPoint(markerHit.object.userData.id)
+      selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
+      rebuildAnnotations()
+      updateUI()
+      return
+    }
     const routeHit = annotationHit(event, ['meridian'])
     if (routeHit) {
       selected = { type: 'meridian', id: routeHit.object.userData.id }
@@ -848,18 +924,18 @@ function applyModel(gltf, name, hash = null) {
 function styleBundledHuman(gltf) {
   gltf.scene.traverse((object) => {
     if (!object.isMesh) return
-    const styleMaterial = (material) => {
-      const styled = material.clone()
-      if (!styled.map) styled.color.set(0xc58f73)
-      styled.emissive.set(0x21110d)
-      styled.emissiveIntensity = 0.25
-      styled.metalness = 0
-      styled.roughness = 0.76
-      return styled
-    }
+    const styleMaterial = () => new THREE.MeshStandardMaterial({
+      color: 0xc58f73,
+      emissive: 0x1a100c,
+      emissiveIntensity: 0.2,
+      metalness: 0,
+      roughness: 0.88,
+      flatShading: false,
+      side: THREE.FrontSide,
+    })
     object.material = Array.isArray(object.material)
-      ? object.material.map(styleMaterial)
-      : styleMaterial(object.material)
+      ? object.material.map(() => styleMaterial())
+      : styleMaterial()
   })
 }
 
@@ -870,7 +946,7 @@ async function loadDefaultModel() {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', '4c4510b97bbce5cf7b88fa43ee9ff25ff0add5c940843d0af7449b9b932b3dc1')
+    applyModel(gltf, '人體模型', '59aa443292fc117ebc52bfd15fb5e79d13bc6d302e7b24eba0647d0addab60c9')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('平滑人體模型已就緒')
   } catch (error) {
@@ -975,27 +1051,36 @@ $('#objects').addEventListener('click', (event) => {
 })
 $('#object-search').addEventListener('input', renderObjects)
 $('#object-type').addEventListener('change', renderObjects)
-$('#properties').addEventListener('submit', (event) => {
-  event.preventDefault()
-  if (!selected) return
-  const data = Object.fromEntries(new FormData(event.target))
-  const key = selected.type === 'meridian' ? 'meridians' : 'acupoints'
-  const current = state[key].find((item) => item.id === selected.id)
-  const next = state[key].map((item) => {
-    const matches = item.id === current.id || (current.pairId && item.pairId === current.pairId)
-    if (!matches) return item
-    return selected.type === 'meridian'
-      ? { ...item, color: data.color, width: Number(data.width) }
-      : { ...item, color: data.color, size: Number(data.size) }
-  })
-  commit({ ...state, [key]: next }, '屬性已同步更新')
+$('#style-settings').addEventListener('change', (event) => {
+  const form = event.currentTarget
+  applyStyleSettings(Object.fromEntries(new FormData(form)))
 })
-$('#properties').addEventListener('input', (event) => {
-  if (event.target.type === 'range') {
-    const output = event.target.closest('label')?.querySelector('output')
-    if (output) output.textContent = `${event.target.value}px`
+$('#style-settings').addEventListener('input', (event) => {
+  if (event.target.type !== 'range') return
+  const output = event.target.closest('label')?.querySelector('output')
+  if (output) output.textContent = `${event.target.value}px`
+  if (event.target.name === 'markerSize' || event.target.name === 'lineWidth') {
+    // Live-preview size while dragging; commit on change.
+    const form = event.currentTarget
+    const data = Object.fromEntries(new FormData(form))
+    if (selected?.type === 'acupoint' && event.target.name === 'markerSize') {
+      const current = state.acupoints.find((item) => item.id === selected.id)
+      if (!current) return
+      const size = Number(data.markerSize)
+      state = {
+        ...state,
+        settings: { ...state.settings, markerSize: size },
+        acupoints: state.acupoints.map((item) =>
+          item.id === current.id || (current.pairId && item.pairId === current.pairId)
+            ? { ...item, size }
+            : item),
+      }
+      rebuildAnnotations()
+      updateMarkerScales()
+    }
   }
 })
+$('#properties').addEventListener('submit', (event) => event.preventDefault())
 $('#properties').addEventListener('click', (event) => {
   if (event.target.matches('[data-delete]')) removeSelected()
 })
