@@ -6,10 +6,15 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh'
 import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } from './catalog.js'
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
 import { nextExpectedPoint, placementProgress } from './workflow.js'
+
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree
+THREE.Mesh.prototype.raycast = acceleratedRaycast
 
 const $ = (selector) => document.querySelector(selector)
 const makeId = () => crypto.randomUUID()
@@ -385,12 +390,18 @@ function updateMarkerScales() {
   })
 }
 
-function updateLabelVisibility() {
+let lastLabelCheck = 0
+function updateLabelVisibility(time) {
+  if (time - lastLabelCheck < 80) return
+  lastLabelCheck = time
   markerVisuals.forEach(({ mesh, label, point }) => {
-    const towardCamera = camera.position.clone().sub(mesh.position)
-    const normal = new THREE.Vector3(...point.normal).normalize()
-    const facesCamera = normal.dot(towardCamera.normalize()) > 0.05
-    label.element.style.display = facesCamera ? '' : 'none'
+    const direction = mesh.position.clone().sub(camera.position)
+    const distance = direction.length()
+    const caster = new THREE.Raycaster(camera.position, direction.normalize(), 0, distance)
+    caster.firstHitOnly = true
+    const obstruction = caster.intersectObjects(modelMeshes, false)[0]
+    const visible = !obstruction || obstruction.distance >= distance - 0.025
+    label.element.style.display = visible ? '' : 'none'
   })
 }
 
@@ -816,6 +827,7 @@ function applyModel(gltf, name, hash = null) {
     if (object.isMesh) {
       object.castShadow = true
       object.receiveShadow = true
+      object.geometry.computeBoundsTree()
       modelMeshes.push(object)
     }
   })
@@ -883,10 +895,10 @@ function resize() {
   routeVisuals.forEach(({ line }) => line.material.resolution.set(clientWidth, clientHeight))
 }
 new ResizeObserver(resize).observe(viewport)
-renderer.setAnimationLoop(() => {
+renderer.setAnimationLoop((time) => {
   controls.update()
   updateMarkerScales()
-  updateLabelVisibility()
+  updateLabelVisibility(time)
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
 })
@@ -972,6 +984,12 @@ $('#properties').addEventListener('submit', (event) => {
       : { ...item, color: data.color, size: Number(data.size) }
   })
   commit({ ...state, [key]: next }, '屬性已同步更新')
+})
+$('#properties').addEventListener('input', (event) => {
+  if (event.target.type === 'range') {
+    const output = event.target.closest('label')?.querySelector('output')
+    if (output) output.textContent = `${event.target.value}px`
+  }
 })
 $('#properties').addEventListener('click', (event) => {
   if (event.target.matches('[data-delete]')) removeSelected()
