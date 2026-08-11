@@ -1,6 +1,15 @@
 # Third-party assets
 
-## `human_glb` body model
+## Default body model (`male_character.glb`)
+
+- Local file: `models/male_character.glb`
+- SHA-256: `1d52c883c830ff9bc53d146fe8fd199569735a8021569a401b0e05ded4825018`
+- Source: provided by the project owner for acupuncture authoring
+- Notes: used as the default viewer model. Normals are full-precision float32
+  (no Meshopt quantization), which avoids spiral shading artifacts under
+  studio lighting.
+
+## Alternate body model (`human_glb`)
 
 - Title: [`human_glb`](https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900)
 - Creator: [aaravparakh](https://sketchfab.com/aaravparakh)

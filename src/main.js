@@ -1,7 +1,9 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js'
 import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
@@ -61,7 +63,7 @@ $('#app').innerHTML = `
       <button id="finish-path" class="finish hidden">完成路徑</button>
     </nav>
     <div id="viewport" tabindex="0"></div>
-    <div class="stage-help" id="stage-help">拖曳旋轉 · Shift/右鍵平移 · 滾輪縮放</div>
+    <div class="stage-help" id="stage-help">拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 平移</div>
     <div class="axis"><i class="x"></i>X <i class="y"></i>Y <i class="z"></i>Z</div>
     <div id="drop-hint">放開以載入 GLB</div>
   </section>
@@ -90,44 +92,81 @@ $('#app').innerHTML = `
 
 const viewport = $('#viewport')
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x101817)
-scene.fog = new THREE.Fog(0x101817, 5, 11)
-const camera = new THREE.PerspectiveCamera(34, 1, 0.01, 50)
-camera.position.set(3.4, 1.7, 4.6)
+scene.background = new THREE.Color(0x14161b)
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000)
+camera.position.set(2.5, 1.8, 3.2)
 
-const renderer = new THREE.WebGLRenderer({ antialias: true })
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.outputColorSpace = THREE.SRGBColorSpace
+renderer.toneMapping = THREE.ACESFilmicToneMapping
+renderer.toneMappingExposure = 1.05
 renderer.shadowMap.enabled = true
+renderer.shadowMap.type = THREE.PCFSoftShadowMap
 viewport.append(renderer.domElement)
 
 const labelRenderer = new CSS2DRenderer()
 labelRenderer.domElement.className = 'label-layer'
 viewport.append(labelRenderer.domElement)
 
+const pmrem = new THREE.PMREMGenerator(renderer)
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+
+const hemiLight = new THREE.HemisphereLight(0xffffff, 0x14161b, 0.55)
+scene.add(hemiLight)
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.5)
+keyLight.position.set(4, 6, 3)
+keyLight.castShadow = true
+keyLight.shadow.mapSize.set(2048, 2048)
+keyLight.shadow.bias = -0.0004
+scene.add(keyLight)
+const fillLight = new THREE.DirectionalLight(0xbcd4ff, 0.25)
+fillLight.position.set(-4, 2, -3)
+scene.add(fillLight)
+
+const pedestal = new THREE.Group()
+scene.add(pedestal)
+const shadowPlane = new THREE.Mesh(
+  new THREE.CircleGeometry(1, 64),
+  new THREE.ShadowMaterial({ opacity: 0.28 }),
+)
+shadowPlane.rotation.x = -Math.PI / 2
+shadowPlane.receiveShadow = true
+pedestal.add(shadowPlane)
+const polarGrid = new THREE.PolarGridHelper(1, 16, 6, 64, 0x3a3f4a, 0x262a32)
+polarGrid.material.transparent = true
+polarGrid.material.opacity = 0.55
+pedestal.add(polarGrid)
+const accentRing = new THREE.Mesh(
+  new THREE.RingGeometry(0.995, 1.0, 96),
+  new THREE.MeshBasicMaterial({ color: 0xe8a857, transparent: true, opacity: 0.45, side: THREE.DoubleSide }),
+)
+accentRing.rotation.x = -Math.PI / 2
+pedestal.add(accentRing)
+pedestal.visible = false
+
 const controls = new OrbitControls(camera, renderer.domElement)
-controls.target.set(0, 1.45, 0)
+controls.target.set(0, 1.0, 0)
 controls.enableDamping = true
 controls.dampingFactor = 0.08
-controls.minDistance = 1.2
-controls.maxDistance = 10
-
-scene.add(new THREE.HemisphereLight(0xf1faf6, 0x24332f, 2.8))
-const keyLight = new THREE.DirectionalLight(0xffead2, 3.2)
-keyLight.position.set(3, 5, 4)
-keyLight.castShadow = true
-scene.add(keyLight)
-const fillLight = new THREE.DirectionalLight(0xcde5ff, 2.0)
-fillLight.position.set(-3, 2, 4)
-scene.add(fillLight)
-const rimLight = new THREE.DirectionalLight(0x74b9b0, 1.6)
-rimLight.position.set(-4, 2, -3)
-scene.add(rimLight)
-scene.add(new THREE.GridHelper(8, 32, 0x38514d, 0x1d2c2a))
+controls.rotateSpeed = 0.85
+controls.zoomSpeed = 0.9
+controls.panSpeed = 0.7
+controls.screenSpacePanning = true
+controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.DOLLY,
+  RIGHT: THREE.MOUSE.PAN,
+}
+controls.minDistance = 0.05
+controls.maxDistance = 500
 
 const modelGroup = new THREE.Group()
 const annotationGroup = new THREE.Group()
 scene.add(modelGroup, annotationGroup)
+let initialCamPos = camera.position.clone()
+let initialTarget = controls.target.clone()
 
 let modelMeshes = []
 let markerVisuals = []
@@ -144,7 +183,13 @@ let pointerDown = null
 let dragging = null
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
-const createModelLoader = () => new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
+const createModelLoader = () => {
+  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
+  const draco = new DRACOLoader()
+  draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/')
+  loader.setDRACOLoader(draco)
+  return loader
+}
 
 const sideLabel = (side) => ({ left: '左側', right: '右側', midline: '中線' })[side] || side
 const shortSide = (side) => ({ left: 'L', right: 'R', midline: 'M' })[side] || ''
@@ -890,56 +935,85 @@ async function importJSON(file) {
 }
 
 function applyModel(gltf, name, hash = null) {
-  const box = new THREE.Box3().setFromObject(gltf.scene)
+  const root = gltf.scene
+  const box = new THREE.Box3().setFromObject(root)
   const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
   if (!Number.isFinite(size.y) || size.y === 0) throw new Error('模型尺寸無效')
+
   modelGroup.clear()
   modelMeshes = []
-  modelGroup.add(gltf.scene)
-  gltf.scene.scale.multiplyScalar(3 / size.y)
-  gltf.scene.updateMatrixWorld(true)
-  const normalizedBox = new THREE.Box3().setFromObject(gltf.scene)
-  const center = normalizedBox.getCenter(new THREE.Vector3())
-  gltf.scene.position.x -= center.x
-  gltf.scene.position.y -= normalizedBox.min.y
-  gltf.scene.position.z -= center.z
-  gltf.scene.updateMatrixWorld(true)
-  gltf.scene.traverse((object) => {
-    if (object.isMesh) {
-      object.castShadow = true
-      object.receiveShadow = true
+  modelGroup.add(root)
+
+  // Recenter at origin and sit on y=0 (same framing approach as the turntable viewer).
+  root.position.x += -center.x
+  root.position.z += -center.z
+  root.position.y += -box.min.y
+  root.updateMatrixWorld(true)
+
+  const framedBox = new THREE.Box3().setFromObject(root)
+  const framedSize = framedBox.getSize(new THREE.Vector3())
+  const maxDim = Math.max(framedSize.x, framedSize.y, framedSize.z, 0.001)
+
+  const radius = maxDim * 0.85
+  pedestal.scale.setScalar(radius)
+  pedestal.position.set(0, 0.0005, 0)
+  pedestal.visible = true
+
+  const shadowCam = keyLight.shadow.camera
+  shadowCam.left = -radius * 1.4
+  shadowCam.right = radius * 1.4
+  shadowCam.top = radius * 1.4
+  shadowCam.bottom = -radius * 1.4
+  shadowCam.near = 0.01
+  shadowCam.far = maxDim * 8
+  keyLight.position.set(maxDim * 1.3, maxDim * 2.0, maxDim * 1.0)
+  if (!keyLight.target.parent) scene.add(keyLight.target)
+  keyLight.target.position.set(0, maxDim * 0.15, 0)
+  shadowCam.updateProjectionMatrix()
+
+  root.traverse((object) => {
+    if (!object.isMesh) return
+    object.castShadow = true
+    object.receiveShadow = true
+    if (object.geometry && !object.geometry.boundsTree) {
       object.geometry.computeBoundsTree()
-      modelMeshes.push(object)
     }
+    modelMeshes.push(object)
   })
+
+  const fovRad = THREE.MathUtils.degToRad(camera.fov)
+  const dist = (maxDim / 2) / Math.tan(fovRad / 2) * 1.65
+  camera.near = Math.max(maxDim / 1000, 0.001)
+  camera.far = Math.max(maxDim * 100, 100)
+  camera.updateProjectionMatrix()
+  camera.position.set(dist * 0.72, dist * 0.55, dist * 0.72)
+  controls.target.set(0, framedSize.y * 0.4, 0)
+  controls.minDistance = maxDim * 0.05
+  controls.maxDistance = maxDim * 20
+  controls.update()
+  initialCamPos = camera.position.clone()
+  initialTarget = controls.target.clone()
+
   state = { ...state, model: { name, hash } }
   history.replace(state)
   $('#model-status').textContent = name
-  controls.target.set(0, 1.5, 0)
-  camera.position.set(3.4, 1.7, 4.6)
-  controls.update()
   updateUI()
 }
 
-function styleBundledHuman(gltf) {
-  const skin = () => new THREE.MeshStandardMaterial({
-    color: 0xc58f73,
-    emissive: 0x1a100c,
-    emissiveIntensity: 0.2,
-    metalness: 0,
-    roughness: 0.88,
-    flatShading: false,
-    side: THREE.FrontSide,
-  })
+function prepareModelMaterials(gltf) {
+  // Keep authoring nail landmarks distinct, but never replace body/skin materials —
+  // forced flat skin + harsh lights was producing spiral shading on quantized meshes.
   const nail = () => new THREE.MeshStandardMaterial({
     color: 0xffc8bc,
     emissive: 0x5a241c,
-    emissiveIntensity: 0.22,
+    emissiveIntensity: 0.18,
     metalness: 0.15,
     roughness: 0.32,
     flatShading: false,
     side: THREE.DoubleSide,
     depthTest: true,
+    envMapIntensity: 1.0,
     polygonOffset: true,
     polygonOffsetFactor: -4,
     polygonOffsetUnits: -4,
@@ -958,27 +1032,30 @@ function styleBundledHuman(gltf) {
     if (isToeNail || isNail) {
       object.material = nail()
       object.renderOrder = 5
-      // Toenails sit on a flatter dorsal pad. Keep them smaller than fingernails so
-      // adjacent toes stay separable (toe tips are much closer than fingertips).
       object.scale.multiplyScalar(isToeNail ? 1.45 : 2.6)
       object.frustumCulled = false
-    } else {
-      object.material = skin()
+      return
     }
+    materials.forEach((material) => {
+      if (!material) return
+      if ('envMapIntensity' in material) material.envMapIntensity = 1.0
+      if ('flatShading' in material) material.flatShading = false
+      material.needsUpdate = true
+    })
   })
 }
 
 async function loadDefaultModel() {
   try {
-    const modelUrl = new URL('../models/human.glb', import.meta.url)
-    modelUrl.searchParams.set('v', 'toenails-5')
+    const modelUrl = new URL('../models/male_character.glb', import.meta.url)
+    modelUrl.searchParams.set('v', 'viewer-1')
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
-    styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', '08123599c9c3b57e9f0503e4f432bd18c73623cba6952c7c5752a7e1207f43cc')
-    $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
-    setStatus('平滑人體模型已就緒')
+    prepareModelMaterials(gltf)
+    applyModel(gltf, '人體模型')
+    $('#model-status').textContent = 'male_character.glb · 本機模型'
+    setStatus('人體模型已就緒')
   } catch (error) {
     toast(`預設人體載入失敗：${error.message}`, 'error')
   }
@@ -988,7 +1065,9 @@ async function loadModel(file) {
   if (!file?.name.toLowerCase().endsWith('.glb')) return toast('目前僅支援二進位 .glb 模型', 'error')
   const url = URL.createObjectURL(file)
   try {
-    applyModel(await createModelLoader().loadAsync(url), file.name)
+    const gltf = await createModelLoader().loadAsync(url)
+    prepareModelMaterials(gltf)
+    applyModel(gltf, file.name)
     toast(`已載入 ${file.name}`)
   } catch (error) {
     toast(`模型載入失敗：${error.message}`, 'error')
