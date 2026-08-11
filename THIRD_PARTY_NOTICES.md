@@ -6,7 +6,7 @@
 - Creator: [aaravparakh](https://sketchfab.com/aaravparakh)
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/human.glb`
-- SHA-256: `f6faca57566bb2bd6aa90075dd3479f71ae355586bdd8e96a67911b84803c728`
+- SHA-256: `9b7eba1a7a9ae593ff90429255d96410f4b32c628e0e8819d10d9b15d5ba675e`
 
 Changes made by this project: joined the original mesh primitives, welded
 equivalent vertices, recalculated outward normals, applied region-weighted

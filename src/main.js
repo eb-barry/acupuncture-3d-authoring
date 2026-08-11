@@ -958,8 +958,8 @@ function styleBundledHuman(gltf) {
     if (isToeNail || isNail) {
       object.material = nail()
       object.renderOrder = 5
-      // Toenails sit on a flatter dorsal pad; scale a bit more so all ten toes read clearly.
-      object.scale.multiplyScalar(isToeNail ? 3.4 : 2.6)
+      // Toenails sit on a flatter dorsal pad; scale up so all ten toes read clearly.
+      object.scale.multiplyScalar(isToeNail ? 2.9 : 2.6)
       object.frustumCulled = false
     } else {
       object.material = skin()
@@ -970,12 +970,12 @@ function styleBundledHuman(gltf) {
 async function loadDefaultModel() {
   try {
     const modelUrl = new URL('../models/human.glb', import.meta.url)
-    modelUrl.searchParams.set('v', 'toenails-2')
+    modelUrl.searchParams.set('v', 'toenails-3')
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', 'f6faca57566bb2bd6aa90075dd3479f71ae355586bdd8e96a67911b84803c728')
+    applyModel(gltf, '人體模型', '9b7eba1a7a9ae593ff90429255d96410f4b32c628e0e8819d10d9b15d5ba675e')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('平滑人體模型已就緒')
   } catch (error) {
