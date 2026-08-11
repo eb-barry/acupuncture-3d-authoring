@@ -106,6 +106,8 @@ labelRenderer.domElement.className = 'label-layer'
 viewport.append(labelRenderer.domElement)
 
 const controls = new OrbitControls(camera, renderer.domElement)
+// Dev/QA hook for scripted camera framing (e.g. foot landmark checks).
+window.__acuStudio = { camera, controls, scene, renderer }
 controls.target.set(0, 1.45, 0)
 controls.enableDamping = true
 controls.dampingFactor = 0.08
@@ -958,8 +960,9 @@ function styleBundledHuman(gltf) {
     if (isToeNail || isNail) {
       object.material = nail()
       object.renderOrder = 5
-      // Toenails sit on a flatter dorsal pad; scale up so all ten toes read clearly.
-      object.scale.multiplyScalar(isToeNail ? 2.9 : 2.6)
+      // Toenails sit on a flatter dorsal pad. Keep them smaller than fingernails so
+      // adjacent toes stay separable (toe tips are much closer than fingertips).
+      object.scale.multiplyScalar(isToeNail ? 1.45 : 2.6)
       object.frustumCulled = false
     } else {
       object.material = skin()
