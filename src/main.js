@@ -959,7 +959,7 @@ function styleBundledHuman(gltf) {
       object.material = nail()
       object.renderOrder = 5
       // Toenails sit on a flatter dorsal pad; scale a bit more so all ten toes read clearly.
-      object.scale.multiplyScalar(isToeNail ? 3.1 : 2.6)
+      object.scale.multiplyScalar(isToeNail ? 3.4 : 2.6)
       object.frustumCulled = false
     } else {
       object.material = skin()
