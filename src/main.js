@@ -949,12 +949,18 @@ function styleBundledHuman(gltf) {
     const materials = Array.isArray(object.material) ? object.material : [object.material]
     const names = materials.map((material) => (material?.name || '').toLowerCase())
     const objectName = `${object.name || ''} ${object.parent?.name || ''}`.toLowerCase()
-    const isNail = objectName.includes('nail')
+    const isToeNail = objectName.includes('toenail')
+      || names.some((name) => name.includes('toenail'))
+    const isNail = !isToeNail && (
+      objectName.includes('nail')
       || names.some((name) => name.includes('fingernail') || name.includes('nail'))
-    if (isNail) {
+    )
+    if (isToeNail || isNail) {
       object.material = nail()
       object.renderOrder = 5
-      object.scale.multiplyScalar(2.6)
+      // Toenails sit on a flatter dorsal pad. Keep them smaller than fingernails so
+      // adjacent toes stay separable (toe tips are much closer than fingertips).
+      object.scale.multiplyScalar(isToeNail ? 1.45 : 2.6)
       object.frustumCulled = false
     } else {
       object.material = skin()
@@ -965,12 +971,12 @@ function styleBundledHuman(gltf) {
 async function loadDefaultModel() {
   try {
     const modelUrl = new URL('../models/human.glb', import.meta.url)
-    modelUrl.searchParams.set('v', 'nails-seams-2')
+    modelUrl.searchParams.set('v', 'toenails-4')
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', '3de9a0a4ad23f96d6b7e04d4f5f8bb6a6d0ce13c67a0bb3d0f8842e0c1bf410a')
+    applyModel(gltf, '人體模型', 'f6460d2d38d09499facbcd1f5bee817050f43eeb4e1b8376873b2899d9d511e2')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('平滑人體模型已就緒')
   } catch (error) {

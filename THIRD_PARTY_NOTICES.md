@@ -6,12 +6,13 @@
 - Creator: [aaravparakh](https://sketchfab.com/aaravparakh)
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/human.glb`
-- SHA-256: `3de9a0a4ad23f96d6b7e04d4f5f8bb6a6d0ce13c67a0bb3d0f8842e0c1bf410a`
+- SHA-256: `f6460d2d38d09499facbcd1f5bee817050f43eeb4e1b8376873b2899d9d511e2`
 
 Changes made by this project: joined the original mesh primitives, welded
 equivalent vertices, recalculated outward normals, applied region-weighted
 Laplacian cleanup on back/inner-forearm/palm seam bands while locking face and
-fingertip neighborhoods, then added ten separate fingernail meshes with a
+fingertip neighborhoods, deepened inter-toe grooves and slightly extended toe
+tips, then added ten separate fingernail meshes and ten toenail meshes with a
 distinct pink material for acupuncture orientation. Vertex attributes were
 quantized and Meshopt-compressed using glTF-Transform 4.4.2 without mesh
 simplification. These changes are not endorsed by the original creator.
