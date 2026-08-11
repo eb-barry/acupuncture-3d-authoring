@@ -973,12 +973,12 @@ function styleBundledHuman(gltf) {
 async function loadDefaultModel() {
   try {
     const modelUrl = new URL('../models/human.glb', import.meta.url)
-    modelUrl.searchParams.set('v', 'toenails-3')
+    modelUrl.searchParams.set('v', 'toenails-4')
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
       if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
     })
     styleBundledHuman(gltf)
-    applyModel(gltf, '人體模型', '9b7eba1a7a9ae593ff90429255d96410f4b32c628e0e8819d10d9b15d5ba675e')
+    applyModel(gltf, '人體模型', 'f6460d2d38d09499facbcd1f5bee817050f43eeb4e1b8376873b2899d9d511e2')
     $('#model-status').innerHTML = '<a href="https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900" target="_blank" rel="noreferrer">human_glb by aaravparakh · CC BY 4.0</a>'
     setStatus('平滑人體模型已就緒')
   } catch (error) {
