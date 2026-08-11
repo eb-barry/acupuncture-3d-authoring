@@ -106,8 +106,6 @@ labelRenderer.domElement.className = 'label-layer'
 viewport.append(labelRenderer.domElement)
 
 const controls = new OrbitControls(camera, renderer.domElement)
-// Dev/QA hook for scripted camera framing (e.g. foot landmark checks).
-window.__acuStudio = { camera, controls, scene, renderer }
 controls.target.set(0, 1.45, 0)
 controls.enableDamping = true
 controls.dampingFactor = 0.08
