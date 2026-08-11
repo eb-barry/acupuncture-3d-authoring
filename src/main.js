@@ -81,7 +81,11 @@ $('#app').innerHTML = `
         <label>穴位直徑 <output id="marker-size-out">12px</output><input name="markerSize" type="range" min="5" max="30" value="12"></label>
         <label>經脈顏色<select name="lineColor"></select></label>
         <label>經脈線寬 <output id="line-width-out">4px</output><input name="lineWidth" type="range" min="1" max="10" value="4"></label>
-        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。</p>
+        <label>模型表面<select name="surfaceFinish">
+          <option value="original" selected>原材質（白瓷）</option>
+          <option value="skin">皮膚色</option>
+        </select></label>
+        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。</p>
       </form>
     </section>
     <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯或刪除</p></form></div>
@@ -100,7 +104,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffe
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 1.05
+renderer.toneMappingExposure = 0.88
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 viewport.append(renderer.domElement)
@@ -110,19 +114,26 @@ labelRenderer.domElement.className = 'label-layer'
 viewport.append(labelRenderer.domElement)
 
 const pmrem = new THREE.PMREMGenerator(renderer)
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+// Keep a weak IBL only for specular accents; diffuse fill comes from key/rim lights.
+const roomEnv = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+scene.environment = roomEnv
+scene.environmentIntensity = 0.08
 
-const hemiLight = new THREE.HemisphereLight(0xffffff, 0x14161b, 0.55)
+const hemiLight = new THREE.HemisphereLight(0xf2f0ea, 0x0d0f14, 0.04)
 scene.add(hemiLight)
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.5)
-keyLight.position.set(4, 6, 3)
+const keyLight = new THREE.DirectionalLight(0xffffff, 3.2)
+keyLight.position.set(2.4, 6.2, 1.6)
 keyLight.castShadow = true
 keyLight.shadow.mapSize.set(2048, 2048)
-keyLight.shadow.bias = -0.0004
+keyLight.shadow.bias = -0.00035
+keyLight.shadow.normalBias = 0.02
 scene.add(keyLight)
-const fillLight = new THREE.DirectionalLight(0xbcd4ff, 0.25)
-fillLight.position.set(-4, 2, -3)
+const fillLight = new THREE.DirectionalLight(0x7f93b0, 0.03)
+fillLight.position.set(-5.2, 1.2, -3.0)
 scene.add(fillLight)
+const rimLight = new THREE.DirectionalLight(0xffd2a8, 0.85)
+rimLight.position.set(-1.8, 3.8, -5.5)
+scene.add(rimLight)
 
 const pedestal = new THREE.Group()
 scene.add(pedestal)
@@ -560,6 +571,7 @@ function syncStyleSettings() {
   form.lineColor.innerHTML = colorOptions(lineColor)
   form.markerSize.value = markerSize
   form.lineWidth.value = lineWidth
+  if (form.surfaceFinish) form.surfaceFinish.value = surfaceFinish
   $('#marker-size-out').textContent = `${markerSize}px`
   $('#line-width-out').textContent = `${lineWidth}px`
 }
@@ -1001,10 +1013,23 @@ function applyModel(gltf, name, hash = null) {
   updateUI()
 }
 
-function prepareModelMaterials(gltf) {
-  // Keep authoring nail landmarks distinct, but never replace body/skin materials —
-  // forced flat skin + harsh lights was producing spiral shading on quantized meshes.
-  const nail = () => new THREE.MeshStandardMaterial({
+let surfaceFinish = 'original'
+
+function isNailMesh(object) {
+  const materials = Array.isArray(object.material) ? object.material : [object.material]
+  const names = materials.map((material) => (material?.name || '').toLowerCase())
+  const objectName = `${object.name || ''} ${object.parent?.name || ''}`.toLowerCase()
+  const isToeNail = objectName.includes('toenail')
+    || names.some((name) => name.includes('toenail'))
+  const isNail = !isToeNail && (
+    objectName.includes('nail')
+    || names.some((name) => name.includes('fingernail') || name.includes('nail'))
+  )
+  return isToeNail || isNail
+}
+
+function createNailMaterial() {
+  return new THREE.MeshStandardMaterial({
     color: 0xffc8bc,
     emissive: 0x5a241c,
     emissiveIntensity: 0.18,
@@ -1013,35 +1038,89 @@ function prepareModelMaterials(gltf) {
     flatShading: false,
     side: THREE.DoubleSide,
     depthTest: true,
-    envMapIntensity: 1.0,
+    envMapIntensity: 0.55,
     polygonOffset: true,
     polygonOffsetFactor: -4,
     polygonOffsetUnits: -4,
   })
+}
+
+function createSkinMaterial() {
+  // Warm skin tone with soft specular response — good for acupoint reading.
+  return new THREE.MeshPhysicalMaterial({
+    color: 0xb8896c,
+    roughness: 0.58,
+    metalness: 0.0,
+    reflectivity: 0.28,
+    clearcoat: 0.06,
+    clearcoatRoughness: 0.6,
+    sheen: 0.4,
+    sheenRoughness: 0.7,
+    sheenColor: new THREE.Color(0xd9a48c),
+    envMapIntensity: 0.12,
+    flatShading: false,
+  })
+}
+
+function prepareModelMaterials(gltf) {
+  // Preserve author materials for toggling; only restyle nail landmark meshes.
   gltf.scene.traverse((object) => {
     if (!object.isMesh) return
-    const materials = Array.isArray(object.material) ? object.material : [object.material]
-    const names = materials.map((material) => (material?.name || '').toLowerCase())
-    const objectName = `${object.name || ''} ${object.parent?.name || ''}`.toLowerCase()
-    const isToeNail = objectName.includes('toenail')
-      || names.some((name) => name.includes('toenail'))
-    const isNail = !isToeNail && (
-      objectName.includes('nail')
-      || names.some((name) => name.includes('fingernail') || name.includes('nail'))
-    )
-    if (isToeNail || isNail) {
-      object.material = nail()
+    if (!object.userData.originalMaterial) {
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      object.userData.originalMaterial = Array.isArray(object.material)
+        ? materials.map((material) => material?.clone?.() ?? material)
+        : (object.material?.clone?.() ?? object.material)
+    }
+    if (isNailMesh(object)) {
+      const toe = `${object.name || ''}`.toLowerCase().includes('toe')
+      object.material = createNailMaterial()
       object.renderOrder = 5
-      object.scale.multiplyScalar(isToeNail ? 1.45 : 2.6)
+      if (!object.userData.nailScaled) {
+        object.scale.multiplyScalar(toe ? 1.45 : 2.6)
+        object.userData.nailScaled = true
+      }
       object.frustumCulled = false
       return
     }
+    const materials = Array.isArray(object.material) ? object.material : [object.material]
     materials.forEach((material) => {
       if (!material) return
-      if ('envMapIntensity' in material) material.envMapIntensity = 1.0
+      // Keep sculptural contrast: IBL should not fill muscle grooves.
+      if ('envMapIntensity' in material) material.envMapIntensity = 0.1
       if ('flatShading' in material) material.flatShading = false
+      if ('color' in material && material.color) {
+        // Slightly off-white so pure specular blowout is less likely.
+        material.color.setHex(0xe8e4de)
+      }
+      if ('roughness' in material && material.roughness < 0.4) material.roughness = 0.45
       material.needsUpdate = true
     })
+  })
+  applySurfaceFinish(gltf.scene)
+}
+
+function applySurfaceFinish(root = modelGroup) {
+  root.traverse((object) => {
+    if (!object.isMesh || isNailMesh(object)) return
+    if (surfaceFinish === 'skin') {
+      object.material = createSkinMaterial()
+      return
+    }
+    const original = object.userData.originalMaterial
+    if (original) {
+      object.material = Array.isArray(original)
+        ? original.map((material) => material?.clone?.() ?? material)
+        : (original?.clone?.() ?? original)
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      materials.forEach((material) => {
+        if (!material) return
+        if ('envMapIntensity' in material) material.envMapIntensity = 0.1
+        if ('color' in material && material.color) material.color.setHex(0xe8e4de)
+        if ('roughness' in material && material.roughness < 0.4) material.roughness = 0.45
+        material.needsUpdate = true
+      })
+    }
   })
 }
 
@@ -1162,6 +1241,12 @@ $('#object-search').addEventListener('input', renderObjects)
 $('#object-type').addEventListener('change', renderObjects)
 $('#style-settings').addEventListener('change', (event) => {
   const form = event.currentTarget
+  if (event.target?.name === 'surfaceFinish') {
+    surfaceFinish = form.surfaceFinish.value === 'skin' ? 'skin' : 'original'
+    applySurfaceFinish()
+    setStatus(surfaceFinish === 'skin' ? '已套用皮膚色表面' : '已還原原材質表面')
+    return
+  }
   applyStyleSettings(Object.fromEntries(new FormData(form)))
 })
 $('#style-settings').addEventListener('input', (event) => {
