@@ -6,16 +6,17 @@
 - Creator: [aaravparakh](https://sketchfab.com/aaravparakh)
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/human.glb`
-- SHA-256: `f6460d2d38d09499facbcd1f5bee817050f43eeb4e1b8376873b2899d9d511e2`
+- SHA-256: `08123599c9c3b57e9f0503e4f432bd18c73623cba6952c7c5752a7e1207f43cc`
 
 Changes made by this project: joined the original mesh primitives, welded
 equivalent vertices, recalculated outward normals, applied region-weighted
 Laplacian cleanup on back/inner-forearm/palm seam bands while locking face and
-fingertip neighborhoods, deepened inter-toe grooves and slightly extended toe
-tips, then added ten separate fingernail meshes and ten toenail meshes with a
-distinct pink material for acupuncture orientation. Vertex attributes were
-quantized and Meshopt-compressed using glTF-Transform 4.4.2 without mesh
-simplification. These changes are not endorsed by the original creator.
+fingertip neighborhoods, deepened inter-toe grooves on the true distal toe pads
+(min-Y foot tips for this asset), then added ten separate fingernail meshes and
+ten toenail meshes with a distinct pink material for acupuncture orientation.
+Vertex attributes were quantized and Meshopt-compressed using glTF-Transform
+4.4.2 without mesh simplification. These changes are not endorsed by the
+original creator.
 
 ## Acupuncture catalog
 
