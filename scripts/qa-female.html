@@ -24,7 +24,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
 const params = new URLSearchParams(location.search)
 const focus = params.get('focus') || 'full'
-const modelUrl = params.get('model') || '/models/female-character.glb'
+const modelUrl = (params.get('model') || '/models/female-character.glb') + '?v=normals-1'
 
 const focuses = {
   full: { pos: [2.8, 2.2, 3.2], target: [0, 2.1, 0.2] },

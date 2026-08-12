@@ -988,8 +988,15 @@ function applyModel(gltf, name, hash = null) {
     if (!object.isMesh) return
     object.castShadow = true
     object.receiveShadow = true
-    if (object.geometry && !object.geometry.boundsTree) {
-      object.geometry.computeBoundsTree()
+    if (object.geometry) {
+      // GLBs without a NORMAL attribute shade as faceted grids in MeshStandard/
+      // MeshPhysical materials; always restore smooth vertex normals.
+      if (!object.geometry.getAttribute('normal')) {
+        object.geometry.computeVertexNormals()
+      }
+      if (!object.geometry.boundsTree) {
+        object.geometry.computeBoundsTree()
+      }
     }
     modelMeshes.push(object)
   })
