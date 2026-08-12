@@ -13,6 +13,12 @@ import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } fro
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
 import {
+  SKIN_LIFT,
+  segmentInflate,
+  segmentSampleCount,
+  slerpUnitVectors,
+} from './skinPath.js'
+import {
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
   nextExpectedPoint,
@@ -289,51 +295,73 @@ function annotationHit(event, types) {
 
 function projectNearSurface(position, normal) {
   const target = new THREE.Vector3(...position)
-  const direction = new THREE.Vector3(...normal)
-  if (direction.lengthSq() < 1e-10) direction.set(0, 0, 1)
-  else direction.normalize()
+  const primary = new THREE.Vector3(...normal)
+  if (primary.lengthSq() < 1e-10) primary.set(0, 0, 1)
+  else primary.normalize()
+
+  // Probe along the guide normal plus a few perpendiculars so wrap samples
+  // around a wrist/hand still find skin when the chord sits inside the mesh.
+  const up = Math.abs(primary.y) < 0.85 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)
+  const side = new THREE.Vector3().crossVectors(primary, up).normalize()
+  const binormal = new THREE.Vector3().crossVectors(primary, side).normalize()
+  const guides = [
+    primary,
+    side,
+    binormal,
+    primary.clone().lerp(side, 0.45).normalize(),
+    primary.clone().lerp(binormal, 0.45).normalize(),
+  ]
+
   const candidates = []
-  // Cast from several stand-off distances so chord samples that fall inside
-  // the mesh still recover a surface hit instead of leaving gaps in the line.
-  for (const standoff of [0.06, 0.14, 0.28, 0.45, 0.7]) {
-    for (const sign of [1, -1]) {
-      const origin = target.clone().addScaledVector(direction, standoff * sign)
-      const caster = new THREE.Raycaster(
-        origin,
-        direction.clone().multiplyScalar(-sign),
-        0,
-        standoff * 2.4,
-      )
-      const hit = caster.intersectObjects(modelMeshes, false)[0]
-      if (!hit?.face) continue
-      const hitNormal = hit.face.normal.clone()
-        .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
-        .normalize()
-      // Keep the hit normal aligned with the requested guide normal (limb-safe).
-      if (hitNormal.dot(direction) < 0) hitNormal.negate()
-      candidates.push({
-        distance: hit.point.distanceTo(target),
-        alignment: hitNormal.dot(direction),
-        position: toArray(hit.point),
-        normal: toArray(hitNormal),
-      })
+  for (const guide of guides) {
+    for (const standoff of [0.04, 0.09, 0.18, 0.32, 0.5, 0.75]) {
+      for (const sign of [1, -1]) {
+        const origin = target.clone().addScaledVector(guide, standoff * sign)
+        const caster = new THREE.Raycaster(
+          origin,
+          guide.clone().multiplyScalar(-sign),
+          0,
+          standoff * 2.5,
+        )
+        const hit = caster.intersectObjects(modelMeshes, false)[0]
+        if (!hit?.face) continue
+        const hitNormal = hit.face.normal.clone()
+          .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
+          .normalize()
+        // Face the cast guide so outside→skin hits keep an outward normal.
+        if (hitNormal.dot(guide) < 0) hitNormal.negate()
+        candidates.push({
+          distance: hit.point.distanceTo(target),
+          alignment: hitNormal.dot(primary),
+          position: toArray(hit.point),
+          normal: toArray(hitNormal),
+        })
+      }
     }
   }
+
+  if (!candidates.length) return null
   candidates.sort((a, b) => (
-    Math.abs(b.alignment - a.alignment) > 0.15
+    Math.abs(b.alignment - a.alignment) > 0.12
       ? b.alignment - a.alignment
       : a.distance - b.distance
   ))
-  return candidates.length
-    ? { position: candidates[0].position, normal: candidates[0].normal }
-    : { position, normal }
+  return { position: candidates[0].position, normal: candidates[0].normal }
+}
+
+function projectNearSurfaceOrFallback(position, normal, fallback) {
+  return projectNearSurface(position, normal) || fallback
 }
 
 function mirroredNode(node) {
   const resolved = resolvedNode(node)
   const mirroredPosition = [-resolved.position[0], resolved.position[1], resolved.position[2]]
   const mirroredNormal = [-resolved.normal[0], resolved.normal[1], resolved.normal[2]]
-  return projectNearSurface(mirroredPosition, mirroredNormal)
+  return projectNearSurfaceOrFallback(
+    mirroredPosition,
+    mirroredNormal,
+    { position: mirroredPosition, normal: mirroredNormal },
+  )
 }
 
 function pairedPointId(pointId) {
@@ -352,43 +380,96 @@ function makeMirroredRouteNode(node) {
   return { type: 'control', pointId: null, ...mirrored }
 }
 
-function interpolateNodeNormal(nodes, t) {
-  const scaled = t * (nodes.length - 1)
-  const index = Math.min(nodes.length - 2, Math.max(0, Math.floor(scaled)))
-  const localT = scaled - index
-  const a = new THREE.Vector3(...nodes[index].normal).normalize()
-  const b = new THREE.Vector3(...nodes[Math.min(nodes.length - 1, index + 1)].normal).normalize()
-  return a.lerp(b, localT).normalize()
+function appendSkinPoint(points, point, previousRef) {
+  if (previousRef.current && previousRef.current.distanceToSquared(point) <= 1e-8) return
+  points.push(point)
+  previousRef.current = point
 }
 
+/**
+ * Build a continuous on-skin polyline through route nodes.
+ * Segments with opposing normals (掌心魚際 ↔ 手背) wrap around the limb
+ * via normal slerp + outside cast instead of cutting through the mesh.
+ */
 function skinCurvePoints(route) {
   const nodes = route.nodes.map(resolvedNode)
   if (nodes.length === 0) return []
-  if (nodes.length === 1) return [offsetPosition(nodes[0], 0.02)]
+  if (nodes.length === 1) return [offsetPosition(nodes[0], SKIN_LIFT)]
 
-  const positions = nodes.map((node) => new THREE.Vector3(...node.position))
-  const curve = new THREE.CatmullRomCurve3(positions, false, 'centripetal', 0.5)
-  // Dense sampling keeps projected segments on-skin between red dots.
-  const segments = Math.max(64, (positions.length - 1) * 40)
   const points = []
-  let previous = null
-  for (let i = 0; i <= segments; i += 1) {
-    const t = i / segments
-    const sample = curve.getPoint(t)
-    const normal = interpolateNodeNormal(nodes, t)
-    // Inflate along the local normal before projecting so interior chords
-    // still raycast onto the exterior surface.
-    const inflated = sample.clone().addScaledVector(normal, 0.08)
-    const projected = projectNearSurface(toArray(inflated), toArray(normal))
-    const point = offsetPosition(projected, 0.02)
-    if (!previous || previous.distanceToSquared(point) > 0.000016) {
-      points.push(point)
-      previous = point
+  const previousRef = { current: null }
+
+  for (let index = 0; index < nodes.length - 1; index += 1) {
+    const a = nodes[index]
+    const b = nodes[index + 1]
+    const pa = new THREE.Vector3(...a.position)
+    const pb = new THREE.Vector3(...b.position)
+    const na = new THREE.Vector3(...a.normal).normalize()
+    const nb = new THREE.Vector3(...b.normal).normalize()
+    const chord = pb.clone().sub(pa)
+    const distance = chord.length()
+    const normalDot = na.dot(nb)
+    let hint
+    if (distance > 1e-6) {
+      hint = toArray(chord.clone().normalize())
+    } else {
+      const side = new THREE.Vector3().crossVectors(na, nb)
+      hint = side.lengthSq() > 1e-8 ? toArray(side.normalize()) : [0, 1, 0]
+    }
+    const steps = segmentSampleCount(distance, normalDot)
+    const startStep = index === 0 ? 0 : 1
+
+    for (let step = startStep; step <= steps; step += 1) {
+      const t = step / steps
+      if (step === 0) {
+        appendSkinPoint(points, offsetPosition(a, SKIN_LIFT), previousRef)
+        continue
+      }
+      if (step === steps) {
+        appendSkinPoint(points, offsetPosition(b, SKIN_LIFT), previousRef)
+        continue
+      }
+
+      const guide = slerpUnitVectors(toArray(na), toArray(nb), t, hint)
+      const chordPoint = pa.clone().lerp(pb, t)
+      const inflate = segmentInflate(t, normalDot)
+      const outside = chordPoint.clone().addScaledVector(new THREE.Vector3(...guide), inflate)
+      const wrap = Math.max(0, 1 - normalDot)
+      const maxAway = Math.max(0.06, distance * 0.75) + wrap * 0.12
+      const fallback = previousRef.current
+        ? {
+          position: toArray(previousRef.current.clone().lerp(
+            offsetPosition(b, SKIN_LIFT),
+            Math.min(0.35, 1 / Math.max(steps - step, 1)),
+          )),
+          normal: guide,
+        }
+        : { position: toArray(chordPoint), normal: guide }
+
+      let projected = projectNearSurface(toArray(outside), guide)
+      if (projected) {
+        const projectedPos = new THREE.Vector3(...projected.position)
+        if (projectedPos.distanceTo(chordPoint) > maxAway) {
+          const fallbackOutside = chordPoint.clone().addScaledVector(new THREE.Vector3(...guide), inflate * 0.55)
+          projected = projectNearSurface(toArray(fallbackOutside), guide)
+          if (projected && new THREE.Vector3(...projected.position).distanceTo(chordPoint) > maxAway) {
+            projected = null
+          }
+        }
+      }
+      projected = projected || projectNearSurfaceOrFallback(
+        toArray(chordPoint.clone().addScaledVector(new THREE.Vector3(...guide), Math.max(0.02, inflate * 0.35))),
+        guide,
+        fallback,
+      )
+
+      appendSkinPoint(points, offsetPosition(projected, SKIN_LIFT), previousRef)
     }
   }
-  return points.length >= 2 ? points : positions.map((position, index) => (
-    offsetPosition({ position: toArray(position), normal: nodes[index].normal }, 0.02)
-  ))
+
+  return points.length >= 2
+    ? points
+    : nodes.map((node) => offsetPosition(node, SKIN_LIFT))
 }
 
 function rebuildAnnotations() {
@@ -784,7 +865,11 @@ function placeAcupoint(hit) {
     ]
     selected = { type: 'acupoint', id: points[0].id, pairId }
   } else {
-    const midlineHit = projectNearSurface([0, hit.position[1], hit.position[2]], [0, hit.normal[1], hit.normal[2]])
+    const midlineHit = projectNearSurfaceOrFallback(
+      [0, hit.position[1], hit.position[2]],
+      [0, hit.normal[1], hit.normal[2]],
+      hit,
+    )
     points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
   }
