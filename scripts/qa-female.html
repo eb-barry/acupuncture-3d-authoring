@@ -24,12 +24,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
 const params = new URLSearchParams(location.search)
 const focus = params.get('focus') || 'full'
-const modelUrl = (params.get('model') || '/models/female-character.glb') + '?v=normals-1'
+const modelUrl = (params.get('model') || '/models/female-character.glb') + '?v=neck-smooth-1'
 
 const focuses = {
   full: { pos: [2.8, 2.2, 3.2], target: [0, 2.1, 0.2] },
   wrist: { pos: [1.55, 2.15, 0.55], target: [1.14, 2.11, 0.14] },
-  neck: { pos: [0.9, 3.9, 1.1], target: [0, 3.7, 0.25] },
+  neck: { pos: [-1.15, 3.78, 0.55], target: [0.02, 3.78, 0.32] },
   hip: { pos: [1.1, 1.6, 0.9], target: [0.35, 1.55, 0.1] },
   feet: { pos: [0.6, 0.35, 1.0], target: [0.24, 0.05, 0.35] },
 }

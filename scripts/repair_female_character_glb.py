@@ -11,7 +11,8 @@ Pipeline (shape-preserving):
   3. Close remaining holes with refined fill
   4. Surface-preserving / Taubin smooth on filled patches, then mild global SPS
   5. Extra toe-region cleanup
-  6. Reorient faces, recompute normals, export GLB with original PBR material
+  6. Weighted Taubin cleanup along the head/neck weld seam
+  7. Reorient faces, recompute normals, export GLB with original PBR material
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +35,108 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _boundary_vertices(mesh: trimesh.Trimesh) -> np.ndarray:
+    edges = mesh.edges_sorted
+    unique, counts = np.unique(edges, axis=0, return_counts=True)
+    return np.unique(unique[counts == 1].flatten())
+
+
+def smooth_head_neck_seam(mesh: trimesh.Trimesh, source: trimesh.Trimesh) -> np.ndarray:
+    """Flatten the visible ridge where front/back head shells were welded."""
+    comps = sorted(source.split(only_watertight=False), key=lambda c: -len(c.faces))
+    if len(comps) < 16:
+        return mesh.vertices.copy()
+
+    head_a, head_b = comps[0], comps[15]
+    seam = np.vstack(
+        [
+            head_a.vertices[_boundary_vertices(head_a)],
+            head_b.vertices[_boundary_vertices(head_b)],
+        ]
+    )
+    neck_seam = seam[(seam[:, 1] > 3.60) & (seam[:, 1] < 3.97)]
+    if len(neck_seam) < 8:
+        return mesh.vertices.copy()
+
+    verts0 = mesh.vertices.copy()
+    adj: dict[int, set[int]] = defaultdict(set)
+    for a, b in mesh.edges_unique:
+        adj[int(a)].add(int(b))
+        adj[int(b)].add(int(a))
+    neighbors = [np.fromiter(adj[i], dtype=np.int64) for i in range(len(verts0))]
+
+    dist, _ = cKDTree(neck_seam).query(verts0)
+    weight = np.exp(-((dist / 0.035) ** 2))
+    side = (
+        (verts0[:, 1] >= 3.62)
+        & (verts0[:, 1] <= 3.94)
+        & (np.abs(verts0[:, 0]) <= 0.22)
+        & (verts0[:, 2] >= 0.20)
+        & (verts0[:, 2] <= 0.44)
+    )
+    weight = np.maximum(weight, side.astype(np.float64) * 0.85)
+    lock = (
+        ((verts0[:, 1] >= 3.80) & (verts0[:, 2] > 0.45) & (np.abs(verts0[:, 0]) < 0.10))
+        | (verts0[:, 1] > 4.02)
+        | (verts0[:, 1] < 3.55)
+    )
+    weight[lock] = 0.0
+    face_pts = verts0[
+        (verts0[:, 1] >= 3.85) & (verts0[:, 2] > 0.45) & (np.abs(verts0[:, 0]) < 0.12)
+    ]
+    if len(face_pts):
+        face_dist, _ = cKDTree(face_pts).query(verts0)
+        weight *= np.clip((face_dist - 0.01) / 0.04, 0, 1)
+
+    def smooth(vertices: np.ndarray, strength: float, w: np.ndarray) -> np.ndarray:
+        out = vertices.copy()
+        for i in np.where(w > 1e-4)[0]:
+            nbs = neighbors[i]
+            if len(nbs) == 0:
+                continue
+            avg = vertices[nbs].mean(axis=0)
+            out[i] = vertices[i] + (strength * w[i]) * (avg - vertices[i])
+        return out
+
+    vertices = verts0.copy()
+    for _ in range(80):
+        vertices = smooth(vertices, 0.5, weight)
+        vertices = smooth(vertices, -0.53, weight)
+    for _ in range(40):
+        vertices = smooth(vertices, 0.45, weight)
+
+    # Second stage: focus remaining high-dihedral ridges inside the neck band.
+    probe = trimesh.Trimesh(vertices=vertices, faces=mesh.faces, process=False)
+    probe.fix_normals()
+    face_normals = probe.face_normals
+    f0, f1 = probe.face_adjacency[:, 0], probe.face_adjacency[:, 1]
+    angles = np.degrees(
+        np.arccos(np.clip((face_normals[f0] * face_normals[f1]).sum(1), -1, 1))
+    )
+    crease = np.unique(probe.face_adjacency_edges[angles > 14].ravel())
+    crease = crease[
+        (vertices[crease, 1] > 3.58)
+        & (vertices[crease, 1] < 3.97)
+        & (np.abs(vertices[crease, 0]) < 0.23)
+        & (vertices[crease, 2] > 0.16)
+        & (vertices[crease, 2] < 0.47)
+    ]
+    weight2 = np.zeros(len(vertices))
+    weight2[crease] = 1.0
+    for _ in range(4):
+        for i in np.where(weight2 > 0)[0]:
+            for j in adj[i]:
+                weight2[j] = max(weight2[j], weight2[i] * 0.75)
+    weight2[lock] = 0.0
+    weight2 *= np.clip(weight / 0.3, 0, 1)
+    for _ in range(60):
+        vertices = smooth(vertices, 0.5, weight2)
+        vertices = smooth(vertices, -0.53, weight2)
+    for _ in range(25):
+        vertices = smooth(vertices, 0.4, weight2)
+    return vertices
 
 
 def repair(src: Path, dst: Path) -> dict:
@@ -116,6 +220,10 @@ def repair(src: Path, dst: Path) -> dict:
         raise RuntimeError("Repaired mesh winding is inconsistent")
     if not fixed.is_watertight:
         raise RuntimeError("Repaired mesh is not watertight")
+
+    # Soften the jaw/neck ridge left by welding front/back head shells.
+    fixed.vertices = smooth_head_neck_seam(fixed, orig)
+    fixed.fix_normals()
 
     mat = trimesh.visual.material.PBRMaterial(
         name="SmoothBodyMaterial",
