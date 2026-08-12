@@ -1,7 +1,7 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
-/** Keep lines just above the mesh so they stay glued without looking floaty. */
-export const SKIN_LIFT = 0.01
+/** Lift finished tubes just above the mesh for stable depth testing. */
+export const SKIN_LIFT = 0.012
 
 /**
  * Unit-vector slerp. When a and b are nearly opposite (palm ↔ dorsum),
@@ -17,7 +17,6 @@ export function slerpUnitVectors(a, b, t, hint = [0, 1, 0]) {
   if (dot > 0.9995) return normalize(lerp3(na, nb, tt))
 
   if (dot < -0.95) {
-    // Ambiguous great-circle: rotate na toward nb around an axis from hint.
     let axis = normalize(cross(na, hint))
     if (length3(axis) < 1e-6) axis = normalize(cross(na, [0, 1, 0]))
     if (length3(axis) < 1e-6) axis = normalize(cross(na, [1, 0, 0]))
@@ -32,39 +31,26 @@ export function slerpUnitVectors(a, b, t, hint = [0, 1, 0]) {
   return normalize(add3(scale3(na, Math.cos(theta)), scale3(relative, Math.sin(theta))))
 }
 
-/** March step length along the skin between two acupoints. */
-export function surfaceStepLength(distance, normalDot) {
-  const wrap = Math.max(0, 1 - normalDot)
-  return Math.min(0.01, Math.max(0.005, distance / (18 + wrap * 24)))
-}
-
-/** Outside cast distance while marching; larger when wrapping palm↔dorsum. */
-export function marchStandoff(t, normalDot) {
-  const wrap = Math.max(0, 1 - normalDot)
-  const arch = Math.sin(Math.PI * Math.min(1, Math.max(0, t)))
-  return 0.06 + wrap * 0.12 * arch
-}
-
-/** @deprecated kept for tests / callers that still inflate chord samples */
+/** Dense samples between two acupoints; more when wrapping opposite normals. */
 export function segmentSampleCount(distance, normalDot) {
   const wrap = Math.max(0, 1 - normalDot)
-  return Math.max(12, Math.ceil(distance / surfaceStepLength(distance, normalDot)) + Math.ceil(wrap * 20))
-}
-
-/** @deprecated chord inflate helper */
-export function segmentInflate(t, normalDot) {
-  return marchStandoff(t, normalDot)
+  return Math.max(20, Math.ceil(distance / 0.005) + Math.ceil(wrap * 32))
 }
 
 /**
- * Decide whether a bilateral meridian route should stay visible.
- * Requires enough on-facing, unoccluded nodes so whole-arm lines with
- * depthTest disabled do not show through the torso.
+ * Outside cast distance from a chord sample back onto skin.
+ * Large enough to clear a forearm/hand radius even mid-segment.
  */
-export function routeShouldBeVisible(facingCount, totalNodes) {
-  if (totalNodes <= 0) return false
-  if (facingCount <= 0) return false
-  return facingCount >= Math.max(1, Math.ceil(totalNodes * 0.2))
+export function segmentStandoff(t, normalDot) {
+  const wrap = Math.max(0, 1 - normalDot)
+  const arch = Math.sin(Math.PI * Math.min(1, Math.max(0, t)))
+  return 0.14 + wrap * 0.18 * arch
+}
+
+/** Tube radius in world units from the UI linewidth (px-ish). */
+export function meridianTubeRadius(lineWidth) {
+  const width = Number(lineWidth) || 3
+  return Math.min(0.01, Math.max(0.0028, width * 0.00115))
 }
 
 export function length3(v) {

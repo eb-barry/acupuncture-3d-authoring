@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   SKIN_LIFT,
-  marchStandoff,
-  routeShouldBeVisible,
-  segmentInflate,
+  meridianTubeRadius,
   segmentSampleCount,
+  segmentStandoff,
   slerpUnitVectors,
-  surfaceStepLength,
 } from './skinPath.js'
 
 describe('skin path wrapping', () => {
@@ -20,22 +18,16 @@ describe('skin path wrapping', () => {
     expect(Math.abs(mid[2])).toBeLessThan(0.35)
   })
 
-  it('uses denser samples and taller inflate when normals oppose', () => {
+  it('uses denser samples and taller standoff when normals oppose', () => {
     expect(segmentSampleCount(0.08, -0.8)).toBeGreaterThan(segmentSampleCount(0.08, 0.95))
-    expect(segmentInflate(0.5, -1)).toBeGreaterThan(segmentInflate(0.5, 1))
-    expect(marchStandoff(0.5, -1)).toBeGreaterThan(marchStandoff(0.5, 1))
-    expect(surfaceStepLength(0.2, -1)).toBeLessThanOrEqual(surfaceStepLength(0.2, 1) + 1e-9)
+    expect(segmentStandoff(0.5, -1)).toBeGreaterThan(segmentStandoff(0.5, 1))
+    expect(segmentStandoff(0, -1)).toBeLessThan(segmentStandoff(0.5, -1))
   })
 
-  it('keeps a small positive skin lift constant', () => {
-    expect(SKIN_LIFT).toBeGreaterThan(0)
-    expect(SKIN_LIFT).toBeLessThan(0.02)
-  })
-
-  it('hides routes until enough nodes face the camera', () => {
-    expect(routeShouldBeVisible(0, 11)).toBe(false)
-    expect(routeShouldBeVisible(1, 11)).toBe(false)
-    expect(routeShouldBeVisible(3, 11)).toBe(true)
-    expect(routeShouldBeVisible(1, 3)).toBe(true)
+  it('keeps a modest skin lift and positive tube radius', () => {
+    expect(SKIN_LIFT).toBeGreaterThan(0.005)
+    expect(SKIN_LIFT).toBeLessThan(0.03)
+    expect(meridianTubeRadius(3)).toBeGreaterThan(0.002)
+    expect(meridianTubeRadius(3)).toBeLessThan(0.01)
   })
 })
