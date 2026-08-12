@@ -29,10 +29,10 @@ export function isSurfaceFacingCamera(position, normal, cameraPosition) {
   const towardCamera = cameraPosition.map((value, index) => value - position[index])
   const length = Math.hypot(...towardCamera) || 1
   const view = towardCamera.map((value) => value / length)
-  const radialLength = Math.hypot(position[0], position[2]) || 1
-  const radial = [position[0] / radialLength, 0, position[2] / radialLength]
   const normalLength = Math.hypot(...normal) || 1
   const surfaceNormal = normal.map((value) => value / normalLength)
   const dot = (a, b) => a.reduce((total, value, index) => total + value * b[index], 0)
-  return dot(radial, view) > 0.02 && dot(surfaceNormal, view) > 0.05
+  // Pure backface test against the stored surface normal — do not use body-radial
+  // heuristics here; occlusion rays handle "through the torso" cases.
+  return dot(surfaceNormal, view) > 0.02
 }

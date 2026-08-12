@@ -265,8 +265,7 @@ function surfaceHit(event) {
   const normal = hit.face.normal.clone()
     .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
     .normalize()
-  const radial = new THREE.Vector3(hit.point.x, 0, hit.point.z)
-  if (radial.lengthSq() > 0.000001 && normal.dot(radial) < 0) normal.negate()
+  orientOutwardNormal(hit.point, normal)
   return { position: toArray(hit.point), normal: toArray(normal) }
 }
 
@@ -281,24 +280,35 @@ function annotationHit(event, types) {
     .find((hit) => types.includes(hit.object.userData.type))
 }
 
+function orientOutwardNormal(point, normal) {
+  const radial = new THREE.Vector3(point.x, 0, point.z)
+  if (radial.lengthSq() > 0.000001 && normal.dot(radial) < 0) normal.negate()
+  return normal
+}
+
 function projectNearSurface(position, normal) {
   const target = new THREE.Vector3(...position)
-  const direction = new THREE.Vector3(...normal).normalize()
+  const direction = new THREE.Vector3(...normal)
+  if (direction.lengthSq() < 1e-10) direction.set(0, 0, 1)
+  else direction.normalize()
   const candidates = []
-  for (const sign of [1, -1]) {
-    const caster = new THREE.Raycaster(
-      target.clone().addScaledVector(direction, 0.25 * sign),
-      direction.clone().multiplyScalar(-sign),
-      0,
-      0.5,
-    )
-    const hit = caster.intersectObjects(modelMeshes, false)[0]
-    if (hit?.face) {
+  // Cast from several stand-off distances so chord samples that fall inside
+  // the mesh still recover a surface hit instead of leaving gaps in the line.
+  for (const standoff of [0.06, 0.14, 0.28, 0.45, 0.7]) {
+    for (const sign of [1, -1]) {
+      const origin = target.clone().addScaledVector(direction, standoff * sign)
+      const caster = new THREE.Raycaster(
+        origin,
+        direction.clone().multiplyScalar(-sign),
+        0,
+        standoff * 2.4,
+      )
+      const hit = caster.intersectObjects(modelMeshes, false)[0]
+      if (!hit?.face) continue
       const hitNormal = hit.face.normal.clone()
         .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
         .normalize()
-      const radial = new THREE.Vector3(hit.point.x, 0, hit.point.z)
-      if (radial.lengthSq() > 0.000001 && hitNormal.dot(radial) < 0) hitNormal.negate()
+      orientOutwardNormal(hit.point, hitNormal)
       candidates.push({
         distance: hit.point.distanceTo(target),
         position: toArray(hit.point),
@@ -335,18 +345,43 @@ function makeMirroredRouteNode(node) {
   return { type: 'control', pointId: null, ...mirrored }
 }
 
+function interpolateNodeNormal(nodes, t) {
+  const scaled = t * (nodes.length - 1)
+  const index = Math.min(nodes.length - 2, Math.max(0, Math.floor(scaled)))
+  const localT = scaled - index
+  const a = new THREE.Vector3(...nodes[index].normal).normalize()
+  const b = new THREE.Vector3(...nodes[Math.min(nodes.length - 1, index + 1)].normal).normalize()
+  return a.lerp(b, localT).normalize()
+}
+
 function skinCurvePoints(route) {
   const nodes = route.nodes.map(resolvedNode)
+  if (nodes.length === 0) return []
+  if (nodes.length === 1) return [offsetPosition(nodes[0], 0.02)]
+
   const positions = nodes.map((node) => new THREE.Vector3(...node.position))
-  if (positions.length < 2) return positions
-  const curve = new THREE.CatmullRomCurve3(positions, false, 'centripetal', 0.4)
-  const samples = curve.getPoints(Math.max(24, (positions.length - 1) * 24))
-  return samples.map((sample, index) => {
-    const t = index / Math.max(samples.length - 1, 1)
-    const nodeIndex = Math.min(nodes.length - 1, Math.round(t * (nodes.length - 1)))
-    const projected = projectNearSurface(toArray(sample), nodes[nodeIndex].normal)
-    return offsetPosition(projected, 0.012)
-  })
+  const curve = new THREE.CatmullRomCurve3(positions, false, 'centripetal', 0.5)
+  // Dense sampling keeps projected segments on-skin between red dots.
+  const segments = Math.max(64, (positions.length - 1) * 40)
+  const points = []
+  let previous = null
+  for (let i = 0; i <= segments; i += 1) {
+    const t = i / segments
+    const sample = curve.getPoint(t)
+    const normal = interpolateNodeNormal(nodes, t)
+    // Inflate along the local normal before projecting so interior chords
+    // still raycast onto the exterior surface.
+    const inflated = sample.clone().addScaledVector(normal, 0.08)
+    const projected = projectNearSurface(toArray(inflated), toArray(normal))
+    const point = offsetPosition(projected, 0.02)
+    if (!previous || previous.distanceToSquared(point) > 0.000016) {
+      points.push(point)
+      previous = point
+    }
+  }
+  return points.length >= 2 ? points : positions.map((position, index) => (
+    offsetPosition({ position: toArray(position), normal: nodes[index].normal }, 0.02)
+  ))
 }
 
 function rebuildAnnotations() {
@@ -362,14 +397,16 @@ function rebuildAnnotations() {
     const material = new LineMaterial({
       color: route.color,
       linewidth: route.width,
-      transparent: true,
-      opacity: selected?.type === 'meridian' && selected.id === route.id ? 1 : 0.86,
+      transparent: false,
+      opacity: 1,
       depthTest: true,
+      depthWrite: true,
       resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
     })
     const line = new Line2(geometry, material)
     line.computeLineDistances()
-    line.renderOrder = 3
+    line.renderOrder = 2
+    line.frustumCulled = false
     line.userData = { type: 'meridian', id: route.id }
     annotationGroup.add(line)
     routeVisuals.push({ line, route })
@@ -401,7 +438,7 @@ function rebuildAnnotations() {
       new THREE.SphereGeometry(0.5, 12, 10),
       new THREE.MeshBasicMaterial({
         color: point.color,
-        depthTest: false,
+        depthTest: true,
         depthWrite: false,
         transparent: true,
         opacity: 0.001,
@@ -438,12 +475,17 @@ function drawDraft() {
     dashed: true,
     dashSize: 0.04,
     gapSize: 0.025,
+    transparent: false,
+    depthTest: true,
+    depthWrite: true,
     resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
   })
   const draft = new Line2(geometry, material)
   draft.name = 'draft'
   draft.userData = { type: 'draft-meridian' }
   draft.computeLineDistances()
+  draft.renderOrder = 2
+  draft.frustumCulled = false
   annotationGroup.add(draft)
   routeVisuals.push({ line: draft, route: null, isDraft: true })
 }
@@ -465,18 +507,55 @@ function updateMarkerScales() {
 }
 
 let lastLabelCheck = 0
+function isPointOccluded(position, cameraPosition) {
+  const surface = new THREE.Vector3(...position)
+  const origin = new THREE.Vector3(...cameraPosition)
+  const direction = surface.clone().sub(origin)
+  const distance = direction.length()
+  if (distance < 1e-5) return false
+  const caster = new THREE.Raycaster(origin, direction.normalize(), 0, distance)
+  caster.firstHitOnly = true
+  const hit = caster.intersectObjects(modelMeshes, false)[0]
+  // Body mesh between camera and the surface point => occluded (e.g. front from back).
+  return Boolean(hit && hit.distance < distance - 0.015)
+}
+
 function updateLabelVisibility(time) {
-  if (time - lastLabelCheck < 80) return
+  if (time - lastLabelCheck < 50) return
   lastLabelCheck = time
+  const cam = toArray(camera.position)
+
   markerVisuals.forEach(({ mesh, label, point }) => {
-    const direction = mesh.position.clone().sub(camera.position)
-    const distance = direction.length()
-    const facesCamera = isSurfaceFacingCamera(point.position, point.normal, toArray(camera.position))
-    const caster = new THREE.Raycaster(camera.position, direction.normalize(), 0, distance)
-    caster.firstHitOnly = true
-    const obstruction = caster.intersectObjects(modelMeshes, false)[0]
-    const visible = facesCamera && (!obstruction || obstruction.distance >= distance - 0.025)
-    label.element.style.display = visible ? '' : 'none'
+    const facesCamera = isSurfaceFacingCamera(point.position, point.normal, cam)
+    const occluded = facesCamera ? isPointOccluded(point.position, cam) : true
+    const visible = facesCamera && !occluded
+    if (label) {
+      label.visible = visible
+      if (label.element) {
+        label.element.style.display = visible ? '' : 'none'
+        label.element.style.visibility = visible ? 'visible' : 'hidden'
+        label.element.setAttribute('aria-hidden', visible ? 'false' : 'true')
+      }
+    }
+    // Keep depth-tested picking in sync so hidden front points are not clickable.
+    mesh.visible = visible
+  })
+
+  routeVisuals.forEach(({ line, route, isDraft }) => {
+    if (isDraft || !route) {
+      line.visible = true
+      return
+    }
+    const nodes = route.nodes.map(resolvedNode)
+    // Hide meridians whose every node faces away or is behind the body.
+    const anyVisible = nodes.some((node) => (
+      isSurfaceFacingCamera(node.position, node.normal, cam)
+      && !isPointOccluded(node.position, cam)
+    ))
+    line.visible = anyVisible
+    if (line.material) {
+      line.material.opacity = selected?.type === 'meridian' && selected.id === route.id ? 1 : 0.92
+    }
   })
 }
 
