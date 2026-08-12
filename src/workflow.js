@@ -36,3 +36,17 @@ export function isSurfaceFacingCamera(position, normal, cameraPosition) {
   // heuristics here; occlusion rays handle "through the torso" cases.
   return dot(surfaceNormal, view) > 0.02
 }
+
+/**
+ * Decide whether a mesh hit should count as occluding a surface marker.
+ * Hits that land near the probe (creases / local flesh) are treated as the
+ * same surface so cubital-fossa points like LU5 are not false-hidden.
+ */
+export function isOcclusionHitBlocking(hitDistance, targetDistance, hitToProbeDistance, {
+  depthSlack = 0.025,
+  sameSurfaceRadius = 0.05,
+} = {}) {
+  if (!(hitDistance >= 0) || !(targetDistance > 0)) return false
+  if (hitToProbeDistance <= sameSurfaceRadius) return false
+  return hitDistance < targetDistance - depthSlack
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isOcclusionHitBlocking,
   isSurfaceFacingCamera,
   nextExpectedPoint,
   placementProgress,
@@ -49,5 +50,12 @@ describe('meridian authoring workflow', () => {
     const frontNormal = [0, 0, 1]
     expect(isSurfaceFacingCamera(frontPoint, frontNormal, [0, 1.5, 5])).toBe(true)
     expect(isSurfaceFacingCamera(frontPoint, frontNormal, [0, 1.5, -5])).toBe(false)
+  })
+
+  it('does not treat crease-local hits as occluders', () => {
+    // Probe in cubital fossa: first hit is nearby flesh, not a far occluder.
+    expect(isOcclusionHitBlocking(2.96, 3.0, 0.02)).toBe(false)
+    // True occlusion: torso between camera and a front point viewed from back.
+    expect(isOcclusionHitBlocking(1.2, 3.0, 1.8)).toBe(true)
   })
 })

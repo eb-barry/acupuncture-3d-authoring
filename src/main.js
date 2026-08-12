@@ -12,7 +12,12 @@ import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-
 import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } from './catalog.js'
 import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
-import { isSurfaceFacingCamera, nextExpectedPoint, placementProgress } from './workflow.js'
+import {
+  isOcclusionHitBlocking,
+  isSurfaceFacingCamera,
+  nextExpectedPoint,
+  placementProgress,
+} from './workflow.js'
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree
@@ -265,7 +270,9 @@ function surfaceHit(event) {
   const normal = hit.face.normal.clone()
     .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
     .normalize()
-  orientOutwardNormal(hit.point, normal)
+  // Orient toward the camera — body-radial flips break medial limbs / 肘窩.
+  const toCamera = camera.position.clone().sub(hit.point)
+  if (toCamera.lengthSq() > 1e-10 && normal.dot(toCamera) < 0) normal.negate()
   return { position: toArray(hit.point), normal: toArray(normal) }
 }
 
@@ -278,12 +285,6 @@ function annotationHit(event, types) {
   ]
   return raycaster.intersectObjects(objects, false)
     .find((hit) => types.includes(hit.object.userData.type))
-}
-
-function orientOutwardNormal(point, normal) {
-  const radial = new THREE.Vector3(point.x, 0, point.z)
-  if (radial.lengthSq() > 0.000001 && normal.dot(radial) < 0) normal.negate()
-  return normal
 }
 
 function projectNearSurface(position, normal) {
@@ -308,15 +309,21 @@ function projectNearSurface(position, normal) {
       const hitNormal = hit.face.normal.clone()
         .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
         .normalize()
-      orientOutwardNormal(hit.point, hitNormal)
+      // Keep the hit normal aligned with the requested guide normal (limb-safe).
+      if (hitNormal.dot(direction) < 0) hitNormal.negate()
       candidates.push({
         distance: hit.point.distanceTo(target),
+        alignment: hitNormal.dot(direction),
         position: toArray(hit.point),
         normal: toArray(hitNormal),
       })
     }
   }
-  candidates.sort((a, b) => a.distance - b.distance)
+  candidates.sort((a, b) => (
+    Math.abs(b.alignment - a.alignment) > 0.15
+      ? b.alignment - a.alignment
+      : a.distance - b.distance
+  ))
   return candidates.length
     ? { position: candidates[0].position, normal: candidates[0].normal }
     : { position, normal }
@@ -438,7 +445,7 @@ function rebuildAnnotations() {
       new THREE.SphereGeometry(0.5, 12, 10),
       new THREE.MeshBasicMaterial({
         color: point.color,
-        depthTest: true,
+        depthTest: false,
         depthWrite: false,
         transparent: true,
         opacity: 0.001,
@@ -508,16 +515,27 @@ function updateMarkerScales() {
 
 let lastLabelCheck = 0
 function isPointOccluded(position, cameraPosition) {
-  const surface = new THREE.Vector3(...position)
   const origin = new THREE.Vector3(...cameraPosition)
-  const direction = surface.clone().sub(origin)
+  const surface = new THREE.Vector3(...position)
+  const toCamera = origin.clone().sub(surface)
+  if (toCamera.lengthSq() < 1e-10) return false
+  toCamera.normalize()
+  // Probe slightly toward the camera so concave creases (尺澤 / cubital fossa)
+  // are not false-occluded by surrounding forearm flesh.
+  const probe = surface.clone().addScaledVector(toCamera, 0.04)
+  const direction = probe.clone().sub(origin)
   const distance = direction.length()
   if (distance < 1e-5) return false
   const caster = new THREE.Raycaster(origin, direction.normalize(), 0, distance)
   caster.firstHitOnly = true
   const hit = caster.intersectObjects(modelMeshes, false)[0]
-  // Body mesh between camera and the surface point => occluded (e.g. front from back).
-  return Boolean(hit && hit.distance < distance - 0.015)
+  if (!hit) return false
+  return isOcclusionHitBlocking(hit.distance, distance, hit.point.distanceTo(probe))
+}
+
+function isPointSelected(point) {
+  return selected?.type === 'acupoint'
+    && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
 }
 
 function updateLabelVisibility(time) {
@@ -528,7 +546,8 @@ function updateLabelVisibility(time) {
   markerVisuals.forEach(({ mesh, label, point }) => {
     const facesCamera = isSurfaceFacingCamera(point.position, point.normal, cam)
     const occluded = facesCamera ? isPointOccluded(point.position, cam) : true
-    const visible = facesCamera && !occluded
+    // Always reveal the active selection so a crease placement is never "lost".
+    const visible = isPointSelected(point) || (facesCamera && !occluded)
     if (label) {
       label.visible = visible
       if (label.element) {
@@ -537,7 +556,6 @@ function updateLabelVisibility(time) {
         label.element.setAttribute('aria-hidden', visible ? 'false' : 'true')
       }
     }
-    // Keep depth-tested picking in sync so hidden front points are not clickable.
     mesh.visible = visible
   })
 
