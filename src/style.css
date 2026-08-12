@@ -133,23 +133,26 @@ button:disabled { opacity: .35; cursor: default; }
 }
 .point-label.selected { color: #fff; border-color: var(--gold); background: rgba(91, 61, 30, .92); }
 .point-marker {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  white-space: nowrap;
-}
-.point-marker .marker-dot {
+  /* Box is exactly the color dot so CSS2D's translate(-50%,-50%) anchors on the hit. */
+  position: relative;
+  display: block;
   width: var(--marker-size, 12px);
   height: var(--marker-size, 12px);
+  pointer-events: none;
+}
+.point-marker .marker-dot {
+  position: absolute;
+  inset: 0;
   border-radius: 50%;
-  flex: 0 0 auto;
   background: var(--marker-color, #ef4444);
-  border: 2px solid rgba(255, 255, 255, .92);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 0 10px color-mix(in srgb, var(--marker-color, #ef4444) 70%, transparent);
+  box-shadow: none;
+  border: 0;
 }
 .point-marker .point-name {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
   padding: 2px 5px;
   border: 1px solid rgba(130, 153, 146, .45);
   border-radius: 3px;
@@ -157,9 +160,12 @@ button:disabled { opacity: .35; cursor: default; }
   background: rgba(10, 17, 15, .82);
   font-size: 9px;
   font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .point-marker.selected .marker-dot {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--gold), 0 0 12px color-mix(in srgb, var(--marker-color, #ef4444) 80%, transparent);
+  /* Selection is color-only — no extra white/gold ring around the pixel marker. */
+  filter: brightness(1.08);
 }
 .point-marker.selected .point-name {
   color: #fff;
