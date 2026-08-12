@@ -14,9 +14,10 @@ import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
 import {
   SKIN_LIFT,
-  segmentInflate,
-  segmentSampleCount,
+  marchStandoff,
+  routeShouldBeVisible,
   slerpUnitVectors,
+  surfaceStepLength,
 } from './skinPath.js'
 import {
   isOcclusionHitBlocking,
@@ -387,10 +388,75 @@ function appendSkinPoint(points, point, previousRef) {
 }
 
 /**
- * Build a continuous on-skin polyline through route nodes.
- * Segments with opposing normals (掌心魚際 ↔ 手背) wrap around the limb
- * via normal slerp + outside cast instead of cutting through the mesh.
+ * Walk along the mesh between two nodes so the polyline stays on skin.
+ * When normals oppose (掌心魚際 ↔ 手背), orbit around the limb instead of
+ * cutting through it.
  */
+function marchOnSkin(a, b) {
+  const out = []
+  let pos = new THREE.Vector3(...a.position)
+  let normal = new THREE.Vector3(...a.normal).normalize()
+  const end = new THREE.Vector3(...b.position)
+  const endNormal = new THREE.Vector3(...b.normal).normalize()
+  const totalDist = Math.max(pos.distanceTo(end), 1e-6)
+  const normalDot = normal.dot(endNormal)
+  const stepLen = surfaceStepLength(totalDist, normalDot)
+  const maxSteps = Math.max(24, Math.ceil(totalDist / stepLen) * 4 + 48)
+  const hintVec = end.clone().sub(pos)
+  const hint = hintVec.lengthSq() > 1e-8 ? toArray(hintVec.normalize()) : [0, 1, 0]
+
+  out.push(pos.clone().addScaledVector(normal, SKIN_LIFT))
+
+  for (let step = 0; step < maxSteps; step += 1) {
+    const toEnd = end.clone().sub(pos)
+    const remaining = toEnd.length()
+    if (remaining < stepLen * 0.85) break
+
+    let tangent = toEnd.clone().addScaledVector(normal, -toEnd.dot(normal))
+    if (tangent.lengthSq() < 1e-10 || tangent.length() < remaining * 0.18) {
+      let axis = new THREE.Vector3().crossVectors(normal, endNormal)
+      if (axis.lengthSq() < 1e-8) axis.crossVectors(normal, new THREE.Vector3(...hint))
+      if (axis.lengthSq() < 1e-8) axis.set(0, 1, 0).cross(normal)
+      axis.normalize()
+      tangent = new THREE.Vector3().crossVectors(axis, normal)
+      if (tangent.dot(toEnd) < 0) tangent.negate()
+      const along = new THREE.Vector3(...hint).addScaledVector(normal, -new THREE.Vector3(...hint).dot(normal))
+      if (along.lengthSq() > 1e-8) tangent.lerp(along.normalize(), 0.35)
+    }
+    tangent.normalize().multiplyScalar(Math.min(stepLen, remaining * 0.45))
+
+    const progress = 1 - remaining / totalDist
+    const guide = slerpUnitVectors(toArray(normal), toArray(endNormal), Math.min(0.9, progress + 0.05), hint)
+    const standoff = marchStandoff(progress, normalDot)
+    const outside = pos.clone().add(tangent).addScaledVector(new THREE.Vector3(...guide), standoff)
+    let hit = projectNearSurface(toArray(outside), guide)
+    if (!hit) {
+      hit = projectNearSurface(
+        toArray(pos.clone().add(tangent).addScaledVector(normal, standoff)),
+        toArray(normal),
+      )
+    }
+
+    if (hit) {
+      const next = new THREE.Vector3(...hit.position)
+      // Ignore wild hits that jump to another body region.
+      if (next.distanceTo(pos) <= Math.max(stepLen * 6, 0.05) || next.distanceTo(end) <= remaining + 0.02) {
+        pos.copy(next)
+        normal.set(...hit.normal).normalize()
+      } else {
+        pos.add(tangent)
+      }
+    } else {
+      pos.add(tangent)
+    }
+    out.push(pos.clone().addScaledVector(normal, SKIN_LIFT))
+  }
+
+  out.push(end.clone().addScaledVector(endNormal, SKIN_LIFT))
+  return out
+}
+
+/** Continuous on-skin polyline through every route node, endpoint-exact. */
 function skinCurvePoints(route) {
   const nodes = route.nodes.map(resolvedNode)
   if (nodes.length === 0) return []
@@ -398,78 +464,14 @@ function skinCurvePoints(route) {
 
   const points = []
   const previousRef = { current: null }
-
   for (let index = 0; index < nodes.length - 1; index += 1) {
-    const a = nodes[index]
-    const b = nodes[index + 1]
-    const pa = new THREE.Vector3(...a.position)
-    const pb = new THREE.Vector3(...b.position)
-    const na = new THREE.Vector3(...a.normal).normalize()
-    const nb = new THREE.Vector3(...b.normal).normalize()
-    const chord = pb.clone().sub(pa)
-    const distance = chord.length()
-    const normalDot = na.dot(nb)
-    let hint
-    if (distance > 1e-6) {
-      hint = toArray(chord.clone().normalize())
-    } else {
-      const side = new THREE.Vector3().crossVectors(na, nb)
-      hint = side.lengthSq() > 1e-8 ? toArray(side.normalize()) : [0, 1, 0]
-    }
-    const steps = segmentSampleCount(distance, normalDot)
-    const startStep = index === 0 ? 0 : 1
-
-    for (let step = startStep; step <= steps; step += 1) {
-      const t = step / steps
-      if (step === 0) {
-        appendSkinPoint(points, offsetPosition(a, SKIN_LIFT), previousRef)
-        continue
-      }
-      if (step === steps) {
-        appendSkinPoint(points, offsetPosition(b, SKIN_LIFT), previousRef)
-        continue
-      }
-
-      const guide = slerpUnitVectors(toArray(na), toArray(nb), t, hint)
-      const chordPoint = pa.clone().lerp(pb, t)
-      const inflate = segmentInflate(t, normalDot)
-      const outside = chordPoint.clone().addScaledVector(new THREE.Vector3(...guide), inflate)
-      const wrap = Math.max(0, 1 - normalDot)
-      const maxAway = Math.max(0.06, distance * 0.75) + wrap * 0.12
-      const fallback = previousRef.current
-        ? {
-          position: toArray(previousRef.current.clone().lerp(
-            offsetPosition(b, SKIN_LIFT),
-            Math.min(0.35, 1 / Math.max(steps - step, 1)),
-          )),
-          normal: guide,
-        }
-        : { position: toArray(chordPoint), normal: guide }
-
-      let projected = projectNearSurface(toArray(outside), guide)
-      if (projected) {
-        const projectedPos = new THREE.Vector3(...projected.position)
-        if (projectedPos.distanceTo(chordPoint) > maxAway) {
-          const fallbackOutside = chordPoint.clone().addScaledVector(new THREE.Vector3(...guide), inflate * 0.55)
-          projected = projectNearSurface(toArray(fallbackOutside), guide)
-          if (projected && new THREE.Vector3(...projected.position).distanceTo(chordPoint) > maxAway) {
-            projected = null
-          }
-        }
-      }
-      projected = projected || projectNearSurfaceOrFallback(
-        toArray(chordPoint.clone().addScaledVector(new THREE.Vector3(...guide), Math.max(0.02, inflate * 0.35))),
-        guide,
-        fallback,
-      )
-
-      appendSkinPoint(points, offsetPosition(projected, SKIN_LIFT), previousRef)
+    const segment = marchOnSkin(nodes[index], nodes[index + 1])
+    const start = index === 0 ? 0 : 1
+    for (let i = start; i < segment.length; i += 1) {
+      appendSkinPoint(points, segment[i], previousRef)
     }
   }
-
-  return points.length >= 2
-    ? points
-    : nodes.map((node) => offsetPosition(node, SKIN_LIFT))
+  return points.length >= 2 ? points : nodes.map((node) => offsetPosition(node, SKIN_LIFT))
 }
 
 function rebuildAnnotations() {
@@ -487,8 +489,10 @@ function rebuildAnnotations() {
       linewidth: route.width,
       transparent: false,
       opacity: 1,
-      depthTest: true,
-      depthWrite: true,
+      // Fat Line2 + depthTest causes dashed gaps when the centerline grazes skin.
+      // Hide whole routes via node facing/occlusion instead.
+      depthTest: false,
+      depthWrite: false,
       resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
     })
     const line = new Line2(geometry, material)
@@ -551,31 +555,44 @@ function rebuildAnnotations() {
 }
 
 function drawDraft() {
-  const previous = annotationGroup.getObjectByName('draft')
-  if (previous) annotationGroup.remove(previous)
-  if (draftNodes.length < 2) return
-  const positions = skinCurvePoints({ nodes: draftNodes })
-  const geometry = new LineGeometry()
-  geometry.setPositions(positions.flatMap(toArray))
-  const material = new LineMaterial({
-    color: state.settings.lineColor,
-    linewidth: state.settings.lineWidth,
-    dashed: true,
-    dashSize: 0.04,
-    gapSize: 0.025,
-    transparent: false,
-    depthTest: true,
-    depthWrite: true,
-    resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
+  ;['draft', 'draft-mirror'].forEach((name) => {
+    const previous = annotationGroup.getObjectByName(name)
+    if (previous) annotationGroup.remove(previous)
   })
-  const draft = new Line2(geometry, material)
-  draft.name = 'draft'
-  draft.userData = { type: 'draft-meridian' }
-  draft.computeLineDistances()
-  draft.renderOrder = 2
-  draft.frustumCulled = false
-  annotationGroup.add(draft)
-  routeVisuals.push({ line: draft, route: null, isDraft: true })
+  routeVisuals = routeVisuals.filter((entry) => !entry.isDraft)
+  if (draftNodes.length < 2) return
+
+  const addDraftLine = (name, nodes, dashed = true) => {
+    const positions = skinCurvePoints({ nodes })
+    if (positions.length < 2) return
+    const geometry = new LineGeometry()
+    geometry.setPositions(positions.flatMap(toArray))
+    const material = new LineMaterial({
+      color: state.settings.lineColor,
+      linewidth: state.settings.lineWidth,
+      dashed,
+      dashSize: 0.04,
+      gapSize: 0.025,
+      transparent: false,
+      depthTest: false,
+      depthWrite: false,
+      resolution: new THREE.Vector2(viewport.clientWidth, viewport.clientHeight),
+    })
+    const draft = new Line2(geometry, material)
+    draft.name = name
+    draft.userData = { type: 'draft-meridian' }
+    draft.computeLineDistances()
+    draft.renderOrder = 2
+    draft.frustumCulled = false
+    annotationGroup.add(draft)
+    routeVisuals.push({ line: draft, route: null, isDraft: true })
+  }
+
+  addDraftLine('draft', draftNodes, true)
+  const meridian = meridianById($('#meridian-filter').value)
+  if (meridian?.bilateral) {
+    addDraftLine('draft-mirror', draftNodes.map(makeMirroredRouteNode), true)
+  }
 }
 
 function updateMarkerScales() {
@@ -646,14 +663,16 @@ function updateLabelVisibility(time) {
       return
     }
     const nodes = route.nodes.map(resolvedNode)
-    // Hide meridians whose every node faces away or is behind the body.
-    const anyVisible = nodes.some((node) => (
+    const facingCount = nodes.filter((node) => (
       isSurfaceFacingCamera(node.position, node.normal, cam)
       && !isPointOccluded(node.position, cam)
-    ))
-    line.visible = anyVisible
+    )).length
+    line.visible = routeShouldBeVisible(facingCount, nodes.length)
     if (line.material) {
-      line.material.opacity = selected?.type === 'meridian' && selected.id === route.id ? 1 : 0.92
+      line.material.opacity = selected?.type === 'meridian'
+        && (selected.id === route.id || (route.pairId && selected.pairId === route.pairId))
+        ? 1
+        : 0.92
     }
   })
 }
@@ -708,8 +727,8 @@ function renderObjects() {
   const type = $('#object-type').value
   const routes = type === 'acupoint' ? [] : state.meridians
     .filter((item) => !query || `${item.name} ${item.meridianId} ${sideLabel(item.side)}`.toLowerCase().includes(query))
-    .map((item) => `<button data-type="meridian" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
-      <i style="background:${item.color}"></i><span><b>${escapeHtml(item.name)}</b><small>${item.nodes.length} 個錨點 · ${sideLabel(item.side)}</small></span></button>`)
+    .map((item) => `<button data-type="meridian" data-id="${item.id}" class="${selected?.id === item.id || (item.pairId && selected?.pairId === item.pairId) ? 'selected' : ''}">
+      <i style="background:${item.color}"></i><span><b>${escapeHtml(item.name)}</b><small>${item.nodes.length} 個錨點 · ${sideLabel(item.side)}${item.pairId ? ' · 對稱' : ''}</small></span></button>`)
   const points = type === 'meridian' ? [] : state.acupoints
     .filter((item) => !query || `${item.code} ${item.name} ${item.meridianName} ${sideLabel(item.side)}`.toLowerCase().includes(query))
     .map((item) => `<button data-type="acupoint" data-id="${item.id}" class="${selected?.id === item.id ? 'selected' : ''}">
@@ -940,7 +959,7 @@ function insertRouteControl(routeId, hit) {
     }
     return item
   })
-  selected = { type: 'meridian', id: route.id }
+  selected = { type: 'meridian', id: route.id, pairId: route.pairId || null }
   commit({ ...state, meridians: nextRoutes }, '已在線段加入曲度控制點')
 }
 
@@ -964,7 +983,7 @@ function placeAt(event) {
     }
     const routeHit = annotationHit(event, ['meridian'])
     if (routeHit) {
-      selected = { type: 'meridian', id: routeHit.object.userData.id }
+      selected = { type: 'meridian', id: routeHit.object.userData.id, pairId: state.meridians.find((item) => item.id === routeHit.object.userData.id)?.pairId || null }
       rebuildAnnotations()
       updateUI()
     }
@@ -1005,22 +1024,33 @@ function finishPath() {
     color: state.settings.lineColor,
     width: state.settings.lineWidth,
     side,
-    nodes: draftNodes,
+    nodes: structuredClone(draftNodes),
   }
   const routes = [route]
   if (meridian.bilateral) {
+    const mirrorSide = side === 'left' ? 'right' : 'left'
+    const mirroredNodes = route.nodes.map(makeMirroredRouteNode)
+    // Every acupoint node must resolve to its paired contralateral point.
+    const unresolved = mirroredNodes.filter((node, index) => (
+      route.nodes[index].type === 'acupoint' && node.type !== 'acupoint'
+    ))
+    if (unresolved.length) {
+      return toast('對側穴位尚未配對完成，請確認左右穴位都已定位', 'warn')
+    }
     routes.push({
       ...route,
       id: makeId(),
-      side: side === 'left' ? 'right' : 'left',
-      nodes: route.nodes.map(makeMirroredRouteNode),
+      side: mirrorSide,
+      nodes: mirroredNodes,
     })
   }
   draftNodes = []
   draftSide = null
-  selected = { type: 'meridian', id: route.id }
+  selected = { type: 'meridian', id: route.id, pairId }
   commit({ ...state, meridians: [...state.meridians, ...routes] },
-    meridian.bilateral ? `已建立 ${meridian.name} 左右路線` : `已建立 ${meridian.name} 路線`)
+    meridian.bilateral
+      ? `已建立 ${meridian.name} 左／右對稱路線`
+      : `已建立 ${meridian.name} 路線`)
   setTool('navigate')
 }
 
@@ -1425,7 +1455,13 @@ $('#objects').addEventListener('click', (event) => {
   const button = event.target.closest('[data-id]')
   if (!button) return
   const point = button.dataset.type === 'acupoint' && getPoint(button.dataset.id)
-  selected = { type: button.dataset.type, id: button.dataset.id, pairId: point?.pairId || null }
+  const route = button.dataset.type === 'meridian'
+    && state.meridians.find((item) => item.id === button.dataset.id)
+  selected = {
+    type: button.dataset.type,
+    id: button.dataset.id,
+    pairId: point?.pairId || route?.pairId || null,
+  }
   rebuildAnnotations()
   updateUI()
 })

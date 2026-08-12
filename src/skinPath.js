@@ -1,6 +1,7 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
-export const SKIN_LIFT = 0.006
+/** Keep lines just above the mesh so they stay glued without looking floaty. */
+export const SKIN_LIFT = 0.01
 
 /**
  * Unit-vector slerp. When a and b are nearly opposite (palm ↔ dorsum),
@@ -11,7 +12,7 @@ export function slerpUnitVectors(a, b, t, hint = [0, 1, 0]) {
   const tt = clamp01(t)
   const na = normalize(a)
   const nb = normalize(b)
-  let dot = dot3(na, nb)
+  const dot = dot3(na, nb)
 
   if (dot > 0.9995) return normalize(lerp3(na, nb, tt))
 
@@ -21,10 +22,7 @@ export function slerpUnitVectors(a, b, t, hint = [0, 1, 0]) {
     if (length3(axis) < 1e-6) axis = normalize(cross(na, [0, 1, 0]))
     if (length3(axis) < 1e-6) axis = normalize(cross(na, [1, 0, 0]))
     const mid = normalize(cross(axis, na))
-    // Ensure mid lies on the nb hemisphere when possible.
-    if (dot3(mid, nb) < 0) {
-      axis = scale3(axis, -1)
-    }
+    if (dot3(mid, nb) < 0) axis = scale3(axis, -1)
     const angle = Math.acos(Math.min(1, Math.max(-1, dot))) * tt
     return normalize(add3(scale3(na, Math.cos(angle)), scale3(normalize(cross(axis, na)), Math.sin(angle))))
   }
@@ -34,20 +32,39 @@ export function slerpUnitVectors(a, b, t, hint = [0, 1, 0]) {
   return normalize(add3(scale3(na, Math.cos(theta)), scale3(relative, Math.sin(theta))))
 }
 
-/** More samples when the segment spans a larger wrap (opposing normals). */
+/** March step length along the skin between two acupoints. */
+export function surfaceStepLength(distance, normalDot) {
+  const wrap = Math.max(0, 1 - normalDot)
+  return Math.min(0.01, Math.max(0.005, distance / (18 + wrap * 24)))
+}
+
+/** Outside cast distance while marching; larger when wrapping palm↔dorsum. */
+export function marchStandoff(t, normalDot) {
+  const wrap = Math.max(0, 1 - normalDot)
+  const arch = Math.sin(Math.PI * Math.min(1, Math.max(0, t)))
+  return 0.06 + wrap * 0.12 * arch
+}
+
+/** @deprecated kept for tests / callers that still inflate chord samples */
 export function segmentSampleCount(distance, normalDot) {
   const wrap = Math.max(0, 1 - normalDot)
-  return Math.max(10, Math.ceil(distance / 0.008) + Math.ceil(wrap * 28))
+  return Math.max(12, Math.ceil(distance / surfaceStepLength(distance, normalDot)) + Math.ceil(wrap * 20))
+}
+
+/** @deprecated chord inflate helper */
+export function segmentInflate(t, normalDot) {
+  return marchStandoff(t, normalDot)
 }
 
 /**
- * Stand-off used before projecting a chord sample back onto skin.
- * Peaks mid-segment when wrapping around a limb (e.g. 太淵 → 魚際).
+ * Decide whether a bilateral meridian route should stay visible.
+ * Requires enough on-facing, unoccluded nodes so whole-arm lines with
+ * depthTest disabled do not show through the torso.
  */
-export function segmentInflate(t, normalDot) {
-  const wrap = Math.max(0, 1 - normalDot)
-  const arch = Math.sin(Math.PI * Math.min(1, Math.max(0, t)))
-  return 0.03 + wrap * 0.14 * arch
+export function routeShouldBeVisible(facingCount, totalNodes) {
+  if (totalNodes <= 0) return false
+  if (facingCount <= 0) return false
+  return facingCount >= Math.max(1, Math.ceil(totalNodes * 0.2))
 }
 
 export function length3(v) {
