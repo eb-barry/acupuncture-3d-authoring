@@ -82,8 +82,8 @@ $('#app').innerHTML = `
         <label>經脈顏色<select name="lineColor"></select></label>
         <label>經脈線寬 <output id="line-width-out">4px</output><input name="lineWidth" type="range" min="1" max="10" value="4"></label>
         <label>模型表面<select name="surfaceFinish">
-          <option value="original" selected>原材質（白瓷）</option>
-          <option value="skin">皮膚色</option>
+          <option value="skin" selected>皮膚色</option>
+          <option value="original">原材質（白瓷）</option>
         </select></label>
         <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。</p>
       </form>
@@ -1013,7 +1013,7 @@ function applyModel(gltf, name, hash = null) {
   updateUI()
 }
 
-let surfaceFinish = 'original'
+let surfaceFinish = 'skin'
 
 function isNailMesh(object) {
   const materials = Array.isArray(object.material) ? object.material : [object.material]
@@ -1046,18 +1046,20 @@ function createNailMaterial() {
 }
 
 function createSkinMaterial() {
-  // Warm skin tone with soft specular response — good for acupoint reading.
+  // Warm East-Asian skin response: soft diffuse, mild subsurface-like sheen.
   return new THREE.MeshPhysicalMaterial({
-    color: 0xb8896c,
-    roughness: 0.58,
+    color: 0xd4a88a,
+    roughness: 0.52,
     metalness: 0.0,
-    reflectivity: 0.28,
-    clearcoat: 0.06,
-    clearcoatRoughness: 0.6,
-    sheen: 0.4,
-    sheenRoughness: 0.7,
-    sheenColor: new THREE.Color(0xd9a48c),
-    envMapIntensity: 0.12,
+    reflectivity: 0.22,
+    clearcoat: 0.12,
+    clearcoatRoughness: 0.48,
+    sheen: 0.55,
+    sheenRoughness: 0.62,
+    sheenColor: new THREE.Color(0xe8b9a4),
+    specularIntensity: 0.35,
+    specularColor: new THREE.Color(0xf0cfc0),
+    envMapIntensity: 0.16,
     flatShading: false,
   })
 }
