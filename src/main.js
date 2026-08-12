@@ -395,7 +395,8 @@ function rebuildAnnotations() {
     const isSelected = selected?.type === 'acupoint'
       && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
     const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
-    // Invisible picking sphere in world space; visible marker is CSS2D (always on top).
+    // Anchor both picking sphere and CSS marker on the surface hit (tiny lift only).
+    const anchor = offsetPosition(point, 0.004)
     const marker = new THREE.Mesh(
       new THREE.SphereGeometry(0.5, 12, 10),
       new THREE.MeshBasicMaterial({
@@ -406,7 +407,7 @@ function rebuildAnnotations() {
         opacity: 0.001,
       }),
     )
-    marker.position.copy(offsetPosition(point, 0.03))
+    marker.position.copy(anchor)
     marker.renderOrder = 20
     marker.userData = { type: 'acupoint', id: point.id }
     annotationGroup.add(marker)
@@ -417,7 +418,7 @@ function rebuildAnnotations() {
     label.style.setProperty('--marker-size', `${pixelSize}px`)
     label.innerHTML = `<i class="marker-dot" aria-hidden="true"></i><b class="point-name">${escapeHtml(point.name)}</b>`
     const labelObject = new CSS2DObject(label)
-    labelObject.position.copy(marker.position)
+    labelObject.position.copy(anchor)
     annotationGroup.add(labelObject)
     markerVisuals.push({ mesh: marker, label: labelObject, point })
   })
