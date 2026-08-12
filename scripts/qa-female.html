@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Female character QA</title>
+  <style>
+    html, body { margin: 0; background: #1a1a1a; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/addons/": "/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+
+const params = new URLSearchParams(location.search)
+const focus = params.get('focus') || 'full'
+const modelUrl = params.get('model') || '/models/female-character.glb'
+
+const focuses = {
+  full: { pos: [2.8, 2.2, 3.2], target: [0, 2.1, 0.2] },
+  wrist: { pos: [1.55, 2.15, 0.55], target: [1.14, 2.11, 0.14] },
+  neck: { pos: [0.9, 3.9, 1.1], target: [0, 3.7, 0.25] },
+  hip: { pos: [1.1, 1.6, 0.9], target: [0.35, 1.55, 0.1] },
+  feet: { pos: [0.6, 0.35, 1.0], target: [0.24, 0.05, 0.35] },
+}
+
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x1a1a1a)
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.01, 100)
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+renderer.setSize(innerWidth, innerHeight)
+renderer.outputColorSpace = THREE.SRGBColorSpace
+document.body.appendChild(renderer.domElement)
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55))
+const key = new THREE.DirectionalLight(0xffffff, 1.1)
+key.position.set(2.5, 4, 3)
+scene.add(key)
+const fill = new THREE.DirectionalLight(0xffffff, 0.35)
+fill.position.set(-3, 1.5, -2)
+scene.add(fill)
+
+const controls = new OrbitControls(camera, renderer.domElement)
+const view = focuses[focus] || focuses.full
+camera.position.set(...view.pos)
+controls.target.set(...view.target)
+controls.update()
+
+const loader = new GLTFLoader()
+loader.load(modelUrl, (gltf) => {
+  const root = gltf.scene
+  root.traverse((obj) => {
+    if (!obj.isMesh) return
+    obj.material = new THREE.MeshStandardMaterial({
+      color: 0xe8e4de,
+      roughness: 0.55,
+      metalness: 0.0,
+    })
+    obj.geometry.computeVertexNormals()
+  })
+  scene.add(root)
+  window.__ready = true
+  animate()
+})
+
+function animate() {
+  requestAnimationFrame(animate)
+  controls.update()
+  renderer.render(scene, camera)
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(innerWidth, innerHeight)
+})
+</script>
+</body>
+</html>
