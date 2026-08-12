@@ -123,8 +123,22 @@ def repair(src: Path, dst: Path) -> dict:
         metallicFactor=0.0,
         roughnessFactor=0.72,
     )
+
+    # Smooth shading requires an exported NORMAL attribute. Prefer the original
+    # authoring normals on matched vertices so the repaired surface keeps the
+    # same soft look; fall back to recomputed smooth normals elsewhere.
+    fixed.fix_normals()
+    smooth = fixed.vertex_normals.copy()
+    dist, nn = cKDTree(orig.vertices).query(fixed.vertices)
+    orig_n = orig.vertex_normals[nn]
+    flip = (orig_n * smooth).sum(axis=1) < 0
+    orig_n[flip] *= -1
+    matched = dist < 1e-3
+    smooth[matched] = orig_n[matched]
+    smooth /= np.linalg.norm(smooth, axis=1, keepdims=True).clip(min=1e-12)
+    fixed.vertex_normals = smooth
+
     if hasattr(orig.visual, "uv") and orig.visual.uv is not None:
-        _, nn = cKDTree(orig.vertices).query(fixed.vertices)
         fixed.visual = trimesh.visual.TextureVisuals(uv=orig.visual.uv[nn], material=mat)
     else:
         fixed.visual.material = mat
@@ -138,7 +152,10 @@ def repair(src: Path, dst: Path) -> dict:
     scene = trimesh.Scene()
     scene.add_geometry(fixed, geom_name="geometry_0")
     dst.parent.mkdir(parents=True, exist_ok=True)
-    scene.export(dst)
+    # Trimesh may omit NORMALS unless explicitly requested; without them the
+    # viewer falls back to derivative/face normals and the whole body looks faceted.
+    glb = trimesh.exchange.gltf.export_glb(scene, include_normals=True)
+    dst.write_bytes(glb)
 
     stats = {
         "source": str(src),

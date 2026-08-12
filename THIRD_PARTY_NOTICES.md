@@ -12,14 +12,16 @@
 ## Female body model (`female-character.glb`)
 
 - Local file: `models/female-character.glb`
-- SHA-256: `8079df5ed092755e5adf43a631e5b48c9456042810ab97c13d3bc7c7d9170f72`
+- SHA-256: `55a362e4777145ef5de388d68f2d9d8f8a352def7767faeb2987d64c764dc3f3`
 - Source: provided by the project owner for acupuncture authoring
 - Notes: repaired from an open multi-shell export that had visible cracks at the
   wrist, neck/shoulders, hip, and ankle plus lumpy toe caps. Duplicate vertices
   were welded, mismatched borders snapped, remaining holes filled, and
   surface-preserving / Taubin smoothing applied on filled patches and the
   forefoot only. The repaired mesh is a single watertight manifold component
-  with full-precision float32 normals. Overall silhouette is unchanged
+  with full-precision float32 vertex normals exported in the GLB (matched to
+  the original authoring normals where vertices coincide) so studio lighting
+  stays smoothly shaded instead of faceted. Overall silhouette is unchanged
   (extent delta < 3e-4; sampled surface deviation p99 ≈ 0.003). Reproducible
   via `scripts/repair_female_character_glb.py`.
 
