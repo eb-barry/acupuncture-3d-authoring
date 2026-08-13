@@ -47,6 +47,46 @@ export function buildRouteNodesFromPlaced(requiredPoints, placedPoints, side) {
   }))
 }
 
+/**
+ * Drop removed acupoint nodes from a route. Leading/trailing control nodes that
+ * only served a deleted endpoint segment are trimmed so the first/last hole
+ * removes its connected segment until the point is placed again.
+ */
+export function removePointIdsFromRouteNodes(nodes, removedIds) {
+  const removed = removedIds instanceof Set ? removedIds : new Set(removedIds)
+  const filtered = nodes.filter((node) => !(node.type === 'acupoint' && removed.has(node.pointId)))
+  let start = 0
+  let end = filtered.length
+  while (start < end && filtered[start].type !== 'acupoint') start += 1
+  while (end > start && filtered[end - 1].type !== 'acupoint') end -= 1
+  return filtered.slice(start, end)
+}
+
+/** Reinsert preserved control points between surviving acupoint pairs. */
+export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
+  if (!nextAcupointNodes.length) return []
+  if (!previousNodes?.length) return [...nextAcupointNodes]
+  const result = []
+  for (let index = 0; index < nextAcupointNodes.length; index += 1) {
+    result.push(nextAcupointNodes[index])
+    if (index >= nextAcupointNodes.length - 1) break
+    const fromId = nextAcupointNodes[index].pointId
+    const toId = nextAcupointNodes[index + 1].pointId
+    const fromIndex = previousNodes.findIndex((node) => node.type === 'acupoint' && node.pointId === fromId)
+    const toIndex = previousNodes.findIndex((node) => node.type === 'acupoint' && node.pointId === toId)
+    if (fromIndex < 0 || toIndex <= fromIndex) continue
+    for (let cursor = fromIndex + 1; cursor < toIndex; cursor += 1) {
+      if (previousNodes[cursor].type === 'control') result.push(previousNodes[cursor])
+    }
+  }
+  return result
+}
+
+/** True when a route still has enough acupoint anchors to draw a segment. */
+export function routeHasDrawableAcupoints(nodes) {
+  return nodes.filter((node) => node.type === 'acupoint').length >= 2
+}
+
 export function isSurfaceFacingCamera(position, normal, cameraPosition) {
   const towardCamera = cameraPosition.map((value, index) => value - position[index])
   const length = Math.hypot(...towardCamera) || 1

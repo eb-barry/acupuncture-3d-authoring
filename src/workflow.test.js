@@ -3,9 +3,12 @@ import {
   buildRouteNodesFromPlaced,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
+  mergeControlsIntoRoute,
   nextExpectedPoint,
   orderedPlacedPointsForSide,
   placementProgress,
+  removePointIdsFromRouteNodes,
+  routeHasDrawableAcupoints,
   routeIncludesAllPoints,
 } from './workflow.js'
 
@@ -58,6 +61,36 @@ describe('meridian authoring workflow', () => {
       .toEqual(['LU1', 'LU2', 'LU3'])
     expect(buildRouteNodesFromPlaced(required, placed, 'left').map((node) => node.pointId))
       .toEqual(['l1', 'l2', 'l3'])
+  })
+
+  it('trims first/last acupoint segments when endpoints are deleted', () => {
+    const nodes = [
+      { type: 'acupoint', pointId: 'a1' },
+      { type: 'control', pointId: null },
+      { type: 'acupoint', pointId: 'a2' },
+      { type: 'control', pointId: null },
+      { type: 'acupoint', pointId: 'a3' },
+    ]
+    expect(removePointIdsFromRouteNodes(nodes, ['a1']).map((node) => node.pointId || node.type))
+      .toEqual(['a2', 'control', 'a3'])
+    expect(removePointIdsFromRouteNodes(nodes, ['a3']).map((node) => node.pointId || node.type))
+      .toEqual(['a1', 'control', 'a2'])
+    expect(routeHasDrawableAcupoints(removePointIdsFromRouteNodes(nodes, ['a1', 'a2']))).toBe(false)
+  })
+
+  it('re-links routes and keeps controls between surviving pairs', () => {
+    const previous = [
+      { type: 'acupoint', pointId: 'a2' },
+      { type: 'control', pointId: null, position: [0, 1, 0] },
+      { type: 'acupoint', pointId: 'a3' },
+    ]
+    const next = [
+      { type: 'acupoint', pointId: 'a1' },
+      { type: 'acupoint', pointId: 'a2' },
+      { type: 'acupoint', pointId: 'a3' },
+    ]
+    expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || 'control'))
+      .toEqual(['a1', 'a2', 'control', 'a3'])
   })
 
   it('hides front-surface labels from a rear camera', () => {
