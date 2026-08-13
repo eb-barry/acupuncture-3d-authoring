@@ -12,14 +12,31 @@ export function snapHorizontalToCardinal(direction) {
 }
 
 /**
- * Infer body-front from a head landmark that protrudes forward (e.g. nose tip).
- * `headPoint` / `bodyCenter` are [x,y,z].
+ * Infer anatomical front from body proportions + midline head extremes.
+ * Humanoids are wider across the shoulders (X) than front-to-back (Z), so the
+ * thinner horizontal axis is depth. Front is the more protruding midline side
+ * of the head/face (nose), not the ears.
+ *
+ * @param {{ x: number, z: number }} size horizontal bounding size
+ * @param {{ maxAlong: number, minAlong: number, maxY: number, minY: number }} extremes
+ *        depth-axis extremes among near-midline upper-body samples
  */
-export function inferFrontFromHeadPoint(headPoint, bodyCenter) {
-  const dx = headPoint[0] - bodyCenter[0]
-  const dz = headPoint[2] - bodyCenter[2]
-  if (Math.hypot(dx, dz) < 1e-8) return [0, 0, 1]
-  return snapHorizontalToCardinal([dx, 0, dz])
+export function inferBodyFrontFromBounds(size, extremes) {
+  const depthIsZ = size.z <= size.x
+  const absMax = Math.abs(extremes.maxAlong)
+  const absMin = Math.abs(extremes.minAlong)
+  let frontSign
+  if (absMax > absMin * 1.05) {
+    frontSign = Math.sign(extremes.maxAlong) || 1
+  } else if (absMin > absMax * 1.05) {
+    frontSign = Math.sign(extremes.minAlong) || -1
+  } else {
+    // Nearly symmetric depth: prefer the higher sample (face over occiput).
+    frontSign = extremes.maxY >= extremes.minY
+      ? (Math.sign(extremes.maxAlong) || 1)
+      : (Math.sign(extremes.minAlong) || -1)
+  }
+  return depthIsZ ? [0, 0, frontSign] : [frontSign, 0, 0]
 }
 
 /**

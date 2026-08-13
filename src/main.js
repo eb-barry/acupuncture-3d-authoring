@@ -21,7 +21,7 @@ import {
 import { History } from './history.js'
 import {
   cameraPoseFacingAxis,
-  inferFrontFromHeadPoint,
+  inferBodyFrontFromBounds,
 } from './frontLevel.js'
 import {
   SKIN_LIFT,
@@ -437,9 +437,15 @@ function refreshBodyFrontAxis() {
   const box = new THREE.Box3().setFromObject(modelGroup)
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
-  // Nose / face tip: farthest head vertex from the vertical body axis.
-  const headMinY = box.min.y + size.y * 0.8
-  let farthest = null
+  // Depth = thinner horizontal axis (front↔back). Width = shoulders (left↔right).
+  // Ear tips are wide on X and must not be treated as "front".
+  const depthIsZ = size.z <= size.x
+  const faceMinY = box.min.y + size.y * 0.72
+  const band = (depthIsZ ? size.x : size.z) * 0.12
+  let maxAlong = -Infinity
+  let minAlong = Infinity
+  let maxY = -Infinity
+  let minY = -Infinity
   const world = new THREE.Vector3()
   modelMeshes.forEach((mesh) => {
     const attribute = mesh.geometry?.attributes?.position
@@ -448,49 +454,33 @@ function refreshBodyFrontAxis() {
     const step = Math.max(1, Math.floor(attribute.count / 10000))
     for (let index = 0; index < attribute.count; index += step) {
       world.fromBufferAttribute(attribute, index).applyMatrix4(mesh.matrixWorld)
-      if (world.y < headMinY) continue
-      const dx = world.x - center.x
-      const dz = world.z - center.z
-      const dist = Math.hypot(dx, dz)
-      if (!farthest || dist > farthest.dist) {
-        farthest = { dist, point: [world.x, world.y, world.z] }
+      if (world.y < faceMinY) continue
+      const width = depthIsZ ? (world.x - center.x) : (world.z - center.z)
+      if (Math.abs(width) > band) continue
+      const along = depthIsZ ? (world.z - center.z) : (world.x - center.x)
+      if (along > maxAlong) {
+        maxAlong = along
+        maxY = world.y
+      }
+      if (along < minAlong) {
+        minAlong = along
+        minY = world.y
       }
     }
   })
 
-  if (farthest && farthest.dist > Math.max(size.x, size.z) * 0.015) {
-    const front = inferFrontFromHeadPoint(farthest.point, toArray(center))
+  if (Number.isFinite(maxAlong) && Number.isFinite(minAlong)) {
+    const front = inferBodyFrontFromBounds(
+      { x: size.x, z: size.z },
+      { maxAlong, minAlong, maxY, minY },
+    )
     bodyFront.set(front[0], front[1], front[2])
     return
   }
 
-  // Fallback: previous surface heuristic often preferred the broader back —
-  // invert it so "front" matches anatomical anterior.
-  const midY = box.min.y + size.y * 0.62
-  const reach = Math.max(size.x, size.z, 0.2) * 0.95
-  const candidates = [
-    new THREE.Vector3(1, 0, 0),
-    new THREE.Vector3(-1, 0, 0),
-    new THREE.Vector3(0, 0, 1),
-    new THREE.Vector3(0, 0, -1),
-  ]
-  let best = null
-  for (const forward of candidates) {
-    const origin = center.clone().addScaledVector(forward, reach)
-    origin.y = midY
-    const dir = forward.clone().negate()
-    const caster = new THREE.Raycaster(origin, dir, 0, reach * 2.2)
-    caster.firstHitOnly = true
-    const hit = caster.intersectObjects(modelMeshes, false)[0]
-    if (!hit?.face) continue
-    const normal = hit.face.normal.clone()
-      .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
-      .normalize()
-    if (normal.dot(forward) < 0) normal.negate()
-    const facing = normal.dot(forward)
-    if (!best || facing > best.score) best = { score: facing, forward: forward.clone() }
-  }
-  if (best) bodyFront.copy(best.forward).negate()
+  // Fallback for empty meshes: thinner axis, negative direction.
+  if (depthIsZ) bodyFront.set(0, 0, -1)
+  else bodyFront.set(-1, 0, 0)
 }
 
 function snapHitToBodyMidline(hit) {
