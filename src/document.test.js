@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { emptyDocument, parseDocument, validateDocument } from './document.js'
+import {
+  emptyDocument,
+  exportFileName,
+  inferBodyModel,
+  parseDocument,
+  validateDocument,
+} from './document.js'
 
 describe('acupuncture document schema', () => {
   it('accepts an empty editor document', () => {
@@ -59,5 +65,29 @@ describe('acupuncture document schema', () => {
     expect(result.valid).toBe(true)
     expect(result.value.version).toBe(2)
     expect(result.value.settings.markerSize).toBe(12)
+    expect(result.value.model.body).toBe('male')
+  })
+
+  it('infers body model and distinguishes export filenames', () => {
+    expect(inferBodyModel({ name: 'female-character.glb' })).toBe('female')
+    expect(emptyDocument('female').model).toMatchObject({
+      body: 'female',
+      name: 'female-character.glb',
+    })
+    expect(exportFileName(emptyDocument('male'), new Date('2026-08-13T00:00:00.000Z')))
+      .toBe('meridian-map-v2-male-2026-08-13.json')
+    expect(exportFileName(emptyDocument('female'), new Date('2026-08-13T00:00:00.000Z')))
+      .toBe('meridian-map-v2-female-2026-08-13.json')
+  })
+
+  it('migrates version 2 documents missing model.body', () => {
+    const legacy = {
+      ...emptyDocument('male'),
+      model: { name: 'female-character.glb', hash: null },
+    }
+    delete legacy.model.body
+    const result = parseDocument(JSON.stringify(legacy))
+    expect(result.valid).toBe(true)
+    expect(result.value.model.body).toBe('female')
   })
 })
