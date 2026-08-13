@@ -272,7 +272,10 @@ function setOrbitLocked(locked) {
     button.setAttribute('aria-pressed', orbitLocked ? 'true' : 'false')
   }
   syncControlsEnabled()
-  setStatus(orbitLocked ? '模型旋轉已鎖定，可安心調整經脈曲度' : '模型旋轉已解除鎖定')
+  rebuildAnnotations()
+  setStatus(orbitLocked
+    ? '模型旋轉已鎖定 · 已顯示曲度中點，可拉動調整經脈'
+    : '模型旋轉已解除鎖定 · 已隱藏曲度中點')
 }
 
 function commit(nextState, message) {
@@ -625,6 +628,10 @@ function isRouteSelected(route) {
 }
 
 function addRouteEditHandles(route) {
+  // Curve-edit handles are opt-in: only while orbit is locked, so "顯示經脈"
+  // does not litter the model with unlabeled cyan midpoint spheres.
+  if (!orbitLocked) return
+
   route.nodes.forEach((node, nodeIndex) => {
     if (node.type !== 'control') return
     const handle = new THREE.Mesh(
@@ -960,7 +967,7 @@ function renderProperties() {
     <div class="readonly-field"><span>側別</span><b>${sideLabel(item.side)}</b></div>
     <div class="readonly-field"><span>錨點</span><b>${item.nodes.length}</b></div>
     <button class="danger" type="button" data-delete>刪除路線</button>
-    <p class="form-help">顏色與線寬請使用上方「樣式設定」。選取路線後可拖曳金色控制點。</p>` : `
+    <p class="form-help">顏色與線寬請使用上方「樣式設定」。調整曲度請先按「鎖定旋轉」，再拖曳淺藍中點或金色控制點。</p>` : `
     <div class="readonly-field"><span>穴位</span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b></div>
     <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.meridianName)}</b></div>
     <div class="readonly-field"><span>側別</span><b>${item.pairId ? `${sideLabel(item.side)} · 左右鎖定配對` : '中線'}</b></div>
@@ -981,8 +988,8 @@ function setTool(tool) {
   viewport.className = tool === 'navigate' ? '' : 'placing'
   $('#stage-help').textContent = {
     navigate: orbitLocked
-      ? '旋轉已鎖定 · 點選經脈中點（藍色）或金色控制點拉動曲度'
-      : '拖曳旋轉 · 完成穴位後點「顯示經脈」自動連線 · 可用「鎖定旋轉」',
+      ? '旋轉已鎖定 · 淺藍中點／金色控制點可拉動曲度'
+      : '拖曳旋轉 · 「顯示經脈」自動連線 · 調整曲度請先「鎖定旋轉」',
     point: selectedCatalog
       ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}`
       : '請先選擇穴位',
