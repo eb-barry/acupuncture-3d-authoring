@@ -1,16 +1,37 @@
-/** Ideal slight elevation above the horizontal when viewing the front. */
+/** Ideal slight elevation above the horizontal when viewing front/back. */
 export const IDEAL_FRONT_ELEVATION = 0.08
 
+/** Snap a horizontal direction to the nearest ±X / ±Z cardinal axis. */
+export function snapHorizontalToCardinal(direction) {
+  const x = direction[0] || 0
+  const z = direction[2] ?? direction[1] ?? 0
+  if (Math.abs(x) >= Math.abs(z)) {
+    return [Math.sign(x) || 1, 0, 0]
+  }
+  return [0, 0, Math.sign(z) || 1]
+}
+
 /**
- * Camera pose that looks straight at the body front (no yaw/roll skew).
- * `bodyForward` is the outward front axis of the model in world space.
+ * Infer body-front from a head landmark that protrudes forward (e.g. nose tip).
+ * `headPoint` / `bodyCenter` are [x,y,z].
  */
-export function cameraPoseFacingForward(target, bodyForward, distance, {
+export function inferFrontFromHeadPoint(headPoint, bodyCenter) {
+  const dx = headPoint[0] - bodyCenter[0]
+  const dz = headPoint[2] - bodyCenter[2]
+  if (Math.hypot(dx, dz) < 1e-8) return [0, 0, 1]
+  return snapHorizontalToCardinal([dx, 0, dz])
+}
+
+/**
+ * Camera pose that looks straight along a body axis (front or back).
+ * `viewAxis` is the outward axis the camera should sit on.
+ */
+export function cameraPoseFacingAxis(target, viewAxis, distance, {
   idealElevation = IDEAL_FRONT_ELEVATION,
 } = {}) {
-  const forward = [bodyForward[0], 0, bodyForward[2]]
-  const forwardLen = Math.hypot(forward[0], forward[2]) || 1
-  const dir = [forward[0] / forwardLen, forward[2] / forwardLen]
+  const axis = [viewAxis[0], 0, viewAxis[2] ?? viewAxis[1] ?? 0]
+  const axisLen = Math.hypot(axis[0], axis[2]) || 1
+  const dir = [axis[0] / axisLen, axis[2] / axisLen]
   const safeDistance = Math.max(distance, 0.05)
   const horizDist = safeDistance * Math.cos(idealElevation)
   const yOff = safeDistance * Math.sin(idealElevation)
@@ -25,14 +46,19 @@ export function cameraPoseFacingForward(target, bodyForward, distance, {
   }
 }
 
+/** @deprecated use cameraPoseFacingAxis */
+export function cameraPoseFacingForward(target, bodyForward, distance, options) {
+  return cameraPoseFacingAxis(target, bodyForward, distance, options)
+}
+
 /**
- * Yaw / pitch error of the camera relative to a body forward axis.
- * Used to verify an auto face-front pose.
+ * Yaw / pitch error of the camera relative to a body view axis.
+ * Used to verify an auto face-front / face-back pose.
  */
 export function cameraFrontAlignment(
   cameraPosition,
   target,
-  bodyForward,
+  viewAxis,
   {
     idealElevation = IDEAL_FRONT_ELEVATION,
     yawTolerance = 0.08,
@@ -48,12 +74,12 @@ export function cameraFrontAlignment(
   const horizLen = Math.hypot(horiz[0], horiz[2]) || 1e-6
   const horizDir = [horiz[0] / horizLen, horiz[2] / horizLen]
 
-  const forwardH = [bodyForward[0], bodyForward[2]]
-  const forwardLen = Math.hypot(forwardH[0], forwardH[1]) || 1e-6
-  const forwardDir = [forwardH[0] / forwardLen, forwardH[1] / forwardLen]
+  const axisH = [viewAxis[0], viewAxis[2] ?? viewAxis[1] ?? 0]
+  const axisLen = Math.hypot(axisH[0], axisH[1]) || 1e-6
+  const axisDir = [axisH[0] / axisLen, axisH[1] / axisLen]
 
-  const dot = forwardDir[0] * horizDir[0] + forwardDir[1] * horizDir[1]
-  const cross = forwardDir[0] * horizDir[1] - forwardDir[1] * horizDir[0]
+  const dot = axisDir[0] * horizDir[0] + axisDir[1] * horizDir[1]
+  const cross = axisDir[0] * horizDir[1] - axisDir[1] * horizDir[0]
   const yawErr = Math.atan2(cross, dot)
   const elevation = Math.atan2(toCam[1], horizLen)
   const pitchErr = elevation - idealElevation

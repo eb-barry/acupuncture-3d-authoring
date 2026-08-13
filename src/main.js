@@ -19,7 +19,10 @@ import {
   validateDocument,
 } from './document.js'
 import { History } from './history.js'
-import { cameraPoseFacingForward } from './frontLevel.js'
+import {
+  cameraPoseFacingAxis,
+  inferFrontFromHeadPoint,
+} from './frontLevel.js'
 import {
   SKIN_LIFT,
   marchStandoff,
@@ -84,7 +87,8 @@ $('#app').innerHTML = `
       <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
       <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側場景物件所選經脈）">⌁ <span>顯示經脈</span></button>
       <button class="tool" data-tool="point">＋ <span>穴位</span></button>
-      <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任／督脈中線">▣ <span>正面朝向</span></button>
+      <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈中線">▣ <span>正面朝向</span></button>
+      <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈中線">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
     </nav>
     <div id="viewport" tabindex="0"></div>
@@ -433,6 +437,35 @@ function refreshBodyFrontAxis() {
   const box = new THREE.Box3().setFromObject(modelGroup)
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
+  // Nose / face tip: farthest head vertex from the vertical body axis.
+  const headMinY = box.min.y + size.y * 0.8
+  let farthest = null
+  const world = new THREE.Vector3()
+  modelMeshes.forEach((mesh) => {
+    const attribute = mesh.geometry?.attributes?.position
+    if (!attribute) return
+    mesh.updateWorldMatrix(true, false)
+    const step = Math.max(1, Math.floor(attribute.count / 10000))
+    for (let index = 0; index < attribute.count; index += step) {
+      world.fromBufferAttribute(attribute, index).applyMatrix4(mesh.matrixWorld)
+      if (world.y < headMinY) continue
+      const dx = world.x - center.x
+      const dz = world.z - center.z
+      const dist = Math.hypot(dx, dz)
+      if (!farthest || dist > farthest.dist) {
+        farthest = { dist, point: [world.x, world.y, world.z] }
+      }
+    }
+  })
+
+  if (farthest && farthest.dist > Math.max(size.x, size.z) * 0.015) {
+    const front = inferFrontFromHeadPoint(farthest.point, toArray(center))
+    bodyFront.set(front[0], front[1], front[2])
+    return
+  }
+
+  // Fallback: previous surface heuristic often preferred the broader back —
+  // invert it so "front" matches anatomical anterior.
   const midY = box.min.y + size.y * 0.62
   const reach = Math.max(size.x, size.z, 0.2) * 0.95
   const candidates = [
@@ -455,11 +488,9 @@ function refreshBodyFrontAxis() {
       .normalize()
     if (normal.dot(forward) < 0) normal.negate()
     const facing = normal.dot(forward)
-    const chestBias = 1 - Math.min(1, Math.abs(hit.point.y - midY) / Math.max(size.y * 0.25, 0.01))
-    const score = facing * 2 + Math.max(0, chestBias)
-    if (!best || score > best.score) best = { score, forward: forward.clone() }
+    if (!best || facing > best.score) best = { score: facing, forward: forward.clone() }
   }
-  if (best) bodyFront.copy(best.forward)
+  if (best) bodyFront.copy(best.forward).negate()
 }
 
 function snapHitToBodyMidline(hit) {
@@ -482,7 +513,7 @@ function snapHitToBodyMidline(hit) {
   }
 }
 
-function faceBodyFront() {
+function faceBodySide(side) {
   if (!modelMeshes.length) return toast('請先載入人體模型', 'warn')
   if (orbitLocked) setOrbitLocked(false)
   refreshBodyFrontAxis()
@@ -500,15 +531,23 @@ function faceBodyFront() {
   const distance = Number.isFinite(currentDistance) && currentDistance > 0.05
     ? currentDistance
     : fallbackDistance
-  const pose = cameraPoseFacingForward(target, toArray(bodyFront), distance)
+  const viewAxis = side === 'back'
+    ? bodyFront.clone().negate()
+    : bodyFront.clone()
+  const pose = cameraPoseFacingAxis(target, toArray(viewAxis), distance)
 
   controls.target.set(...pose.target)
   camera.position.set(...pose.position)
   camera.up.set(...pose.up)
   camera.lookAt(controls.target)
   controls.update()
-  setStatus('已將身體正面朝向螢幕')
-  toast('正面已對準 · 任／督脈點擊會落在身體正中央')
+  if (side === 'back') {
+    setStatus('已將身體背面朝向螢幕')
+    toast('背面已對準 · 可定位督脈中線')
+  } else {
+    setStatus('已將身體正面朝向螢幕')
+    toast('正面已對準 · 可定位任脈中線')
+  }
 }
 
 function screenPointer(event) {
@@ -1214,15 +1253,20 @@ function setTool(tool) {
   if ($('#lock-orbit')) $('#lock-orbit').classList.toggle('active', orbitLocked)
   if ($('#show-meridian')) $('#show-meridian').classList.toggle('active', meridianViewMode)
   viewport.className = tool === 'navigate' ? '' : 'placing'
-  const midlineHint = selectedCatalog && !meridianById(selectedCatalog.meridianId)?.bilateral
-    ? ' · 任／督脈請先按「正面朝向」'
-    : ''
+  const midlineId = selectedCatalog && !meridianById(selectedCatalog.meridianId)?.bilateral
+    ? selectedCatalog.meridianId
+    : null
+  const midlineHint = midlineId === 'GV'
+    ? ' · 督脈請先按「背面朝向」'
+    : midlineId
+      ? ' · 任脈請先按「正面朝向」'
+      : ''
   $('#stage-help').textContent = meridianViewMode
     ? `僅檢視 · ${meridianById(sceneMeridianId())?.name || ''}穴位與經脈線（無調整點）`
     : {
       navigate: orbitLocked
         ? '旋轉已鎖定 · 淺藍中點／金色控制點可拉動曲度'
-        : '拖曳旋轉 · 「正面朝向」對準身體 · 開啟「顯示經脈」僅檢視',
+        : '拖曳旋轉 · 「正面／背面朝向」對準中線 · 開啟「顯示經脈」僅檢視',
       point: selectedCatalog
         ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}${midlineHint}`
         : '請先選擇穴位',
@@ -1335,7 +1379,7 @@ function placeAcupoint(hit) {
     ]
     selected = { type: 'acupoint', id: points[0].id, pairId }
   } else {
-    // 任脈／督脈：強制吸到身體正中央。先按「正面朝向」可避免點擊與中線偏移。
+    // 任脈／督脈：強制吸到身體正中央。任脈用「正面朝向」、督脈用「背面朝向」。
     const midlineHit = snapHitToBodyMidline(hit)
     points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
@@ -1889,7 +1933,10 @@ $('#show-meridian').addEventListener('click', () => {
   toggleMeridianViewMode()
 })
 $('#face-front').addEventListener('click', () => {
-  faceBodyFront()
+  faceBodySide('front')
+})
+$('#face-back').addEventListener('click', () => {
+  faceBodySide('back')
 })
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
