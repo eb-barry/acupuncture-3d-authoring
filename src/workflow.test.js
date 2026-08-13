@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildRouteNodesFromPlaced,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
   nextExpectedPoint,
+  orderedPlacedPointsForSide,
   placementProgress,
   routeIncludesAllPoints,
 } from './workflow.js'
@@ -43,6 +45,19 @@ describe('meridian authoring workflow', () => {
       { type: 'acupoint', code: 'LU1' },
       { type: 'acupoint', code: 'LU3' },
     ])).toBe(false)
+  })
+
+  it('builds automatic route nodes in international-code order per side', () => {
+    const placed = [
+      { id: 'r2', code: 'LU2', side: 'right', position: [1, 0, 0], normal: [1, 0, 0] },
+      { id: 'l1', code: 'LU1', side: 'left', position: [-1, 0, 0], normal: [-1, 0, 0] },
+      { id: 'l3', code: 'LU3', side: 'left', position: [-1, 1, 0], normal: [-1, 0, 0] },
+      { id: 'l2', code: 'LU2', side: 'left', position: [-1, 0.5, 0], normal: [-1, 0, 0] },
+    ]
+    expect(orderedPlacedPointsForSide(required, placed, 'left').map((point) => point.code))
+      .toEqual(['LU1', 'LU2', 'LU3'])
+    expect(buildRouteNodesFromPlaced(required, placed, 'left').map((node) => node.pointId))
+      .toEqual(['l1', 'l2', 'l3'])
   })
 
   it('hides front-surface labels from a rear camera', () => {
