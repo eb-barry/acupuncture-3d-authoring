@@ -1379,7 +1379,7 @@ function placeAcupoint(hit) {
     ]
     selected = { type: 'acupoint', id: points[0].id, pairId }
   } else {
-    // 任脈／督脈：強制吸到身體正中央。先按「正面朝向」可避免點擊與中線偏移。
+    // 任脈／督脈：強制吸到身體正中央。任脈用「正面朝向」、督脈用「背面朝向」。
     const midlineHit = snapHitToBodyMidline(hit)
     points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
