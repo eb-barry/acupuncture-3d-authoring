@@ -416,6 +416,15 @@ function offsetPosition(node, amount = 0.008) {
     .addScaledVector(new THREE.Vector3(...resolved.normal), amount)
 }
 
+/** Lift toward the camera only — keeps screen position on the click/crosshair. */
+function cameraFacingAnchor(node, amount = 0.003) {
+  const resolved = resolvedNode(node)
+  const position = new THREE.Vector3(...resolved.position)
+  const toCamera = camera.position.clone().sub(position)
+  if (toCamera.lengthSq() < 1e-12) return position
+  return position.addScaledVector(toCamera.normalize(), amount)
+}
+
 function screenPointer(event) {
   const rect = renderer.domElement.getBoundingClientRect()
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
@@ -819,7 +828,8 @@ function rebuildAnnotations() {
       const isSelected = selected?.type === 'acupoint'
         && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
       const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
-      const anchor = offsetPosition(point, 0.006)
+      // Camera-facing lift only: normal-offset made neck points (e.g. 天突) drift off the crosshair.
+      const anchor = cameraFacingAnchor(point, 0.003)
       const marker = new THREE.Mesh(
         new THREE.SphereGeometry(0.5, 20, 16),
         createGlossySphereMaterial(point.color, {
@@ -848,6 +858,9 @@ function updateMarkerScales() {
   const viewportHeight = Math.max(viewport.clientHeight, 1)
   const fov = THREE.MathUtils.degToRad(camera.fov)
   markerVisuals.forEach(({ mesh, label, point }) => {
+    const anchor = cameraFacingAnchor(point, 0.003)
+    mesh.position.copy(anchor)
+    if (label) label.position.copy(anchor)
     const distance = camera.position.distanceTo(mesh.position)
     const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
     const diameter = 2 * distance * Math.tan(fov / 2) * pixelSize / viewportHeight
@@ -1233,12 +1246,8 @@ function placeAcupoint(hit) {
     ]
     selected = { type: 'acupoint', id: points[0].id, pairId }
   } else {
-    const midlineHit = projectNearSurfaceOrFallback(
-      [0, hit.position[1], hit.position[2]],
-      [0, hit.normal[1], hit.normal[2]],
-      hit,
-    )
-    points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
+    // Keep the exact surface hit under the crosshair — do not snap/remap midline.
+    points = [makePoint(selectedCatalog, 'midline', null, hit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
   }
   syncSceneMeridianFilter(meridian.id)
