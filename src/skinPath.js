@@ -47,10 +47,20 @@ export function segmentStandoff(t, normalDot) {
   return 0.14 + wrap * 0.18 * arch
 }
 
-/** Tube radius in world units from the UI linewidth (px-ish). */
+/**
+ * Convert UI pixel line width to world-space tube radius at a camera distance.
+ * Matches on-screen stroke width: diameter ≈ pixelWidth px.
+ */
+export function pixelWidthToWorldRadius(pixelWidth, distance, fovDeg, viewportHeight) {
+  const height = Math.max(Number(viewportHeight) || 1, 1)
+  const fov = (Number(fovDeg) || 45) * Math.PI / 180
+  const worldPerPixel = (2 * Math.max(Number(distance) || 0.01, 0.01) * Math.tan(fov / 2)) / height
+  return Math.max(0.00035, (Number(pixelWidth) || 4) * worldPerPixel * 0.5)
+}
+
+/** @deprecated use pixelWidthToWorldRadius with live camera metrics */
 export function meridianTubeRadius(lineWidth) {
-  const width = Number(lineWidth) || 3
-  return Math.min(0.01, Math.max(0.0028, width * 0.00115))
+  return pixelWidthToWorldRadius(lineWidth, 2.4, 40, 820)
 }
 
 export function length3(v) {
