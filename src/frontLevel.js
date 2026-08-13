@@ -1,13 +1,33 @@
 /** Ideal slight elevation above the horizontal when viewing the front. */
 export const IDEAL_FRONT_ELEVATION = 0.08
 
-/** Radians — body faces camera closely enough for midline placement. */
-export const FRONT_YAW_TOLERANCE = 0.08
-export const FRONT_PITCH_TOLERANCE = 0.1
+/**
+ * Camera pose that looks straight at the body front (no yaw/roll skew).
+ * `bodyForward` is the outward front axis of the model in world space.
+ */
+export function cameraPoseFacingForward(target, bodyForward, distance, {
+  idealElevation = IDEAL_FRONT_ELEVATION,
+} = {}) {
+  const forward = [bodyForward[0], 0, bodyForward[2]]
+  const forwardLen = Math.hypot(forward[0], forward[2]) || 1
+  const dir = [forward[0] / forwardLen, forward[2] / forwardLen]
+  const safeDistance = Math.max(distance, 0.05)
+  const horizDist = safeDistance * Math.cos(idealElevation)
+  const yOff = safeDistance * Math.sin(idealElevation)
+  return {
+    position: [
+      target[0] + dir[0] * horizDist,
+      target[1] + yOff,
+      target[2] + dir[1] * horizDist,
+    ],
+    target: [target[0], target[1], target[2]],
+    up: [0, 1, 0],
+  }
+}
 
 /**
  * Yaw / pitch error of the camera relative to a body forward axis.
- * yawErr = 0 and pitchErr ≈ 0 means the body faces the screen squarely.
+ * Used to verify an auto face-front pose.
  */
 export function cameraFrontAlignment(
   cameraPosition,
@@ -15,8 +35,8 @@ export function cameraFrontAlignment(
   bodyForward,
   {
     idealElevation = IDEAL_FRONT_ELEVATION,
-    yawTolerance = FRONT_YAW_TOLERANCE,
-    pitchTolerance = FRONT_PITCH_TOLERANCE,
+    yawTolerance = 0.08,
+    pitchTolerance = 0.1,
   } = {},
 ) {
   const toCam = [
@@ -40,16 +60,4 @@ export function cameraFrontAlignment(
   const aligned = Math.abs(yawErr) <= yawTolerance && Math.abs(pitchErr) <= pitchTolerance
 
   return { yawErr, pitchErr, elevation, aligned }
-}
-
-/** Map alignment errors to gauge bubble offsets in percent (-50 … 50). */
-export function frontLevelBubbleOffset(yawErr, pitchErr, {
-  yawScale = Math.PI / 4,
-  pitchScale = Math.PI / 6,
-} = {}) {
-  const clamp = (value) => Math.max(-1, Math.min(1, value))
-  return {
-    x: clamp(yawErr / yawScale) * 50,
-    y: clamp(-pitchErr / pitchScale) * 50,
-  }
 }

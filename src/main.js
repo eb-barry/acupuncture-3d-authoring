@@ -19,10 +19,7 @@ import {
   validateDocument,
 } from './document.js'
 import { History } from './history.js'
-import {
-  cameraFrontAlignment,
-  frontLevelBubbleOffset,
-} from './frontLevel.js'
+import { cameraPoseFacingForward } from './frontLevel.js'
 import {
   SKIN_LIFT,
   marchStandoff,
@@ -87,18 +84,10 @@ $('#app').innerHTML = `
       <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
       <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側場景物件所選經脈）">⌁ <span>顯示經脈</span></button>
       <button class="tool" data-tool="point">＋ <span>穴位</span></button>
+      <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任／督脈中線">▣ <span>正面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
     </nav>
     <div id="viewport" tabindex="0"></div>
-    <div id="front-level" class="front-level" aria-live="polite">
-      <div class="front-level-title">正面水平儀</div>
-      <div class="front-level-gauge" aria-hidden="true">
-        <i class="front-level-cross"></i>
-        <b id="front-level-bubble" class="front-level-bubble"></b>
-      </div>
-      <div id="front-level-status" class="front-level-status">調整模型至正面</div>
-      <p class="front-level-help">任／督脈會吸到身體正中央；請先對準正面再點穴。</p>
-    </div>
     <div class="stage-help" id="stage-help">拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 平移</div>
     <div class="axis"><i class="x"></i>X <i class="y"></i>Y <i class="z"></i>Z</div>
     <div id="drop-hint">放開以載入 GLB</div>
@@ -228,7 +217,6 @@ let routeVisuals = []
 let handleVisuals = []
 let midpointVisuals = []
 let bodyFront = new THREE.Vector3(0, 0, 1)
-let frontAligned = false
 let activeBody = 'male'
 let state = emptyDocument('male')
 const documentsByBody = {
@@ -494,30 +482,33 @@ function snapHitToBodyMidline(hit) {
   }
 }
 
-function updateFrontLevel() {
-  const root = $('#front-level')
-  const bubble = $('#front-level-bubble')
-  const status = $('#front-level-status')
-  if (!root || !bubble || !status) return
-  if (!modelMeshes.length) {
-    frontAligned = false
-    root.classList.remove('aligned')
-    status.textContent = '載入模型後可對準正面'
-    return
-  }
+function faceBodyFront() {
+  if (!modelMeshes.length) return toast('請先載入人體模型', 'warn')
+  if (orbitLocked) setOrbitLocked(false)
+  refreshBodyFrontAxis()
 
-  const alignment = cameraFrontAlignment(
-    toArray(camera.position),
-    toArray(controls.target),
-    toArray(bodyFront),
-  )
-  frontAligned = alignment.aligned
-  const offset = frontLevelBubbleOffset(alignment.yawErr, alignment.pitchErr)
-  bubble.style.transform = `translate(calc(-50% + ${offset.x}%), calc(-50% + ${offset.y}%))`
-  root.classList.toggle('aligned', frontAligned)
-  status.textContent = frontAligned
-    ? '已對準正面 · 可定位任／督脈'
-    : '請旋轉至正面中央（氣泡入圈）'
+  const box = new THREE.Box3().setFromObject(modelGroup)
+  const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
+  const target = [
+    center.x,
+    box.min.y + size.y * 0.45,
+    center.z,
+  ]
+  const currentDistance = camera.position.distanceTo(controls.target)
+  const fallbackDistance = Math.max(size.x, size.y, size.z) * 2.2
+  const distance = Number.isFinite(currentDistance) && currentDistance > 0.05
+    ? currentDistance
+    : fallbackDistance
+  const pose = cameraPoseFacingForward(target, toArray(bodyFront), distance)
+
+  controls.target.set(...pose.target)
+  camera.position.set(...pose.position)
+  camera.up.set(...pose.up)
+  camera.lookAt(controls.target)
+  controls.update()
+  setStatus('已將身體正面朝向螢幕')
+  toast('正面已對準 · 任／督脈點擊會落在身體正中央')
 }
 
 function screenPointer(event) {
@@ -1223,14 +1214,17 @@ function setTool(tool) {
   if ($('#lock-orbit')) $('#lock-orbit').classList.toggle('active', orbitLocked)
   if ($('#show-meridian')) $('#show-meridian').classList.toggle('active', meridianViewMode)
   viewport.className = tool === 'navigate' ? '' : 'placing'
+  const midlineHint = selectedCatalog && !meridianById(selectedCatalog.meridianId)?.bilateral
+    ? ' · 任／督脈請先按「正面朝向」'
+    : ''
   $('#stage-help').textContent = meridianViewMode
     ? `僅檢視 · ${meridianById(sceneMeridianId())?.name || ''}穴位與經脈線（無調整點）`
     : {
       navigate: orbitLocked
         ? '旋轉已鎖定 · 淺藍中點／金色控制點可拉動曲度'
-        : '拖曳旋轉 · 開啟「顯示經脈」僅檢視連線 · 調整曲度請先「鎖定旋轉」',
+        : '拖曳旋轉 · 「正面朝向」對準身體 · 開啟「顯示經脈」僅檢視',
       point: selectedCatalog
-        ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}`
+        ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}${midlineHint}`
         : '請先選擇穴位',
     }[tool]
 }
@@ -1341,10 +1335,7 @@ function placeAcupoint(hit) {
     ]
     selected = { type: 'acupoint', id: points[0].id, pairId }
   } else {
-    // 任脈／督脈：強制吸到身體正中央（x = 0）。請先用右上角水平儀對準正面。
-    if (!frontAligned) {
-      toast('請先用右上角「正面水平儀」將身體轉到正面中央，再定位任／督脈', 'warn')
-    }
+    // 任脈／督脈：強制吸到身體正中央。先按「正面朝向」可避免點擊與中線偏移。
     const midlineHit = snapHitToBodyMidline(hit)
     points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
@@ -1664,7 +1655,6 @@ function applyModel(gltf, name, hash = null) {
   history.replace(state)
   $('#model-status').textContent = `${BODY_MODELS[body].label} · ${state.model.name}`
   refreshBodyFrontAxis()
-  updateFrontLevel()
   updateUI()
 }
 
@@ -1868,7 +1858,6 @@ renderer.setAnimationLoop((time) => {
   controls.update()
   updateMarkerScales()
   updateLabelVisibility(time)
-  updateFrontLevel()
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
 })
@@ -1898,6 +1887,9 @@ document.querySelectorAll('.tool[data-tool]').forEach((button) => button.addEven
 }))
 $('#show-meridian').addEventListener('click', () => {
   toggleMeridianViewMode()
+})
+$('#face-front').addEventListener('click', () => {
+  faceBodyFront()
 })
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
