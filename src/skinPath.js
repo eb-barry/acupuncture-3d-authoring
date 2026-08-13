@@ -1,7 +1,7 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
-/** Lift finished tubes just above the mesh for stable depth testing. */
-export const SKIN_LIFT = 0.012
+/** Tiny lift so tubes clear the mesh without looking floaty. */
+export const SKIN_LIFT = 0.0035
 
 /**
  * Unit-vector slerp. When a and b are nearly opposite (palm ↔ dorsum),
@@ -31,20 +31,17 @@ export function slerpUnitVectors(a, b, t, hint = [0, 1, 0]) {
   return normalize(add3(scale3(na, Math.cos(theta)), scale3(relative, Math.sin(theta))))
 }
 
-/** Dense samples between two acupoints; more when wrapping opposite normals. */
-export function segmentSampleCount(distance, normalDot) {
+/** Step length while marching on skin between two nodes. */
+export function surfaceStepLength(distance, normalDot) {
   const wrap = Math.max(0, 1 - normalDot)
-  return Math.max(20, Math.ceil(distance / 0.005) + Math.ceil(wrap * 32))
+  // Smaller steps on wrap segments (手掌魚際) keep a single clean arc.
+  return Math.min(0.007, Math.max(0.0022, distance / (28 + wrap * 40)))
 }
 
-/**
- * Outside cast distance from a chord sample back onto skin.
- * Large enough to clear a forearm/hand radius even mid-segment.
- */
-export function segmentStandoff(t, normalDot) {
+/** Tight outside cast while marching — large enough to leave the surface, not the limb. */
+export function marchStandoff(normalDot) {
   const wrap = Math.max(0, 1 - normalDot)
-  const arch = Math.sin(Math.PI * Math.min(1, Math.max(0, t)))
-  return 0.14 + wrap * 0.18 * arch
+  return 0.028 + wrap * 0.02
 }
 
 /**
@@ -58,9 +55,49 @@ export function pixelWidthToWorldRadius(pixelWidth, distance, fovDeg, viewportHe
   return Math.max(0.00035, (Number(pixelWidth) || 4) * worldPerPixel * 0.5)
 }
 
-/** @deprecated use pixelWidthToWorldRadius with live camera metrics */
+/** @deprecated */
 export function meridianTubeRadius(lineWidth) {
   return pixelWidthToWorldRadius(lineWidth, 2.4, 40, 820)
+}
+
+/** @deprecated chord-sample helpers kept for older tests */
+export function segmentSampleCount(distance, normalDot) {
+  const wrap = Math.max(0, 1 - normalDot)
+  return Math.max(16, Math.ceil(distance / surfaceStepLength(distance, normalDot)) + Math.ceil(wrap * 24))
+}
+
+/** @deprecated */
+export function segmentStandoff(t, normalDot) {
+  const wrap = Math.max(0, 1 - normalDot)
+  const arch = Math.sin(Math.PI * Math.min(1, Math.max(0, t)))
+  return marchStandoff(normalDot) + wrap * 0.04 * arch
+}
+
+/**
+ * Drop back-tracking spikes that create spaghetti around palm wraps.
+ * points/end are [x,y,z] arrays.
+ */
+export function pruneBacktracking(points, end) {
+  if (points.length < 4) return points
+  const cleaned = [points[0]]
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const prev = cleaned[cleaned.length - 1]
+    const curr = points[i]
+    const next = points[i + 1]
+    const toCurr = [curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2]]
+    const toNext = [next[0] - curr[0], next[1] - curr[1], next[2] - curr[2]]
+    const len1 = length3(toCurr)
+    const len2 = length3(toNext)
+    if (len1 < 1e-6) continue
+    const dot = (toCurr[0] * toNext[0] + toCurr[1] * toNext[1] + toCurr[2] * toNext[2]) / (len1 * Math.max(len2, 1e-6))
+    const distPrev = length3([end[0] - prev[0], end[1] - prev[1], end[2] - prev[2]])
+    const distCurr = length3([end[0] - curr[0], end[1] - curr[1], end[2] - curr[2]])
+    // Skip spikes that reverse and move away from the destination.
+    if (dot < -0.25 && distCurr > distPrev + 0.002) continue
+    cleaned.push(curr)
+  }
+  cleaned.push(points[points.length - 1])
+  return cleaned
 }
 
 export function length3(v) {
