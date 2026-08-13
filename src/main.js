@@ -10,7 +10,14 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh'
 import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } from './catalog.js'
-import { emptyDocument, parseDocument, validateDocument } from './document.js'
+import {
+  BODY_MODELS,
+  emptyDocument,
+  exportFileName,
+  inferBodyModel,
+  parseDocument,
+  validateDocument,
+} from './document.js'
 import { History } from './history.js'
 import {
   SKIN_LIFT,
@@ -86,6 +93,12 @@ $('#app').innerHTML = `
   <aside class="panel inspector-panel">
     <div class="panel-heading"><span>場景物件</span><b id="object-count">0</b></div>
     <div class="object-filters">
+      <label class="scene-meridian-field">人體模型
+        <select id="body-model-filter">
+          <option value="male" selected>男性 · male_character</option>
+          <option value="female">女性 · female-character</option>
+        </select>
+      </label>
       <label class="scene-meridian-field">選擇經脈
         <select id="scene-meridian-filter">${MERIDIANS.map((item) => `<option value="${item.id}">${item.name} · ${item.id}</option>`).join('')}</select>
       </label>
@@ -201,7 +214,12 @@ let markerVisuals = []
 let routeVisuals = []
 let handleVisuals = []
 let midpointVisuals = []
-let state = emptyDocument()
+let activeBody = 'male'
+let state = emptyDocument('male')
+const documentsByBody = {
+  male: structuredClone(state),
+  female: emptyDocument('female'),
+}
 const history = new History(state)
 let selected = null
 let selectedCatalog = pointsForMeridian('LU')[0]
@@ -212,7 +230,7 @@ let dragMoved = false
 let orbitLocked = false
 let meridianViewMode = false
 const linkedMeridianIds = new Set()
-const STORAGE_KEY = 'meridian-studio-document-v2'
+const storageKeyForBody = (body) => `meridian-studio-document-v2-${inferBodyModel({ body })}`
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const createModelLoader = () => {
@@ -243,22 +261,18 @@ function toast(message, kind = 'ok') {
 
 function persistState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    const body = inferBodyModel(state.model)
+    documentsByBody[body] = structuredClone(state)
+    // Session draft only — startup never auto-restores acupoint JSON.
+    localStorage.setItem(storageKeyForBody(body), JSON.stringify(state))
   } catch {
     /* ignore quota / private mode */
   }
 }
 
-function loadPersistedState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed = parseDocument(raw)
-    if (!parsed.valid || !parsed.value) return null
-    return parsed.value
-  } catch {
-    return null
-  }
+function syncBodyModelSelect() {
+  const select = $('#body-model-filter')
+  if (select) select.value = activeBody
 }
 
 function syncControlsEnabled() {
@@ -1411,29 +1425,53 @@ function applyHistory(nextState, message) {
 }
 
 function exportJSON() {
-  const result = validateDocument(state)
+  const body = inferBodyModel(state.model)
+  const preset = BODY_MODELS[body]
+  const payload = {
+    ...state,
+    model: {
+      ...state.model,
+      body,
+      name: state.model?.name || preset.fileName,
+    },
+  }
+  const result = validateDocument(payload)
   if (!result.valid) return toast(`無法匯出：${result.errors[0]}`, 'error')
+  const fileName = exportFileName(payload)
   const link = document.createElement('a')
-  link.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }))
-  link.download = `meridian-map-v2-${new Date().toISOString().slice(0, 10)}.json`
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
+  link.download = fileName
   link.click()
   URL.revokeObjectURL(link.href)
-  toast('JSON v2 已匯出，包含穴位配對與完整路線')
+  toast(`已匯出 ${fileName}（${preset.label}模型）`)
 }
 
 async function importJSON(file) {
   const result = parseDocument(await file.text())
   if (!result.valid) return toast(`匯入失敗：${result.errors[0]}`, 'error')
-  state = result.value
+  const body = inferBodyModel(result.value.model)
+  const preset = BODY_MODELS[body]
+  state = {
+    ...result.value,
+    model: {
+      ...result.value.model,
+      body,
+      name: result.value.model?.name || preset.fileName,
+    },
+  }
+  activeBody = body
+  documentsByBody[body] = structuredClone(state)
   history.replace(state)
   selected = null
   meridianViewMode = false
   linkedMeridianIds.clear()
   state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
   persistState()
+  syncBodyModelSelect()
+  await loadBodyModel(body, { keepDocument: true })
   rebuildAnnotations()
   updateUI()
-  toast(`已匯入 ${state.meridians.length} 條路線、${state.acupoints.length} 個定位點`)
+  toast(`已匯入 ${preset.label}穴位：${state.meridians.length} 條路線、${state.acupoints.length} 個定位點`)
 }
 
 function applyModel(gltf, name, hash = null) {
@@ -1504,9 +1542,18 @@ function applyModel(gltf, name, hash = null) {
   initialCamPos = camera.position.clone()
   initialTarget = controls.target.clone()
 
-  state = { ...state, model: { name, hash } }
+  const body = inferBodyModel({ ...state.model, name, body: activeBody })
+  state = {
+    ...state,
+    model: {
+      name: name || BODY_MODELS[body].fileName,
+      hash,
+      body,
+    },
+  }
+  documentsByBody[body] = structuredClone(state)
   history.replace(state)
-  $('#model-status').textContent = name
+  $('#model-status').textContent = `${BODY_MODELS[body].label} · ${state.model.name}`
   updateUI()
 }
 
@@ -1623,20 +1670,58 @@ function applySurfaceFinish(root = modelGroup) {
   })
 }
 
-async function loadDefaultModel() {
+async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
+  const body = BODY_MODELS[bodyId] ? bodyId : 'male'
+  const preset = BODY_MODELS[body]
   try {
-    const modelUrl = new URL('../models/male_character.glb', import.meta.url)
-    modelUrl.searchParams.set('v', 'viewer-1')
+    $('#model-status').textContent = `正在載入${preset.label}模型…`
+    const modelUrl = new URL(`../models/${preset.fileName}`, import.meta.url)
+    modelUrl.searchParams.set('v', 'body-1')
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
-      if (event.total) $('#model-status').textContent = `正在載入人體模型 ${Math.round(event.loaded / event.total * 100)}%`
+      if (event.total) {
+        $('#model-status').textContent = `正在載入${preset.label}模型 ${Math.round(event.loaded / event.total * 100)}%`
+      }
     })
     prepareModelMaterials(gltf)
-    applyModel(gltf, '人體模型')
-    $('#model-status').textContent = 'male_character.glb · 本機模型'
-    setStatus('人體模型已就緒')
+    activeBody = body
+    if (!keepDocument) {
+      state = structuredClone(documentsByBody[body] || emptyDocument(body))
+      history.replace(state)
+      linkedMeridianIds.clear()
+      state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
+    }
+    applyModel(gltf, preset.fileName)
+    syncBodyModelSelect()
+    setStatus(`${preset.label}模型已就緒 · 請匯入對應 JSON 穴位資料`)
+    return true
   } catch (error) {
-    toast(`預設人體載入失敗：${error.message}`, 'error')
+    toast(`${preset.label}模型載入失敗：${error.message}`, 'error')
+    return false
   }
+}
+
+async function setActiveBodyModel(bodyId) {
+  const body = BODY_MODELS[bodyId] ? bodyId : 'male'
+  if (body === activeBody) return
+  documentsByBody[activeBody] = structuredClone(state)
+  meridianViewMode = false
+  selected = null
+  orbitLocked = false
+  const lockButton = $('#lock-orbit')
+  if (lockButton) {
+    lockButton.classList.remove('active')
+    lockButton.setAttribute('aria-pressed', 'false')
+  }
+  syncControlsEnabled()
+  await loadBodyModel(body, { keepDocument: false })
+  rebuildAnnotations()
+  updateUI()
+  setTool('navigate')
+  toast(`已切換為${BODY_MODELS[body].label}模型（穴位資料各自獨立）`)
+}
+
+async function loadDefaultModel() {
+  await loadBodyModel('male', { keepDocument: true })
 }
 
 async function loadModel(file) {
@@ -1645,7 +1730,10 @@ async function loadModel(file) {
   try {
     const gltf = await createModelLoader().loadAsync(url)
     prepareModelMaterials(gltf)
+    const inferred = inferBodyModel({ name: file.name, body: activeBody })
+    activeBody = inferred
     applyModel(gltf, file.name)
+    syncBodyModelSelect()
     toast(`已載入 ${file.name}`)
   } catch (error) {
     toast(`模型載入失敗：${error.message}`, 'error')
@@ -1872,13 +1960,15 @@ viewport.addEventListener('drop', (event) => {
 })
 
 renderCatalog()
-const persisted = loadPersistedState()
-if (persisted) {
-  state = persisted
-  history.replace(state)
-  state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
-  toast(`已回復先前編輯：${state.meridians.length} 條經脈、${state.acupoints.length} 個穴位`)
-}
+// Fresh start: default male model, no auto-loaded acupoint JSON.
+state = emptyDocument('male')
+documentsByBody.male = structuredClone(state)
+documentsByBody.female = emptyDocument('female')
+history.replace(state)
+linkedMeridianIds.clear()
+meridianViewMode = false
+selected = null
+syncBodyModelSelect()
 rebuildAnnotations()
 updateUI()
 resize()
@@ -1889,5 +1979,8 @@ controls.addEventListener('end', () => {
     lastTubeZoom = distance
     rebuildAnnotations()
   }
+})
+$('#body-model-filter').addEventListener('change', (event) => {
+  setActiveBodyModel(event.target.value)
 })
 loadDefaultModel()

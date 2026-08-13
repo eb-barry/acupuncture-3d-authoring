@@ -1,18 +1,43 @@
 import Ajv from 'ajv'
 
-export const emptyDocument = () => ({
-  format: 'acupuncture-3d',
-  version: 2,
-  model: { name: null, hash: null },
-  settings: {
-    markerSize: 12,
-    markerColor: '#ef4444',
-    lineColor: '#3b82f6',
-    lineWidth: 4,
+export const BODY_MODELS = {
+  male: {
+    id: 'male',
+    label: '男性',
+    fileName: 'male_character.glb',
   },
-  meridians: [],
-  acupoints: [],
-})
+  female: {
+    id: 'female',
+    label: '女性',
+    fileName: 'female-character.glb',
+  },
+}
+
+export function inferBodyModel(model = {}) {
+  if (model?.body === 'male' || model?.body === 'female') return model.body
+  const name = String(model?.name || '').toLowerCase()
+  if (name.includes('female')) return 'female'
+  if (name.includes('male')) return 'male'
+  return 'male'
+}
+
+export const emptyDocument = (body = 'male') => {
+  const resolved = BODY_MODELS[body] ? body : 'male'
+  const preset = BODY_MODELS[resolved]
+  return {
+    format: 'acupuncture-3d',
+    version: 2,
+    model: { name: preset.fileName, hash: null, body: resolved },
+    settings: {
+      markerSize: 12,
+      markerColor: '#ef4444',
+      lineColor: '#3b82f6',
+      lineWidth: 4,
+    },
+    meridians: [],
+    acupoints: [],
+  }
+}
 
 const vector = {
   type: 'array',
@@ -33,10 +58,11 @@ export const documentSchema = {
     model: {
       type: 'object',
       additionalProperties: false,
-      required: ['name', 'hash'],
+      required: ['name', 'hash', 'body'],
       properties: {
         name: { type: ['string', 'null'] },
         hash: { type: ['string', 'null'] },
+        body: { enum: ['male', 'female'] },
       },
     },
     settings: {
@@ -136,34 +162,63 @@ export function parseDocument(text) {
 }
 
 export function migrateDocument(value) {
-  if (value?.format !== 'acupuncture-3d' || value.version !== 1) return value
-  const defaults = emptyDocument()
-  return {
-    ...defaults,
-    model: { name: value.model?.name ?? null, hash: null },
-    meridians: (value.meridians || []).map((route) => ({
-      id: route.id,
-      pairId: null,
-      meridianId: 'UN',
-      name: route.name,
-      color: ['#ef4444', '#3b82f6', '#22c55e'].includes(route.color) ? route.color : defaults.settings.lineColor,
-      width: defaults.settings.lineWidth,
-      side: route.side === 'bilateral' ? 'left' : route.side,
-      nodes: route.nodes.map((node) => ({
-        type: 'control',
-        pointId: null,
-        position: node.position,
-        normal: node.normal,
+  if (value?.format !== 'acupuncture-3d') return value
+
+  if (value.version === 1) {
+    const defaults = emptyDocument(inferBodyModel(value.model))
+    return {
+      ...defaults,
+      model: {
+        name: value.model?.name ?? defaults.model.name,
+        hash: null,
+        body: defaults.model.body,
+      },
+      meridians: (value.meridians || []).map((route) => ({
+        id: route.id,
+        pairId: null,
+        meridianId: 'UN',
+        name: route.name,
+        color: ['#ef4444', '#3b82f6', '#22c55e'].includes(route.color) ? route.color : defaults.settings.lineColor,
+        width: defaults.settings.lineWidth,
+        side: route.side === 'bilateral' ? 'left' : route.side,
+        nodes: route.nodes.map((node) => ({
+          type: 'control',
+          pointId: null,
+          position: node.position,
+          normal: node.normal,
+        })),
       })),
-    })),
-    acupoints: (value.acupoints || []).map((point) => ({
-      ...point,
-      pairId: null,
-      meridianId: 'UN',
-      meridianName: '未分類',
-      sequence: 1,
-      color: defaults.settings.markerColor,
-      size: defaults.settings.markerSize,
-    })),
+      acupoints: (value.acupoints || []).map((point) => ({
+        ...point,
+        pairId: null,
+        meridianId: 'UN',
+        meridianName: '未分類',
+        sequence: 1,
+        color: defaults.settings.markerColor,
+        size: defaults.settings.markerSize,
+      })),
+    }
   }
+
+  if (value.version === 2) {
+    const body = inferBodyModel(value.model)
+    const preset = BODY_MODELS[body]
+    return {
+      ...value,
+      model: {
+        name: value.model?.name ?? preset.fileName,
+        hash: value.model?.hash ?? null,
+        body,
+      },
+    }
+  }
+
+  return value
+}
+
+/** Download basename that distinguishes male vs female meridian JSON. */
+export function exportFileName(document, date = new Date()) {
+  const body = inferBodyModel(document?.model)
+  const day = date.toISOString().slice(0, 10)
+  return `meridian-map-v2-${body}-${day}.json`
 }
