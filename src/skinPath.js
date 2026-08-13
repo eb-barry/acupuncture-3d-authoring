@@ -41,7 +41,7 @@ export function surfaceStepLength(distance, normalDot) {
 /** Tight outside cast while marching — large enough to leave the surface, not the limb. */
 export function marchStandoff(normalDot) {
   const wrap = Math.max(0, 1 - normalDot)
-  return 0.028 + wrap * 0.02
+  return 0.026 + wrap * 0.012
 }
 
 /**
