@@ -14,10 +14,11 @@ import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
 import {
   SKIN_LIFT,
+  marchStandoff,
   pixelWidthToWorldRadius,
-  segmentSampleCount,
-  segmentStandoff,
+  pruneBacktracking,
   slerpUnitVectors,
+  surfaceStepLength,
 } from './skinPath.js'
 import {
   buildRouteNodesFromPlaced,
@@ -431,7 +432,7 @@ function appendSkinPoint(points, point, previousRef) {
   previousRef.current = point
 }
 
-/** Cast from far outside along a guide normal onto the nearest skin hit. */
+/** Cast from a short stand-off along a guide normal onto the nearest skin hit. */
 function projectFromOutside(chordPoint, guide, standoff) {
   const normal = new THREE.Vector3(...guide)
   if (normal.lengthSq() < 1e-10) return null
@@ -448,56 +449,89 @@ function projectFromOutside(chordPoint, guide, standoff) {
 }
 
 /**
- * One continuous skin segment A→B. Samples stay outside via large standoff
- * casts so depth testing does not carve the path into dashes.
+ * March along the mesh from A to B as a single polyline.
+ * Opposite-normal segments (太淵→魚際→少商) orbit the limb instead of
+ * cutting through / spawning multiple floating chords.
  */
 function skinSegmentPoints(a, b) {
-  const pa = new THREE.Vector3(...a.position)
-  const pb = new THREE.Vector3(...b.position)
-  const na = new THREE.Vector3(...a.normal).normalize()
-  const nb = new THREE.Vector3(...b.normal).normalize()
-  const distance = pa.distanceTo(pb)
-  const normalDot = na.dot(nb)
-  const wrap = Math.max(0, 1 - normalDot)
-  const hintVec = pb.clone().sub(pa)
-  const hint = hintVec.lengthSq() > 1e-8 ? toArray(hintVec.normalize()) : [0, 1, 0]
-  const steps = segmentSampleCount(distance, normalDot)
-  const out = []
-  const previousRef = { current: null }
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  let pos = start.clone()
+  let normal = new THREE.Vector3(...a.normal).normalize()
+  const endNormal = new THREE.Vector3(...b.normal).normalize()
+  const totalDist = Math.max(pos.distanceTo(end), 1e-6)
+  const normalDot = normal.dot(endNormal)
+  const stepLen = surfaceStepLength(totalDist, normalDot)
+  const standoff = marchStandoff(normalDot)
+  const maxSteps = Math.max(36, Math.ceil(totalDist / stepLen) * 6 + 48)
+  const hintVec = end.clone().sub(start)
+  const hint = hintVec.lengthSq() > 1e-8 ? hintVec.normalize() : new THREE.Vector3(0, 1, 0)
 
-  for (let step = 0; step <= steps; step += 1) {
-    const t = step / steps
-    if (step === 0) {
-      appendSkinPoint(out, offsetPosition(a, SKIN_LIFT), previousRef)
-      continue
+  const raw = [pos.clone().addScaledVector(normal, SKIN_LIFT)]
+
+  for (let step = 0; step < maxSteps; step += 1) {
+    const toEnd = end.clone().sub(pos)
+    const remaining = toEnd.length()
+    if (remaining < stepLen * 0.85) break
+
+    let tangent = toEnd.clone().addScaledVector(normal, -toEnd.dot(normal))
+    if (tangent.lengthSq() < 1e-10 || tangent.length() < remaining * 0.18) {
+      let axis = new THREE.Vector3().crossVectors(normal, endNormal)
+      if (axis.lengthSq() < 1e-8) axis.crossVectors(normal, hint)
+      if (axis.lengthSq() < 1e-8) axis.set(0, 1, 0).cross(normal)
+      axis.normalize()
+      tangent = new THREE.Vector3().crossVectors(axis, normal)
+      if (tangent.dot(toEnd) < 0) tangent.negate()
+      const along = hint.clone().addScaledVector(normal, -hint.dot(normal))
+      if (along.lengthSq() > 1e-8) tangent.lerp(along.normalize(), 0.45)
     }
-    if (step === steps) {
-      appendSkinPoint(out, offsetPosition(b, SKIN_LIFT), previousRef)
-      continue
-    }
+    tangent.normalize().multiplyScalar(Math.min(stepLen, remaining * 0.4))
 
-    const guide = slerpUnitVectors(toArray(na), toArray(nb), t, hint)
-    const chord = pa.clone().lerp(pb, t)
-    const standoff = segmentStandoff(t, normalDot)
-    let hit = projectFromOutside(chord, guide, standoff)
-      || projectFromOutside(chord, guide, standoff * 1.7)
-      || projectNearSurface(toArray(chord.clone().addScaledVector(new THREE.Vector3(...guide), standoff)), guide)
-
-    const maxAway = Math.max(0.1, distance * 0.85) + wrap * 0.14
-    if (hit) {
-      const hitPos = new THREE.Vector3(...hit.position)
-      if (hitPos.distanceTo(chord) > maxAway) hit = null
-    }
-
+    const progress = 1 - remaining / totalDist
+    const guide = slerpUnitVectors(
+      toArray(normal),
+      toArray(endNormal),
+      Math.min(0.9, progress + 0.05),
+      toArray(hint),
+    )
+    const probe = pos.clone().add(tangent).addScaledVector(new THREE.Vector3(...guide), standoff)
+    let hit = projectFromOutside(probe, guide, standoff)
     if (!hit) {
-      // Prefer a short outside arc over a hole — still depth-tested later.
-      const fallback = chord.clone().addScaledVector(new THREE.Vector3(...guide), SKIN_LIFT + 0.02)
-      appendSkinPoint(out, fallback, previousRef)
-      continue
+      hit = projectFromOutside(
+        pos.clone().add(tangent).addScaledVector(normal, standoff),
+        toArray(normal),
+        standoff,
+      )
     }
-    appendSkinPoint(out, offsetPosition(hit, SKIN_LIFT), previousRef)
+
+    const maxJump = Math.max(stepLen * 3.5, 0.028)
+    if (hit) {
+      const next = new THREE.Vector3(...hit.position)
+      // Keep the march local — reject torso/finger false hits.
+      if (next.distanceTo(pos) <= maxJump && next.distanceTo(end) <= remaining + maxJump) {
+        pos.copy(next)
+        normal.set(...hit.normal).normalize()
+      } else {
+        pos.add(tangent)
+        const tight = projectFromOutside(pos.clone().addScaledVector(normal, standoff), toArray(normal), standoff)
+        if (tight) {
+          const tightPos = new THREE.Vector3(...tight.position)
+          if (tightPos.distanceTo(pos) <= maxJump) {
+            pos.copy(tightPos)
+            normal.set(...tight.normal).normalize()
+          }
+        }
+      }
+    } else {
+      pos.add(tangent)
+    }
+
+    raw.push(pos.clone().addScaledVector(normal, SKIN_LIFT))
   }
-  return out
+
+  raw.push(end.clone().addScaledVector(endNormal, SKIN_LIFT))
+  const pruned = pruneBacktracking(raw.map(toArray), toArray(end))
+  return pruned.map((point) => new THREE.Vector3(...point))
 }
 
 /** Continuous on-skin polyline through every route node, endpoint-exact. */
