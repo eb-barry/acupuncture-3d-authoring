@@ -20,6 +20,10 @@ import {
 } from './document.js'
 import { History } from './history.js'
 import {
+  cameraFrontAlignment,
+  frontLevelBubbleOffset,
+} from './frontLevel.js'
+import {
   SKIN_LIFT,
   marchStandoff,
   pixelWidthToWorldRadius,
@@ -86,6 +90,15 @@ $('#app').innerHTML = `
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
     </nav>
     <div id="viewport" tabindex="0"></div>
+    <div id="front-level" class="front-level" aria-live="polite">
+      <div class="front-level-title">正面水平儀</div>
+      <div class="front-level-gauge" aria-hidden="true">
+        <i class="front-level-cross"></i>
+        <b id="front-level-bubble" class="front-level-bubble"></b>
+      </div>
+      <div id="front-level-status" class="front-level-status">調整模型至正面</div>
+      <p class="front-level-help">任／督脈會吸到身體正中央；請先對準正面再點穴。</p>
+    </div>
     <div class="stage-help" id="stage-help">拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 平移</div>
     <div class="axis"><i class="x"></i>X <i class="y"></i>Y <i class="z"></i>Z</div>
     <div id="drop-hint">放開以載入 GLB</div>
@@ -214,6 +227,8 @@ let markerVisuals = []
 let routeVisuals = []
 let handleVisuals = []
 let midpointVisuals = []
+let bodyFront = new THREE.Vector3(0, 0, 1)
+let frontAligned = false
 let activeBody = 'male'
 let state = emptyDocument('male')
 const documentsByBody = {
@@ -423,6 +438,86 @@ function cameraFacingAnchor(node, amount = 0.003) {
   const toCamera = camera.position.clone().sub(position)
   if (toCamera.lengthSq() < 1e-12) return position
   return position.addScaledVector(toCamera.normalize(), amount)
+}
+
+function refreshBodyFrontAxis() {
+  if (!modelMeshes.length) return
+  const box = new THREE.Box3().setFromObject(modelGroup)
+  const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
+  const midY = box.min.y + size.y * 0.62
+  const reach = Math.max(size.x, size.z, 0.2) * 0.95
+  const candidates = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ]
+  let best = null
+  for (const forward of candidates) {
+    const origin = center.clone().addScaledVector(forward, reach)
+    origin.y = midY
+    const dir = forward.clone().negate()
+    const caster = new THREE.Raycaster(origin, dir, 0, reach * 2.2)
+    caster.firstHitOnly = true
+    const hit = caster.intersectObjects(modelMeshes, false)[0]
+    if (!hit?.face) continue
+    const normal = hit.face.normal.clone()
+      .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
+      .normalize()
+    if (normal.dot(forward) < 0) normal.negate()
+    const facing = normal.dot(forward)
+    const chestBias = 1 - Math.min(1, Math.abs(hit.point.y - midY) / Math.max(size.y * 0.25, 0.01))
+    const score = facing * 2 + Math.max(0, chestBias)
+    if (!best || score > best.score) best = { score, forward: forward.clone() }
+  }
+  if (best) bodyFront.copy(best.forward)
+}
+
+function snapHitToBodyMidline(hit) {
+  const guide = [0, hit.normal[1], hit.normal[2]]
+  if (Math.hypot(guide[1], guide[2]) < 1e-6) {
+    guide[1] = 0
+    guide[2] = bodyFront.z !== 0 ? Math.sign(bodyFront.z) || 1 : 1
+  }
+  const snapped = projectNearSurfaceOrFallback(
+    [0, hit.position[1], hit.position[2]],
+    guide,
+    {
+      position: [0, hit.position[1], hit.position[2]],
+      normal: hit.normal,
+    },
+  )
+  return {
+    position: [0, snapped.position[1], snapped.position[2]],
+    normal: snapped.normal,
+  }
+}
+
+function updateFrontLevel() {
+  const root = $('#front-level')
+  const bubble = $('#front-level-bubble')
+  const status = $('#front-level-status')
+  if (!root || !bubble || !status) return
+  if (!modelMeshes.length) {
+    frontAligned = false
+    root.classList.remove('aligned')
+    status.textContent = '載入模型後可對準正面'
+    return
+  }
+
+  const alignment = cameraFrontAlignment(
+    toArray(camera.position),
+    toArray(controls.target),
+    toArray(bodyFront),
+  )
+  frontAligned = alignment.aligned
+  const offset = frontLevelBubbleOffset(alignment.yawErr, alignment.pitchErr)
+  bubble.style.transform = `translate(calc(-50% + ${offset.x}%), calc(-50% + ${offset.y}%))`
+  root.classList.toggle('aligned', frontAligned)
+  status.textContent = frontAligned
+    ? '已對準正面 · 可定位任／督脈'
+    : '請旋轉至正面中央（氣泡入圈）'
 }
 
 function screenPointer(event) {
@@ -1246,8 +1341,12 @@ function placeAcupoint(hit) {
     ]
     selected = { type: 'acupoint', id: points[0].id, pairId }
   } else {
-    // Keep the exact surface hit under the crosshair — do not snap/remap midline.
-    points = [makePoint(selectedCatalog, 'midline', null, hit)]
+    // 任脈／督脈：強制吸到身體正中央（x = 0）。請先用右上角水平儀對準正面。
+    if (!frontAligned) {
+      toast('請先用右上角「正面水平儀」將身體轉到正面中央，再定位任／督脈', 'warn')
+    }
+    const midlineHit = snapHitToBodyMidline(hit)
+    points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
   }
   syncSceneMeridianFilter(meridian.id)
@@ -1354,11 +1453,12 @@ function placeAt(event) {
 function updatePairedPoint(pointId, hit) {
   const point = getPoint(pointId)
   if (!point) return state
-  const mirrored = point.pairId ? mirroredNode(hit) : null
+  const nextHit = point.side === 'midline' ? snapHitToBodyMidline(hit) : hit
+  const mirrored = point.pairId ? mirroredNode(nextHit) : null
   return {
     ...state,
     acupoints: state.acupoints.map((item) => {
-      if (item.id === point.id) return { ...item, position: hit.position, normal: hit.normal }
+      if (item.id === point.id) return { ...item, position: nextHit.position, normal: nextHit.normal }
       if (point.pairId && item.pairId === point.pairId) {
         return { ...item, position: mirrored.position, normal: mirrored.normal }
       }
@@ -1563,6 +1663,8 @@ function applyModel(gltf, name, hash = null) {
   documentsByBody[body] = structuredClone(state)
   history.replace(state)
   $('#model-status').textContent = `${BODY_MODELS[body].label} · ${state.model.name}`
+  refreshBodyFrontAxis()
+  updateFrontLevel()
   updateUI()
 }
 
@@ -1766,6 +1868,7 @@ renderer.setAnimationLoop((time) => {
   controls.update()
   updateMarkerScales()
   updateLabelVisibility(time)
+  updateFrontLevel()
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
 })

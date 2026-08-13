@@ -178,6 +178,82 @@ button:disabled { opacity: .35; cursor: default; }
 .axis { position: absolute; right: 14px; bottom: 14px; display: flex; gap: 5px; align-items: center; font-size: 9px; color: var(--muted); }
 .axis i { width: 13px; height: 2px; display: inline-block; }
 .axis .x { background: #d26c66; }.axis .y { background: #65b98d; }.axis .z { background: #668cc5; }
+
+.front-level {
+  position: absolute;
+  z-index: 3;
+  top: 14px;
+  right: 14px;
+  width: 148px;
+  padding: 10px 10px 8px;
+  border: 1px solid #3a4d47;
+  border-radius: 8px;
+  background: rgba(12, 18, 16, .88);
+  color: #9aada6;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+}
+.front-level.aligned {
+  border-color: #3f7f66;
+  background: rgba(12, 28, 22, .9);
+}
+.front-level-title {
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: #d7e4df;
+  margin-bottom: 8px;
+}
+.front-level-gauge {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  margin: 0 auto 8px;
+  border-radius: 50%;
+  border: 1px solid #4a635b;
+  background:
+    radial-gradient(circle at center, rgba(56, 120, 96, .18) 0 18%, transparent 19%),
+    linear-gradient(rgba(80, 104, 96, .35) 0 1px, transparent 1px) center/100% 50%,
+    linear-gradient(90deg, rgba(80, 104, 96, .35) 0 1px, transparent 1px) center/50% 100%,
+    #101916;
+}
+.front-level-cross {
+  position: absolute;
+  inset: 18%;
+  border: 1px dashed rgba(120, 150, 140, .35);
+  border-radius: 50%;
+}
+.front-level-bubble {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  border-radius: 50%;
+  background: #d7a15c;
+  box-shadow: 0 0 0 2px rgba(20, 16, 10, .55);
+  transform: translate(-50%, -50%);
+  transition: background .15s ease;
+}
+.front-level.aligned .front-level-bubble {
+  background: #5dcc9a;
+  box-shadow: 0 0 0 2px rgba(16, 40, 28, .65), 0 0 12px rgba(70, 190, 140, .45);
+}
+.front-level-status {
+  text-align: center;
+  font-size: 10px;
+  color: #e2b57a;
+  line-height: 1.4;
+}
+.front-level.aligned .front-level-status { color: #8fdbb5; }
+.front-level-help {
+  margin: 6px 0 0;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1.45;
+  color: #7f928b;
+}
 #drop-hint {
   position: absolute; inset: 18px; z-index: 5; display: none; place-items: center; border: 2px dashed var(--gold);
   background: rgba(12, 18, 17, .86); color: #f4d2a6; font: 600 18px 'Noto Serif TC', serif;
