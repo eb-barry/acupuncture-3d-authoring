@@ -184,9 +184,15 @@ button:disabled { opacity: .35; cursor: default; }
 }
 #drop-hint.visible { display: grid; }
 
-.object-filters { flex: 0 0 auto; display: grid; grid-template-columns: 1fr 78px; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
-.object-filters .search { min-width: 0; }
-.object-filters select { min-width: 0; border: 1px solid var(--line); background: #0e1614; border-radius: 4px; padding: 7px; font-size: 10px; }
+.object-filters { flex: 0 0 auto; display: grid; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+.object-filters .scene-meridian-field {
+  display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 11px; min-width: 0;
+}
+.object-filters select {
+  width: 100%; min-width: 0; border: 1px solid var(--line); background: #0e1614; border-radius: 4px; padding: 7px; font-size: 10px;
+}
+body.meridian-view-mode .style-settings,
+body.meridian-view-mode #lock-orbit { opacity: .55; pointer-events: none; }
 .objects {
   flex: 1 1 28%;
   min-height: 96px;
