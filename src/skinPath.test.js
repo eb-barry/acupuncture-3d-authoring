@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   SKIN_LIFT,
-  meridianTubeRadius,
+  pixelWidthToWorldRadius,
   segmentSampleCount,
   segmentStandoff,
   slerpUnitVectors,
@@ -24,10 +24,13 @@ describe('skin path wrapping', () => {
     expect(segmentStandoff(0, -1)).toBeLessThan(segmentStandoff(0.5, -1))
   })
 
-  it('keeps a modest skin lift and positive tube radius', () => {
+  it('keeps a modest skin lift and maps pixel width to screen-proportional radius', () => {
     expect(SKIN_LIFT).toBeGreaterThan(0.005)
     expect(SKIN_LIFT).toBeLessThan(0.03)
-    expect(meridianTubeRadius(3)).toBeGreaterThan(0.002)
-    expect(meridianTubeRadius(3)).toBeLessThan(0.01)
+    const near = pixelWidthToWorldRadius(4, 0.6, 40, 800)
+    const far = pixelWidthToWorldRadius(4, 6, 40, 800)
+    expect(near).toBeLessThan(far)
+    expect(pixelWidthToWorldRadius(8, 2, 40, 800))
+      .toBeCloseTo(pixelWidthToWorldRadius(4, 2, 40, 800) * 2, 5)
   })
 })

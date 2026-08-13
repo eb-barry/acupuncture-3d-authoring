@@ -133,21 +133,14 @@ button:disabled { opacity: .35; cursor: default; }
 }
 .point-label.selected { color: #fff; border-color: var(--gold); background: rgba(91, 61, 30, .92); }
 .point-marker {
-  /* Box is exactly the color dot so CSS2D's translate(-50%,-50%) anchors on the hit. */
+  /* Anchor box matches the glossy 3D sphere footprint; name sits beside it. */
   position: relative;
   display: block;
   width: var(--marker-size, 12px);
   height: var(--marker-size, 12px);
   pointer-events: none;
 }
-.point-marker .marker-dot {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: var(--marker-color, #ef4444);
-  box-shadow: none;
-  border: 0;
-}
+.point-marker .marker-dot { display: none; }
 .point-marker .point-name {
   position: absolute;
   left: calc(100% + 6px);
@@ -162,10 +155,6 @@ button:disabled { opacity: .35; cursor: default; }
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
-}
-.point-marker.selected .marker-dot {
-  /* Selection is color-only — no extra white/gold ring around the pixel marker. */
-  filter: brightness(1.08);
 }
 .point-marker.selected .point-name {
   color: #fff;

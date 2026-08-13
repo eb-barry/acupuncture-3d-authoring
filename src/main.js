@@ -14,7 +14,7 @@ import { emptyDocument, parseDocument, validateDocument } from './document.js'
 import { History } from './history.js'
 import {
   SKIN_LIFT,
-  meridianTubeRadius,
+  pixelWidthToWorldRadius,
   segmentSampleCount,
   segmentStandoff,
   slerpUnitVectors,
@@ -72,6 +72,7 @@ $('#app').innerHTML = `
       <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
       <button class="tool" data-tool="path">⌁ <span>經脈</span></button>
       <button class="tool" data-tool="point">＋ <span>穴位</span></button>
+      <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
       <button id="finish-path" class="finish hidden">完成路徑</button>
     </nav>
     <div id="viewport" tabindex="0"></div>
@@ -129,7 +130,7 @@ const pmrem = new THREE.PMREMGenerator(renderer)
 // Keep a weak IBL only for specular accents; diffuse fill comes from key/rim lights.
 const roomEnv = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
 scene.environment = roomEnv
-scene.environmentIntensity = 0.08
+scene.environmentIntensity = 0.18
 
 const hemiLight = new THREE.HemisphereLight(0xf2f0ea, 0x0d0f14, 0.04)
 scene.add(hemiLight)
@@ -195,6 +196,7 @@ let modelMeshes = []
 let markerVisuals = []
 let routeVisuals = []
 let handleVisuals = []
+let midpointVisuals = []
 let state = emptyDocument()
 const history = new History(state)
 let selected = null
@@ -204,6 +206,9 @@ let draftNodes = []
 let draftSide = null
 let pointerDown = null
 let dragging = null
+let dragMoved = false
+let orbitLocked = false
+const STORAGE_KEY = 'meridian-studio-document-v2'
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const createModelLoader = () => {
@@ -232,8 +237,49 @@ function toast(message, kind = 'ok') {
   toastTimer = setTimeout(() => { element.className = '' }, 3600)
 }
 
+function persistState() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function loadPersistedState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = parseDocument(raw)
+    if (!parsed.valid || !parsed.value) return null
+    return parsed.value
+  } catch {
+    return null
+  }
+}
+
+function syncControlsEnabled() {
+  if (dragging) {
+    controls.enabled = false
+    return
+  }
+  controls.enabled = true
+  controls.enableRotate = !orbitLocked
+}
+
+function setOrbitLocked(locked) {
+  orbitLocked = Boolean(locked)
+  const button = $('#lock-orbit')
+  if (button) {
+    button.classList.toggle('active', orbitLocked)
+    button.setAttribute('aria-pressed', orbitLocked ? 'true' : 'false')
+  }
+  syncControlsEnabled()
+  setStatus(orbitLocked ? '模型旋轉已鎖定，可安心調整經脈曲度' : '模型旋轉已解除鎖定')
+}
+
 function commit(nextState, message) {
   state = history.commit(nextState)
+  persistState()
   rebuildAnnotations()
   updateUI()
   setStatus(message)
@@ -288,6 +334,7 @@ function annotationHit(event, types) {
   const objects = [
     ...markerVisuals.map((entry) => entry.mesh),
     ...handleVisuals.map((entry) => entry.mesh),
+    ...midpointVisuals.map((entry) => entry.mesh),
     ...routeVisuals.map((entry) => entry.line),
   ]
   return raycaster.intersectObjects(objects, false)
@@ -498,18 +545,26 @@ function createPolylineCurve(points) {
 function createMeridianTube(points, color, lineWidth) {
   const curve = createPolylineCurve(points)
   const tubularSegments = Math.max(48, (points.length - 1) * 3)
-  const geometry = new THREE.TubeGeometry(
-    curve,
-    tubularSegments,
-    meridianTubeRadius(lineWidth),
-    8,
-    false,
+  const anchor = points[Math.floor(points.length / 2)] || controls.target
+  const radius = pixelWidthToWorldRadius(
+    lineWidth,
+    camera.position.distanceTo(anchor),
+    camera.fov,
+    viewport.clientHeight,
   )
-  const material = new THREE.MeshBasicMaterial({
+  const geometry = new THREE.TubeGeometry(curve, tubularSegments, radius, 10, false)
+  const material = new THREE.MeshPhysicalMaterial({
     color,
+    roughness: 0.22,
+    metalness: 0.42,
+    clearcoat: 1,
+    clearcoatRoughness: 0.12,
+    reflectivity: 0.65,
+    envMapIntensity: 1.25,
     depthTest: true,
     depthWrite: true,
     transparent: false,
+    opacity: 1,
   })
   const mesh = new THREE.Mesh(geometry, material)
   mesh.renderOrder = 2
@@ -517,12 +572,86 @@ function createMeridianTube(points, color, lineWidth) {
   return mesh
 }
 
+function createGlossySphereMaterial(color, { emissive = 0x000000, emissiveIntensity = 0 } = {}) {
+  return new THREE.MeshPhysicalMaterial({
+    color,
+    roughness: 0.2,
+    metalness: 0.28,
+    clearcoat: 1,
+    clearcoatRoughness: 0.18,
+    reflectivity: 0.55,
+    envMapIntensity: 1.1,
+    emissive,
+    emissiveIntensity,
+    depthTest: true,
+    depthWrite: true,
+  })
+}
+
+function isRouteSelected(route) {
+  return selected?.type === 'meridian'
+    && (selected.id === route.id || (route.pairId && selected.pairId === route.pairId))
+}
+
+function addRouteEditHandles(route) {
+  route.nodes.forEach((node, nodeIndex) => {
+    if (node.type !== 'control') return
+    const handle = new THREE.Mesh(
+      new THREE.SphereGeometry(0.5, 16, 12),
+      createGlossySphereMaterial(0xffd28c, { emissive: 0x4a3008, emissiveIntensity: 0.15 }),
+    )
+    handle.position.copy(offsetPosition(node, 0.014))
+    handle.scale.setScalar(0.012)
+    handle.renderOrder = 6
+    handle.userData = { type: 'route-handle', routeId: route.id, nodeIndex }
+    annotationGroup.add(handle)
+    handleVisuals.push({ mesh: handle, routeId: route.id, nodeIndex })
+  })
+
+  // Midpoints between consecutive acupoints — click/drag to bend the segment.
+  for (let index = 0; index < route.nodes.length - 1; index += 1) {
+    const a = route.nodes[index]
+    const b = route.nodes[index + 1]
+    if (a.type !== 'acupoint' || b.type !== 'acupoint') continue
+    const ra = resolvedNode(a)
+    const rb = resolvedNode(b)
+    const midPos = [
+      (ra.position[0] + rb.position[0]) * 0.5,
+      (ra.position[1] + rb.position[1]) * 0.5,
+      (ra.position[2] + rb.position[2]) * 0.5,
+    ]
+    const midNormal = slerpUnitVectors(ra.normal, rb.normal, 0.5)
+    const projected = projectNearSurfaceOrFallback(midPos, midNormal, {
+      position: midPos,
+      normal: midNormal,
+    })
+    const handle = new THREE.Mesh(
+      new THREE.SphereGeometry(0.5, 14, 10),
+      createGlossySphereMaterial(0x7dd3fc, { emissive: 0x0c4a6e, emissiveIntensity: 0.2 }),
+    )
+    handle.position.copy(offsetPosition(projected, 0.016))
+    handle.scale.setScalar(0.01)
+    handle.renderOrder = 5
+    handle.userData = {
+      type: 'route-midpoint',
+      routeId: route.id,
+      afterIndex: index,
+      position: projected.position,
+      normal: projected.normal,
+    }
+    annotationGroup.add(handle)
+    midpointVisuals.push({ mesh: handle, routeId: route.id, afterIndex: index })
+  }
+}
+
 function rebuildAnnotations() {
   annotationGroup.clear()
   markerVisuals = []
   routeVisuals = []
   handleVisuals = []
+  midpointVisuals = []
 
+  // Keep every completed meridian on the model — never filter by the catalog selection.
   state.meridians.forEach((route) => {
     const points = skinCurvePoints(route)
     if (points.length < 2) return
@@ -530,56 +659,37 @@ function rebuildAnnotations() {
     mesh.userData = { type: 'meridian', id: route.id }
     annotationGroup.add(mesh)
     routeVisuals.push({ line: mesh, route })
-
-    if (selected?.type === 'meridian' && selected.id === route.id) {
-      route.nodes.forEach((node, nodeIndex) => {
-        if (node.type !== 'control') return
-        const handle = new THREE.Mesh(
-          new THREE.SphereGeometry(0.5, 14, 10),
-          new THREE.MeshBasicMaterial({ color: 0xffd28c, depthTest: false }),
-        )
-        handle.position.copy(offsetPosition(node, 0.016))
-        handle.scale.setScalar(0.025)
-        handle.renderOrder = 5
-        handle.userData = { type: 'route-handle', routeId: route.id, nodeIndex }
-        annotationGroup.add(handle)
-        handleVisuals.push({ mesh: handle, routeId: route.id, nodeIndex })
-      })
-    }
+    if (isRouteSelected(route)) addRouteEditHandles(route)
   })
 
   state.acupoints.forEach((point) => {
     const isSelected = selected?.type === 'acupoint'
       && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
     const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
-    // Anchor both picking sphere and CSS marker on the surface hit (tiny lift only).
-    const anchor = offsetPosition(point, 0.004)
+    const anchor = offsetPosition(point, 0.006)
     const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.5, 12, 10),
-      new THREE.MeshBasicMaterial({
-        color: point.color,
-        depthTest: false,
-        depthWrite: false,
-        transparent: true,
-        opacity: 0.001,
+      new THREE.SphereGeometry(0.5, 20, 16),
+      createGlossySphereMaterial(point.color, {
+        emissive: new THREE.Color(point.color).multiplyScalar(0.15),
+        emissiveIntensity: isSelected ? 0.35 : 0.18,
       }),
     )
     marker.position.copy(anchor)
-    marker.renderOrder = 20
+    marker.renderOrder = 8
     marker.userData = { type: 'acupoint', id: point.id }
     annotationGroup.add(marker)
 
     const label = document.createElement('span')
     label.className = `point-marker ${isSelected ? 'selected' : ''}`
-    label.style.setProperty('--marker-color', point.color)
     label.style.setProperty('--marker-size', `${pixelSize}px`)
-    label.innerHTML = `<i class="marker-dot" aria-hidden="true"></i><b class="point-name">${escapeHtml(point.name)}</b>`
+    label.innerHTML = `<b class="point-name">${escapeHtml(point.name)}</b>`
     const labelObject = new CSS2DObject(label)
     labelObject.position.copy(anchor)
     annotationGroup.add(labelObject)
     markerVisuals.push({ mesh: marker, label: labelObject, point })
   })
   drawDraft()
+  updateMarkerScales()
 }
 
 function drawDraft() {
@@ -597,7 +707,8 @@ function drawDraft() {
     const mesh = createMeridianTube(positions, state.settings.lineColor, state.settings.lineWidth)
     mesh.name = name
     mesh.material.transparent = true
-    mesh.material.opacity = 0.72
+    mesh.material.opacity = 0.7
+    mesh.material.depthWrite = true
     mesh.userData = { type: 'draft-meridian' }
     annotationGroup.add(mesh)
     routeVisuals.push({ line: mesh, route: null, isDraft: true })
@@ -616,13 +727,21 @@ function updateMarkerScales() {
   markerVisuals.forEach(({ mesh, label, point }) => {
     const distance = camera.position.distanceTo(mesh.position)
     const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
-    const diameter = 2 * distance * Math.tan(fov / 2) * Math.max(pixelSize, 14) / viewportHeight
-    // Keep an easy-to-hit picking sphere around the visible CSS marker.
-    mesh.scale.setScalar(Math.max(diameter, 0.03))
+    const diameter = 2 * distance * Math.tan(fov / 2) * pixelSize / viewportHeight
+    mesh.scale.setScalar(Math.max(diameter, 0.004))
     if (label?.element) {
       label.element.style.setProperty('--marker-size', `${pixelSize}px`)
-      label.element.style.setProperty('--marker-color', point.color)
     }
+  })
+  const handleSize = (position, pixels = 14) => {
+    const distance = camera.position.distanceTo(position)
+    return Math.max(0.004, 2 * distance * Math.tan(fov / 2) * pixels / viewportHeight)
+  }
+  handleVisuals.forEach(({ mesh }) => {
+    mesh.scale.setScalar(handleSize(mesh.position, 15))
+  })
+  midpointVisuals.forEach(({ mesh }) => {
+    mesh.scale.setScalar(handleSize(mesh.position, 12))
   })
 }
 
@@ -677,19 +796,10 @@ function updateLabelVisibility(time) {
       line.visible = true
       return
     }
-    // Depth testing occludes far-side geometry; only hide when every node faces away.
+    // Keep all completed routes in the scene. Depth testing hides far-side geometry;
+    // only cull when every node faces away from the camera.
     const nodes = route.nodes.map(resolvedNode)
-    const anyFacing = nodes.some((node) => (
-      isSurfaceFacingCamera(node.position, node.normal, cam)
-      && !isPointOccluded(node.position, cam)
-    ))
-    line.visible = anyFacing
-    if (line.material && 'opacity' in line.material) {
-      const selectedPair = selected?.type === 'meridian'
-        && (selected.id === route.id || (route.pairId && selected.pairId === route.pairId))
-      line.material.opacity = selectedPair ? 1 : 0.95
-      line.material.transparent = line.material.opacity < 1
-    }
+    line.visible = nodes.some((node) => isSurfaceFacingCamera(node.position, node.normal, cam))
   })
 }
 
@@ -756,6 +866,9 @@ function updateUI() {
   $('#undo').disabled = !history.canUndo
   $('#redo').disabled = !history.canRedo
   $('#object-count').textContent = state.meridians.length + state.acupoints.length
+  const meridianDone = new Set(state.meridians.map((item) => item.meridianId)).size
+  const heading = document.querySelector('.inspector-panel .panel-heading span')
+  if (heading) heading.textContent = `場景物件（${meridianDone}/${MERIDIANS.length} 經脈）`
   renderObjects()
   renderProperties()
   renderCatalog()
@@ -850,14 +963,17 @@ function setTool(tool) {
     return
   }
   activeTool = tool
-  document.querySelectorAll('.tool').forEach((button) =>
+  document.querySelectorAll('.tool[data-tool]').forEach((button) =>
     button.classList.toggle('active', button.dataset.tool === tool))
+  if ($('#lock-orbit')) $('#lock-orbit').classList.toggle('active', orbitLocked)
   viewport.className = tool === 'navigate' ? '' : 'placing'
   const required = pointsForMeridian($('#meridian-filter').value).length
   const usedPoints = draftNodes.filter((node) => node.type === 'acupoint').length
   $('#finish-path').classList.toggle('hidden', tool !== 'path' || usedPoints !== required)
   $('#stage-help').textContent = {
-    navigate: '拖曳旋轉 · 拖曳穴位或金色控制點調整位置',
+    navigate: orbitLocked
+      ? '旋轉已鎖定 · 點選經脈中點（藍色）或金色控制點拉動曲度'
+      : '拖曳旋轉 · 點選經脈可加曲度點 · 可用「鎖定旋轉」避免誤轉',
     path: '依國際代碼順序點擊穴位；點擊草稿線段加入曲度控制點',
     point: selectedCatalog
       ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}`
@@ -954,12 +1070,10 @@ function nearestNodeSegment(route, point) {
   return best.index
 }
 
-function insertRouteControl(routeId, hit) {
+function insertRouteControl(routeId, hit, afterIndex = null) {
   const route = state.meridians.find((item) => item.id === routeId)
-  if (!route || route.meridianId !== $('#meridian-filter').value) {
-    return toast('請先在左側選擇該路線所屬經脈', 'warn')
-  }
-  const index = nearestNodeSegment(route, hit.position)
+  if (!route) return toast('找不到經脈路線', 'warn')
+  const index = afterIndex == null ? nearestNodeSegment(route, hit.position) : afterIndex
   const node = { type: 'control', pointId: null, ...hit }
   const pairRoute = route.pairId && state.meridians.find((item) => item.pairId === route.pairId && item.id !== route.id)
   const nextRoutes = state.meridians.map((item) => {
@@ -977,6 +1091,7 @@ function insertRouteControl(routeId, hit) {
   })
   selected = { type: 'meridian', id: route.id, pairId: route.pairId || null }
   commit({ ...state, meridians: nextRoutes }, '已在線段加入曲度控制點')
+  return index + 1
 }
 
 function insertDraftControl(hit) {
@@ -997,11 +1112,30 @@ function placeAt(event) {
       updateUI()
       return
     }
+    const midpointHit = annotationHit(event, ['route-midpoint'])
+    if (midpointHit) {
+      const data = midpointHit.object.userData
+      const hit = {
+        position: data.position,
+        normal: data.normal,
+      }
+      insertRouteControl(data.routeId, hit, data.afterIndex)
+      setOrbitLocked(true)
+      return
+    }
     const routeHit = annotationHit(event, ['meridian'])
     if (routeHit) {
-      selected = { type: 'meridian', id: routeHit.object.userData.id, pairId: state.meridians.find((item) => item.id === routeHit.object.userData.id)?.pairId || null }
-      rebuildAnnotations()
-      updateUI()
+      const surface = surfaceHit(event) || {
+        position: toArray(routeHit.point),
+        normal: routeHit.face
+          ? toArray(routeHit.face.normal.clone()
+            .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(routeHit.object.matrixWorld))
+            .normalize())
+          : [0, 0, 1],
+      }
+      insertRouteControl(routeHit.object.userData.id, surface)
+      setOrbitLocked(true)
+      return
     }
     return
   }
@@ -1012,7 +1146,11 @@ function placeAt(event) {
   const draftHit = annotationHit(event, ['draft-meridian'])
   if (draftHit) return insertDraftControl(hit)
   const existingRouteHit = annotationHit(event, ['meridian'])
-  if (existingRouteHit) return insertRouteControl(existingRouteHit.object.userData.id, hit)
+  if (existingRouteHit) {
+    insertRouteControl(existingRouteHit.object.userData.id, hit)
+    setOrbitLocked(true)
+    return
+  }
   const markerHit = annotationHit(event, ['acupoint'])
   const markerNode = routeNodeFromMarker(markerHit)
   if (markerNode === false) return
@@ -1148,6 +1286,7 @@ function applyHistory(nextState, message) {
   if (!nextState) return
   state = nextState
   selected = null
+  persistState()
   rebuildAnnotations()
   updateUI()
   setStatus(message)
@@ -1170,6 +1309,7 @@ async function importJSON(file) {
   state = result.value
   history.replace(state)
   selected = null
+  persistState()
   rebuildAnnotations()
   updateUI()
   toast(`已匯入 ${state.meridians.length} 條路線、${state.acupoints.length} 個定位點`)
@@ -1428,7 +1568,7 @@ $('#catalog').addEventListener('click', (event) => {
   if (activeTool === 'point') setTool('point')
 })
 
-document.querySelectorAll('.tool').forEach((button) => button.addEventListener('click', () => {
+document.querySelectorAll('.tool[data-tool]').forEach((button) => button.addEventListener('click', () => {
   if (draftNodes.length && button.dataset.tool !== 'path') cancelDraft()
   setTool(button.dataset.tool)
 }))
@@ -1437,6 +1577,26 @@ $('#finish-path').addEventListener('click', finishPath)
 renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerDown = { x: event.clientX, y: event.clientY }
   if (activeTool !== 'navigate' || event.button !== 0) return
+
+  const midpointHit = annotationHit(event, ['route-midpoint'])
+  if (midpointHit) {
+    const data = midpointHit.object.userData
+    const nodeIndex = insertRouteControl(data.routeId, {
+      position: data.position,
+      normal: data.normal,
+    }, data.afterIndex)
+    if (nodeIndex == null) return
+    dragging = {
+      type: 'route-handle',
+      id: null,
+      routeId: data.routeId,
+      nodeIndex,
+    }
+    setOrbitLocked(true)
+    syncControlsEnabled()
+    return
+  }
+
   const hit = annotationHit(event, ['acupoint', 'route-handle'])
   if (!hit) return
   dragging = {
@@ -1445,12 +1605,14 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     routeId: hit.object.userData.routeId,
     nodeIndex: hit.object.userData.nodeIndex,
   }
-  controls.enabled = false
+  if (dragging.type === 'route-handle') setOrbitLocked(true)
+  syncControlsEnabled()
 })
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!dragging) return
   const hit = surfaceHit(event)
   if (!hit) return
+  dragMoved = true
   const next = dragging.type === 'acupoint'
     ? updatePairedPoint(dragging.id, hit)
     : updateRouteHandle(dragging.routeId, dragging.nodeIndex, hit)
@@ -1458,15 +1620,26 @@ renderer.domElement.addEventListener('pointermove', (event) => {
 })
 renderer.domElement.addEventListener('pointerup', (event) => {
   if (dragging) {
+    const wasHandle = dragging.type === 'route-handle'
+    const moved = dragMoved
     dragging = null
-    controls.enabled = true
-    state = history.commit(state)
+    dragMoved = false
+    syncControlsEnabled()
+    if (moved) {
+      state = history.commit(state)
+      persistState()
+    }
     rebuildAnnotations()
     updateUI()
-    setStatus('位置已更新並同步左右配對')
+    setStatus(wasHandle ? '曲度已更新（模型旋轉保持鎖定，可再調下一段）' : '位置已更新並同步左右配對')
     return
   }
   if (pointerDown && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) <= 4 && event.button === 0) placeAt(event)
+})
+
+$('#lock-orbit').addEventListener('click', () => {
+  setOrbitLocked(!orbitLocked)
+  if (activeTool === 'navigate') setTool('navigate')
 })
 
 $('#objects').addEventListener('click', (event) => {
@@ -1559,7 +1732,21 @@ viewport.addEventListener('drop', (event) => {
 })
 
 renderCatalog()
+const persisted = loadPersistedState()
+if (persisted) {
+  state = persisted
+  history.replace(state)
+  toast(`已回復先前編輯：${state.meridians.length} 條經脈、${state.acupoints.length} 個穴位`)
+}
 rebuildAnnotations()
 updateUI()
 resize()
+let lastTubeZoom = camera.position.distanceTo(controls.target)
+controls.addEventListener('end', () => {
+  const distance = camera.position.distanceTo(controls.target)
+  if (Math.abs(distance - lastTubeZoom) / Math.max(distance, 0.01) > 0.1) {
+    lastTubeZoom = distance
+    rebuildAnnotations()
+  }
+})
 loadDefaultModel()
