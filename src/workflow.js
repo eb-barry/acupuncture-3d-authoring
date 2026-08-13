@@ -25,6 +25,28 @@ export function routeIncludesAllPoints(requiredPoints, draftNodes) {
     && requiredPoints.every((point, index) => point.code === usedCodes[index])
 }
 
+/** Placed points for one side, sorted by catalog / international-code order. */
+export function orderedPlacedPointsForSide(requiredPoints, placedPoints, side) {
+  const byCode = new Map(
+    placedPoints
+      .filter((point) => point.side === side)
+      .map((point) => [point.code, point]),
+  )
+  return requiredPoints
+    .map((required) => byCode.get(required.code))
+    .filter(Boolean)
+}
+
+/** Build route nodes in international-code order for automatic meridian display. */
+export function buildRouteNodesFromPlaced(requiredPoints, placedPoints, side) {
+  return orderedPlacedPointsForSide(requiredPoints, placedPoints, side).map((point) => ({
+    type: 'acupoint',
+    pointId: point.id,
+    position: point.position,
+    normal: point.normal,
+  }))
+}
+
 export function isSurfaceFacingCamera(position, normal, cameraPosition) {
   const towardCamera = cameraPosition.map((value, index) => value - position[index])
   const length = Math.hypot(...towardCamera) || 1
