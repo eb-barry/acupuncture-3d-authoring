@@ -92,6 +92,7 @@ $('#app').innerHTML = `
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
     </nav>
     <div id="viewport" tabindex="0"><div id="viewport-grid" class="viewport-grid" aria-hidden="true"></div></div>
+    <div id="zoom-indicator" class="zoom-indicator" aria-live="polite">1.00×</div>
     <div class="stage-help" id="stage-help">拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 平移</div>
     <div class="axis"><i class="x"></i>X <i class="y"></i>Y <i class="z"></i>Z</div>
     <div id="drop-hint">放開以載入 GLB</div>
@@ -122,8 +123,21 @@ $('#app').innerHTML = `
           <option value="original">原材質（白瓷）</option>
         </select></label>
         <label class="checkbox-row"><span>顯示格線</span><input name="gridEnabled" type="checkbox" checked></label>
-        <label class="grid-spacing-field">格線間距 <output id="grid-spacing-out">20px</output><input name="gridSpacing" type="range" min="5" max="200" value="20"></label>
-        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。</p>
+        <label class="grid-spacing-field dual-field">
+          <span class="dual-field-label">格線間距（px）</span>
+          <div class="dual-controls">
+            <input name="gridSpacing" type="range" min="5" max="200" value="20">
+            <input name="gridSpacingInput" type="number" min="5" max="200" step="1" value="20" inputmode="numeric" title="可直接輸入 5–200">
+          </div>
+        </label>
+        <label class="dual-field model-zoom-field">
+          <span class="dual-field-label">模型放大 <b id="zoom-factor-label">1.00×</b></span>
+          <div class="dual-controls">
+            <input name="modelZoom" type="range" min="0.25" max="20" step="0.01" value="1">
+            <input name="modelZoomInput" type="number" min="0.25" max="20" step="0.01" value="1" inputmode="decimal" title="可直接輸入放大倍數">
+          </div>
+        </label>
+        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。模型放大以載入後的預設視距為 1×，與滾輪縮放同步。</p>
       </form>
     </section>
     <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯或刪除</p></form></div>
@@ -535,6 +549,7 @@ function faceBodySide(side) {
   camera.up.set(...pose.up)
   camera.lookAt(controls.target)
   controls.update()
+  syncZoomUI({ force: true })
   if (side === 'back') {
     setStatus('已將身體背面朝向螢幕')
     toast('背面已對準 · 可定位督脈中線')
@@ -1175,12 +1190,12 @@ function syncStyleSettings() {
   if (form.surfaceFinish) form.surfaceFinish.value = surfaceFinish
   if (form.gridEnabled) form.gridEnabled.checked = gridEnabled
   if (form.gridSpacing) form.gridSpacing.value = gridSpacing
+  if (form.gridSpacingInput) form.gridSpacingInput.value = gridSpacing
   $('#marker-size-out').textContent = `${markerSize}px`
   $('#line-width-out').textContent = `${lineWidth}px`
-  const gridOut = $('#grid-spacing-out')
-  if (gridOut) gridOut.textContent = `${gridSpacing}px`
   const spacingField = form.querySelector('.grid-spacing-field')
   if (spacingField) spacingField.dataset.disabled = gridEnabled ? 'false' : 'true'
+  syncZoomUI()
 }
 
 function applyStyleSettings(data) {
@@ -1690,6 +1705,8 @@ function applyModel(gltf, name, hash = null) {
   controls.update()
   initialCamPos = camera.position.clone()
   initialTarget = controls.target.clone()
+  referenceZoomDistance = camera.position.distanceTo(controls.target)
+  syncZoomUI({ force: true })
 
   const body = inferBodyModel({ ...state.model, name, body: activeBody })
   state = {
@@ -1710,21 +1727,105 @@ function applyModel(gltf, name, hash = null) {
 let surfaceFinish = 'skin'
 let gridEnabled = true
 let gridSpacing = 20
+let referenceZoomDistance = camera.position.distanceTo(controls.target)
+let zoomIndicatorTimer = 0
+
+function clampGridSpacing(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return gridSpacing
+  return Math.min(200, Math.max(5, Math.round(number)))
+}
 
 function applyViewportGrid() {
   const grid = $('#viewport-grid')
   if (!grid) return
-  const spacing = Math.min(200, Math.max(5, Number(gridSpacing) || 20))
-  gridSpacing = spacing
+  gridSpacing = clampGridSpacing(gridSpacing)
   grid.hidden = !gridEnabled
-  grid.style.setProperty('--grid-spacing', `${spacing}px`)
+  grid.style.setProperty('--grid-spacing', `${gridSpacing}px`)
   const form = $('#style-settings')
   const spacingField = form?.querySelector('.grid-spacing-field')
   if (spacingField) spacingField.dataset.disabled = gridEnabled ? 'false' : 'true'
-  const gridOut = $('#grid-spacing-out')
-  if (gridOut) gridOut.textContent = `${spacing}px`
-  if (form?.gridSpacing) form.gridSpacing.value = spacing
+  if (form?.gridSpacing) form.gridSpacing.value = gridSpacing
+  if (form?.gridSpacingInput && document.activeElement !== form.gridSpacingInput) {
+    form.gridSpacingInput.value = gridSpacing
+  }
   if (form?.gridEnabled) form.gridEnabled.checked = gridEnabled
+}
+
+function formatZoomFactor(value) {
+  const zoom = Number(value)
+  if (!Number.isFinite(zoom)) return '1.00×'
+  const rounded = zoom >= 10 ? zoom.toFixed(1) : zoom.toFixed(2)
+  return `${rounded}×`
+}
+
+function zoomLimits() {
+  if (!(referenceZoomDistance > 0)) return { min: 0.25, max: 20 }
+  const minDistance = Math.max(controls.minDistance || 0.05, 1e-4)
+  const maxDistance = Math.max(controls.maxDistance || 500, minDistance * 2)
+  const maxZoom = referenceZoomDistance / minDistance
+  const minZoom = referenceZoomDistance / maxDistance
+  return {
+    min: Math.max(0.1, Number(minZoom.toFixed(3))),
+    max: Math.min(50, Number(maxZoom.toFixed(3))),
+  }
+}
+
+function getZoomFactor() {
+  const distance = camera.position.distanceTo(controls.target)
+  if (!(referenceZoomDistance > 0) || !(distance > 1e-6)) return 1
+  return referenceZoomDistance / distance
+}
+
+function setZoomFactor(rawFactor, { announce = false } = {}) {
+  if (!(referenceZoomDistance > 0)) {
+    referenceZoomDistance = Math.max(camera.position.distanceTo(controls.target), 0.05)
+  }
+  const limits = zoomLimits()
+  let factor = Number(rawFactor)
+  if (!Number.isFinite(factor) || factor <= 0) factor = 1
+  factor = Math.min(limits.max, Math.max(limits.min, factor))
+  const desiredDistance = referenceZoomDistance / factor
+  const distance = Math.min(
+    controls.maxDistance,
+    Math.max(controls.minDistance, desiredDistance),
+  )
+  const offset = camera.position.clone().sub(controls.target)
+  if (offset.lengthSq() < 1e-10) offset.set(0, 0, 1)
+  offset.setLength(distance)
+  camera.position.copy(controls.target).add(offset)
+  controls.update()
+  syncZoomUI({ force: true, flash: true })
+  if (announce) setStatus(`模型放大 ${formatZoomFactor(getZoomFactor())}`)
+}
+
+function syncZoomUI({ force = false, flash = false } = {}) {
+  const zoom = getZoomFactor()
+  const limits = zoomLimits()
+  const display = formatZoomFactor(zoom)
+  const indicator = $('#zoom-indicator')
+  if (indicator) {
+    indicator.textContent = display
+    if (flash) {
+      indicator.classList.add('is-active')
+      window.clearTimeout(zoomIndicatorTimer)
+      zoomIndicatorTimer = window.setTimeout(() => indicator.classList.remove('is-active'), 650)
+    }
+  }
+  const label = $('#zoom-factor-label')
+  if (label) label.textContent = display
+  const form = $('#style-settings')
+  if (!form?.modelZoom || !form?.modelZoomInput) return
+  form.modelZoom.min = String(limits.min)
+  form.modelZoom.max = String(limits.max)
+  form.modelZoomInput.min = String(limits.min)
+  form.modelZoomInput.max = String(limits.max)
+  const editingInput = document.activeElement === form.modelZoomInput
+  const sliderValue = Math.min(limits.max, Math.max(limits.min, zoom))
+  form.modelZoom.value = String(sliderValue)
+  if (force || !editingInput) {
+    form.modelZoomInput.value = zoom >= 10 ? zoom.toFixed(1) : zoom.toFixed(2)
+  }
 }
 
 function isNailMesh(object) {
@@ -2064,35 +2165,55 @@ $('#objects').addEventListener('click', (event) => {
 })
 $('#style-settings').addEventListener('change', (event) => {
   const form = event.currentTarget
-  if (event.target?.name === 'surfaceFinish') {
+  const name = event.target?.name
+  if (name === 'surfaceFinish') {
     surfaceFinish = form.surfaceFinish.value === 'skin' ? 'skin' : 'original'
     applySurfaceFinish()
     setStatus(surfaceFinish === 'skin' ? '已套用皮膚色表面' : '已還原原材質表面')
     return
   }
-  if (event.target?.name === 'gridEnabled' || event.target?.name === 'gridSpacing') {
+  if (name === 'gridEnabled') {
     gridEnabled = Boolean(form.gridEnabled?.checked)
-    gridSpacing = Number(form.gridSpacing?.value) || 20
     applyViewportGrid()
     setStatus(gridEnabled ? `格線間距 ${gridSpacing}px` : '已隱藏格線')
+    return
+  }
+  if (name === 'gridSpacing' || name === 'gridSpacingInput') {
+    gridSpacing = clampGridSpacing(
+      name === 'gridSpacingInput' ? form.gridSpacingInput.value : form.gridSpacing.value,
+    )
+    applyViewportGrid()
+    setStatus(`格線間距 ${gridSpacing}px`)
+    return
+  }
+  if (name === 'modelZoom' || name === 'modelZoomInput') {
+    setZoomFactor(
+      name === 'modelZoomInput' ? form.modelZoomInput.value : form.modelZoom.value,
+      { announce: true },
+    )
     return
   }
   applyStyleSettings(Object.fromEntries(new FormData(form)))
 })
 $('#style-settings').addEventListener('input', (event) => {
-  if (event.target.type !== 'range') return
-  const output = event.target.closest('label')?.querySelector('output')
-  if (output) output.textContent = `${event.target.value}px`
-  if (event.target.name === 'gridSpacing') {
-    gridSpacing = Number(event.target.value) || 20
+  const name = event.target?.name
+  if (name === 'gridSpacing') {
+    gridSpacing = clampGridSpacing(event.target.value)
     applyViewportGrid()
     return
   }
-  if (event.target.name === 'markerSize' || event.target.name === 'lineWidth') {
+  if (name === 'modelZoom') {
+    setZoomFactor(event.target.value)
+    return
+  }
+  if (event.target.type !== 'range') return
+  const output = event.target.closest('label')?.querySelector('output')
+  if (output) output.textContent = `${event.target.value}px`
+  if (name === 'markerSize' || name === 'lineWidth') {
     // Live-preview size while dragging; commit on change.
     const form = event.currentTarget
     const data = Object.fromEntries(new FormData(form))
-    if (selected?.type === 'acupoint' && event.target.name === 'markerSize') {
+    if (selected?.type === 'acupoint' && name === 'markerSize') {
       const current = state.acupoints.find((item) => item.id === selected.id)
       if (!current) return
       const size = Number(data.markerSize)
@@ -2158,14 +2279,24 @@ syncBodyModelSelect()
 rebuildAnnotations()
 updateUI()
 applyViewportGrid()
+syncZoomUI({ force: true })
 resize()
 let lastTubeZoom = camera.position.distanceTo(controls.target)
+let lastZoomForUi = getZoomFactor()
+controls.addEventListener('change', () => {
+  const zoom = getZoomFactor()
+  if (Math.abs(zoom - lastZoomForUi) < 0.0008) return
+  lastZoomForUi = zoom
+  syncZoomUI({ flash: true })
+})
 controls.addEventListener('end', () => {
   const distance = camera.position.distanceTo(controls.target)
   if (Math.abs(distance - lastTubeZoom) / Math.max(distance, 0.01) > 0.1) {
     lastTubeZoom = distance
     rebuildAnnotations()
   }
+  lastZoomForUi = getZoomFactor()
+  syncZoomUI({ force: true })
 })
 $('#body-model-filter').addEventListener('change', (event) => {
   setActiveBodyModel(event.target.value)
