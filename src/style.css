@@ -133,8 +133,8 @@ button:disabled { opacity: .35; cursor: default; }
   z-index: 1;
   pointer-events: none;
   background-image:
-    linear-gradient(to right, rgba(148, 176, 168, .28) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(148, 176, 168, .28) 1px, transparent 1px);
+    linear-gradient(to right, rgba(176, 92, 255, .72) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(176, 92, 255, .72) 1px, transparent 1px);
   background-size: var(--grid-spacing, 20px) var(--grid-spacing, 20px);
   background-position: 0 0;
 }
