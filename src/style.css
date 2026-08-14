@@ -140,6 +140,13 @@ button:disabled { opacity: .35; cursor: default; }
 }
 .viewport-grid[hidden] { display: none !important; }
 .label-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.zoom-indicator {
+  position: absolute; z-index: 3; left: 14px; bottom: 14px;
+  min-width: 64px; padding: 6px 10px; border: 1px solid #4a3a66; border-radius: 5px;
+  background: rgba(18, 12, 28, .82); color: #e2c6ff; font-size: 13px; font-weight: 600;
+  letter-spacing: .04em; pointer-events: none; backdrop-filter: blur(6px);
+}
+.zoom-indicator.is-active { border-color: #b45cff; color: #f3e5ff; }
 .point-label {
   display: block; padding: 2px 5px; border: 1px solid rgba(130, 153, 146, .45); border-radius: 3px;
   color: #dce9e5; background: rgba(10, 17, 15, .78); font-size: 9px; white-space: nowrap;
@@ -243,6 +250,33 @@ body.meridian-view-mode #lock-orbit { opacity: .55; pointer-events: none; }
   height: 18px;
   accent-color: var(--gold);
   cursor: pointer;
+}
+.style-settings .dual-field {
+  gap: 8px;
+}
+.style-settings .dual-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.style-settings .dual-field-label b {
+  color: #e2c6ff;
+  font-size: 12px;
+  font-weight: 600;
+}
+.style-settings .dual-controls {
+  display: grid;
+  grid-template-columns: 1fr 72px;
+  gap: 8px;
+  align-items: center;
+}
+.style-settings .dual-controls input[type='number'] {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 6px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .style-settings .grid-spacing-field[data-disabled='true'] {
   opacity: .45;
