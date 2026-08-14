@@ -91,7 +91,7 @@ $('#app').innerHTML = `
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈中線">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
     </nav>
-    <div id="viewport" tabindex="0"></div>
+    <div id="viewport" tabindex="0"><div id="viewport-grid" class="viewport-grid" aria-hidden="true"></div></div>
     <div class="stage-help" id="stage-help">拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 平移</div>
     <div class="axis"><i class="x"></i>X <i class="y"></i>Y <i class="z"></i>Z</div>
     <div id="drop-hint">放開以載入 GLB</div>
@@ -121,7 +121,9 @@ $('#app').innerHTML = `
           <option value="skin" selected>皮膚色</option>
           <option value="original">原材質（白瓷）</option>
         </select></label>
-        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。</p>
+        <label class="checkbox-row"><span>顯示格線</span><input name="gridEnabled" type="checkbox" checked></label>
+        <label class="grid-spacing-field">格線間距 <output id="grid-spacing-out">20px</output><input name="gridSpacing" type="range" min="5" max="200" value="20"></label>
+        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。</p>
       </form>
     </section>
     <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯或刪除</p></form></div>
@@ -148,6 +150,8 @@ viewport.append(renderer.domElement)
 const labelRenderer = new CSS2DRenderer()
 labelRenderer.domElement.className = 'label-layer'
 viewport.append(labelRenderer.domElement)
+const viewportGrid = $('#viewport-grid')
+if (viewportGrid) viewport.append(viewportGrid)
 
 const pmrem = new THREE.PMREMGenerator(renderer)
 // Keep a weak IBL only for specular accents; diffuse fill comes from key/rim lights.
@@ -1068,8 +1072,13 @@ function renderCatalog() {
   $('#catalog-count').textContent = points.length
   $('#catalog').innerHTML = points.map((point) => {
     const placed = state.acupoints.some((item) => item.code === point.code)
-    return `<button class="catalog-item ${selectedCatalog?.code === point.code ? 'selected' : ''}" data-code="${point.code}">
-      <b>${point.code}</b><span><strong>${point.name}</strong><small>${point.meridianName}${placed ? ' · 已定位' : ''}</small></span>
+    const classes = [
+      'catalog-item',
+      selectedCatalog?.code === point.code ? 'selected' : '',
+      placed ? 'placed' : '',
+    ].filter(Boolean).join(' ')
+    return `<button class="${classes}" data-code="${point.code}">
+      <b>${point.code}</b><span><strong>${point.name}</strong><small>${point.meridianName}</small></span>
     </button>`
   }).join('') || '<p class="empty">找不到符合的穴位</p>'
   renderPointDetails()
@@ -1164,8 +1173,14 @@ function syncStyleSettings() {
   form.markerSize.value = markerSize
   form.lineWidth.value = lineWidth
   if (form.surfaceFinish) form.surfaceFinish.value = surfaceFinish
+  if (form.gridEnabled) form.gridEnabled.checked = gridEnabled
+  if (form.gridSpacing) form.gridSpacing.value = gridSpacing
   $('#marker-size-out').textContent = `${markerSize}px`
   $('#line-width-out').textContent = `${lineWidth}px`
+  const gridOut = $('#grid-spacing-out')
+  if (gridOut) gridOut.textContent = `${gridSpacing}px`
+  const spacingField = form.querySelector('.grid-spacing-field')
+  if (spacingField) spacingField.dataset.disabled = gridEnabled ? 'false' : 'true'
 }
 
 function applyStyleSettings(data) {
@@ -1693,6 +1708,24 @@ function applyModel(gltf, name, hash = null) {
 }
 
 let surfaceFinish = 'skin'
+let gridEnabled = true
+let gridSpacing = 20
+
+function applyViewportGrid() {
+  const grid = $('#viewport-grid')
+  if (!grid) return
+  const spacing = Math.min(200, Math.max(5, Number(gridSpacing) || 20))
+  gridSpacing = spacing
+  grid.hidden = !gridEnabled
+  grid.style.setProperty('--grid-spacing', `${spacing}px`)
+  const form = $('#style-settings')
+  const spacingField = form?.querySelector('.grid-spacing-field')
+  if (spacingField) spacingField.dataset.disabled = gridEnabled ? 'false' : 'true'
+  const gridOut = $('#grid-spacing-out')
+  if (gridOut) gridOut.textContent = `${spacing}px`
+  if (form?.gridSpacing) form.gridSpacing.value = spacing
+  if (form?.gridEnabled) form.gridEnabled.checked = gridEnabled
+}
 
 function isNailMesh(object) {
   const materials = Array.isArray(object.material) ? object.material : [object.material]
@@ -2037,12 +2070,24 @@ $('#style-settings').addEventListener('change', (event) => {
     setStatus(surfaceFinish === 'skin' ? '已套用皮膚色表面' : '已還原原材質表面')
     return
   }
+  if (event.target?.name === 'gridEnabled' || event.target?.name === 'gridSpacing') {
+    gridEnabled = Boolean(form.gridEnabled?.checked)
+    gridSpacing = Number(form.gridSpacing?.value) || 20
+    applyViewportGrid()
+    setStatus(gridEnabled ? `格線間距 ${gridSpacing}px` : '已隱藏格線')
+    return
+  }
   applyStyleSettings(Object.fromEntries(new FormData(form)))
 })
 $('#style-settings').addEventListener('input', (event) => {
   if (event.target.type !== 'range') return
   const output = event.target.closest('label')?.querySelector('output')
   if (output) output.textContent = `${event.target.value}px`
+  if (event.target.name === 'gridSpacing') {
+    gridSpacing = Number(event.target.value) || 20
+    applyViewportGrid()
+    return
+  }
   if (event.target.name === 'markerSize' || event.target.name === 'lineWidth') {
     // Live-preview size while dragging; commit on change.
     const form = event.currentTarget
@@ -2112,6 +2157,7 @@ selected = null
 syncBodyModelSelect()
 rebuildAnnotations()
 updateUI()
+applyViewportGrid()
 resize()
 let lastTubeZoom = camera.position.distanceTo(controls.target)
 controls.addEventListener('end', () => {
