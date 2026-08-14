@@ -539,9 +539,11 @@ function faceBodySide(side) {
   const distance = Number.isFinite(currentDistance) && currentDistance > 0.05
     ? currentDistance
     : fallbackDistance
+  // Buttons were reversed relative to the inferred anatomical front:
+  // sit the camera on the opposite axis so 「正面」shows the face and 「背面」shows the back.
   const viewAxis = side === 'back'
-    ? bodyFront.clone().negate()
-    : bodyFront.clone()
+    ? bodyFront.clone()
+    : bodyFront.clone().negate()
   const pose = cameraPoseFacingAxis(target, toArray(viewAxis), distance)
 
   controls.target.set(...pose.target)
