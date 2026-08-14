@@ -131,6 +131,13 @@ $('#app').innerHTML = `
             <input name="gridSpacingInput" type="number" min="5" max="200" step="1" value="20" inputmode="numeric" title="可直接輸入 5–200">
           </div>
         </label>
+        <label class="grid-rotation-field dual-field">
+          <span class="dual-field-label">格線旋轉（度）</span>
+          <div class="dual-controls">
+            <input name="gridRotation" type="range" min="-90" max="90" step="1" value="0">
+            <input name="gridRotationInput" type="number" min="-90" max="90" step="1" value="0" inputmode="numeric" title="可直接輸入 -90–90">
+          </div>
+        </label>
         <label class="dual-field model-zoom-field">
           <span class="dual-field-label">模型放大 <b id="zoom-factor-label">1.00×</b></span>
           <div class="dual-controls">
@@ -138,7 +145,7 @@ $('#app').innerHTML = `
             <input name="modelZoomInput" type="number" min="0.25" max="20" step="0.01" value="1" inputmode="decimal" title="可直接輸入放大倍數">
           </div>
         </label>
-        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。模型放大以載入後的預設視距為 1×，與滾輪縮放同步。</p>
+        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。格線旋轉預設 0°，可調 ±90°。模型放大以載入後的預設視距為 1×，與滾輪縮放同步。</p>
       </form>
     </section>
     <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯或刪除</p></form></div>
@@ -1225,10 +1232,13 @@ function syncStyleSettings() {
   if (form.gridEnabled) form.gridEnabled.checked = gridEnabled
   if (form.gridSpacing) form.gridSpacing.value = gridSpacing
   if (form.gridSpacingInput) form.gridSpacingInput.value = gridSpacing
+  if (form.gridRotation) form.gridRotation.value = gridRotation
+  if (form.gridRotationInput) form.gridRotationInput.value = gridRotation
   $('#marker-size-out').textContent = `${markerSize}px`
   $('#line-width-out').textContent = `${lineWidth}px`
-  const spacingField = form.querySelector('.grid-spacing-field')
-  if (spacingField) spacingField.dataset.disabled = gridEnabled ? 'false' : 'true'
+  form.querySelectorAll('.grid-spacing-field, .grid-rotation-field').forEach((field) => {
+    field.dataset.disabled = gridEnabled ? 'false' : 'true'
+  })
   syncZoomUI()
 }
 
@@ -1761,6 +1771,7 @@ function applyModel(gltf, name, hash = null) {
 let surfaceFinish = 'skin'
 let gridEnabled = true
 let gridSpacing = 20
+let gridRotation = 0
 let referenceZoomDistance = camera.position.distanceTo(controls.target)
 let zoomIndicatorTimer = 0
 
@@ -1770,18 +1781,31 @@ function clampGridSpacing(value) {
   return Math.min(200, Math.max(5, Math.round(number)))
 }
 
+function clampGridRotation(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return gridRotation
+  return Math.min(90, Math.max(-90, Math.round(number)))
+}
+
 function applyViewportGrid() {
   const grid = $('#viewport-grid')
   if (!grid) return
   gridSpacing = clampGridSpacing(gridSpacing)
+  gridRotation = clampGridRotation(gridRotation)
   grid.hidden = !gridEnabled
   grid.style.setProperty('--grid-spacing', `${gridSpacing}px`)
+  grid.style.setProperty('--grid-rotation', `${gridRotation}deg`)
   const form = $('#style-settings')
-  const spacingField = form?.querySelector('.grid-spacing-field')
-  if (spacingField) spacingField.dataset.disabled = gridEnabled ? 'false' : 'true'
+  form?.querySelectorAll('.grid-spacing-field, .grid-rotation-field').forEach((field) => {
+    field.dataset.disabled = gridEnabled ? 'false' : 'true'
+  })
   if (form?.gridSpacing) form.gridSpacing.value = gridSpacing
   if (form?.gridSpacingInput && document.activeElement !== form.gridSpacingInput) {
     form.gridSpacingInput.value = gridSpacing
+  }
+  if (form?.gridRotation) form.gridRotation.value = gridRotation
+  if (form?.gridRotationInput && document.activeElement !== form.gridRotationInput) {
+    form.gridRotationInput.value = gridRotation
   }
   if (form?.gridEnabled) form.gridEnabled.checked = gridEnabled
 }
@@ -2209,7 +2233,7 @@ $('#style-settings').addEventListener('change', (event) => {
   if (name === 'gridEnabled') {
     gridEnabled = Boolean(form.gridEnabled?.checked)
     applyViewportGrid()
-    setStatus(gridEnabled ? `格線間距 ${gridSpacing}px` : '已隱藏格線')
+    setStatus(gridEnabled ? `格線間距 ${gridSpacing}px · 旋轉 ${gridRotation}°` : '已隱藏格線')
     return
   }
   if (name === 'gridSpacing' || name === 'gridSpacingInput') {
@@ -2218,6 +2242,14 @@ $('#style-settings').addEventListener('change', (event) => {
     )
     applyViewportGrid()
     setStatus(`格線間距 ${gridSpacing}px`)
+    return
+  }
+  if (name === 'gridRotation' || name === 'gridRotationInput') {
+    gridRotation = clampGridRotation(
+      name === 'gridRotationInput' ? form.gridRotationInput.value : form.gridRotation.value,
+    )
+    applyViewportGrid()
+    setStatus(`格線旋轉 ${gridRotation}°`)
     return
   }
   if (name === 'modelZoom' || name === 'modelZoomInput') {
@@ -2233,6 +2265,11 @@ $('#style-settings').addEventListener('input', (event) => {
   const name = event.target?.name
   if (name === 'gridSpacing') {
     gridSpacing = clampGridSpacing(event.target.value)
+    applyViewportGrid()
+    return
+  }
+  if (name === 'gridRotation') {
+    gridRotation = clampGridRotation(event.target.value)
     applyViewportGrid()
     return
   }

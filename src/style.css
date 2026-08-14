@@ -129,14 +129,20 @@ button:disabled { opacity: .35; cursor: default; }
 #viewport.placing canvas { cursor: crosshair; }
 .viewport-grid {
   position: absolute;
-  inset: 0;
+  /* Oversized so rotated corners still cover the viewport */
+  top: 50%;
+  left: 50%;
+  width: 200%;
+  height: 200%;
   z-index: 1;
   pointer-events: none;
   background-image:
     linear-gradient(to right, rgba(176, 92, 255, .72) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(176, 92, 255, .72) 1px, transparent 1px);
   background-size: var(--grid-spacing, 20px) var(--grid-spacing, 20px);
-  background-position: 0 0;
+  background-position: center center;
+  transform: translate(-50%, -50%) rotate(var(--grid-rotation, 0deg));
+  transform-origin: center center;
 }
 .viewport-grid[hidden] { display: none !important; }
 .label-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
@@ -278,7 +284,8 @@ body.meridian-view-mode #lock-orbit { opacity: .55; pointer-events: none; }
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.style-settings .grid-spacing-field[data-disabled='true'] {
+.style-settings .grid-spacing-field[data-disabled='true'],
+.style-settings .grid-rotation-field[data-disabled='true'] {
   opacity: .45;
   pointer-events: none;
 }
