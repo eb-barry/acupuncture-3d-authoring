@@ -22,6 +22,7 @@ import { History } from './history.js'
 import {
   cameraPoseFacingAxis,
   inferBodyFrontFromBounds,
+  inferBodyFrontFromNormalVote,
 } from './frontLevel.js'
 import {
   SKIN_LIFT,
@@ -460,15 +461,32 @@ function refreshBodyFrontAxis() {
   const depthIsZ = size.z <= size.x
   const faceMinY = box.min.y + size.y * 0.72
   const band = (depthIsZ ? size.x : size.z) * 0.12
+
+  // Built-in male/female assets both face +Z after framing, but come from
+  // different exporters. Prefer the authored axis when the loaded file matches.
+  const preset = BODY_MODELS[activeBody]
+  const loadedName = String(state.model?.name || '').toLowerCase()
+  const presetStem = String(preset?.fileName || '').replace(/\.glb$/i, '').toLowerCase()
+  if (preset?.frontAxis && presetStem && loadedName.includes(presetStem)) {
+    bodyFront.set(preset.frontAxis[0], preset.frontAxis[1], preset.frontAxis[2])
+    return
+  }
+
   let maxAlong = -Infinity
   let minAlong = Infinity
   let maxY = -Infinity
   let minY = -Infinity
+  let normalPos = 0
+  let normalNeg = 0
   const world = new THREE.Vector3()
+  const worldNormal = new THREE.Vector3()
+  const normalMatrix = new THREE.Matrix3()
   modelMeshes.forEach((mesh) => {
     const attribute = mesh.geometry?.attributes?.position
     if (!attribute) return
     mesh.updateWorldMatrix(true, false)
+    const normals = mesh.geometry?.attributes?.normal
+    if (normals) normalMatrix.getNormalMatrix(mesh.matrixWorld)
     const step = Math.max(1, Math.floor(attribute.count / 10000))
     for (let index = 0; index < attribute.count; index += step) {
       world.fromBufferAttribute(attribute, index).applyMatrix4(mesh.matrixWorld)
@@ -484,8 +502,23 @@ function refreshBodyFrontAxis() {
         minAlong = along
         minY = world.y
       }
+      if (normals) {
+        worldNormal.fromBufferAttribute(normals, index).applyMatrix3(normalMatrix).normalize()
+        const alongNormal = depthIsZ ? worldNormal.z : worldNormal.x
+        if (alongNormal > 0.35) normalPos += 1
+        else if (alongNormal < -0.35) normalNeg += 1
+      }
     }
   })
+
+  const fromNormals = inferBodyFrontFromNormalVote(
+    { x: size.x, z: size.z },
+    { pos: normalPos, neg: normalNeg },
+  )
+  if (fromNormals) {
+    bodyFront.set(fromNormals[0], fromNormals[1], fromNormals[2])
+    return
+  }
 
   if (Number.isFinite(maxAlong) && Number.isFinite(minAlong)) {
     const front = inferBodyFrontFromBounds(
@@ -496,9 +529,9 @@ function refreshBodyFrontAxis() {
     return
   }
 
-  // Fallback for empty meshes: thinner axis, negative direction.
-  if (depthIsZ) bodyFront.set(0, 0, -1)
-  else bodyFront.set(-1, 0, 0)
+  // Fallback for empty meshes: thinner axis, positive +Z / +X (matches built-ins).
+  if (depthIsZ) bodyFront.set(0, 0, 1)
+  else bodyFront.set(1, 0, 0)
 }
 
 function snapHitToBodyMidline(hit) {
@@ -539,11 +572,10 @@ function faceBodySide(side) {
   const distance = Number.isFinite(currentDistance) && currentDistance > 0.05
     ? currentDistance
     : fallbackDistance
-  // Buttons were reversed relative to the inferred anatomical front:
-  // sit the camera on the opposite axis so 「正面」shows the face and 「背面」shows the back.
+  // Camera sits on anatomical front to view the face; opposite axis for the back.
   const viewAxis = side === 'back'
-    ? bodyFront.clone()
-    : bodyFront.clone().negate()
+    ? bodyFront.clone().negate()
+    : bodyFront.clone()
   const pose = cameraPoseFacingAxis(target, toArray(viewAxis), distance)
 
   controls.target.set(...pose.target)

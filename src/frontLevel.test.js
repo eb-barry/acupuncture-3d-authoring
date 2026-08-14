@@ -3,6 +3,7 @@ import {
   cameraFrontAlignment,
   cameraPoseFacingAxis,
   inferBodyFrontFromBounds,
+  inferBodyFrontFromNormalVote,
   snapHorizontalToCardinal,
 } from './frontLevel.js'
 
@@ -13,7 +14,7 @@ describe('front/back body facing helpers', () => {
   })
 
   it('uses the thin depth axis, not left/right shoulder width', () => {
-    // Male-like: wider X than Z, face protrudes toward -Z.
+    // Male-like extremes alone can prefer the occiput (-Z) when it protrudes more.
     expect(inferBodyFrontFromBounds(
       { x: 1.088, z: 0.334 },
       { maxAlong: 0.0975, minAlong: -0.1668, maxY: 1.3, minY: 1.42 },
@@ -26,13 +27,30 @@ describe('front/back body facing helpers', () => {
     )).toEqual([0, 0, 1])
   })
 
-  it('places the camera on the requested view axis', () => {
-    const front = cameraPoseFacingAxis([0, 1, 0], [0, 0, -1], 2)
-    expect(cameraFrontAlignment(front.position, front.target, [0, 0, -1]).aligned).toBe(true)
-    expect(front.position[2]).toBeLessThan(0)
+  it('prefers a clear depth-normal majority over tied / weak votes', () => {
+    expect(inferBodyFrontFromNormalVote(
+      { x: 1.088, z: 0.334 },
+      { pos: 4000, neg: 1500 },
+    )).toEqual([0, 0, 1])
 
-    const back = cameraPoseFacingAxis([0, 1, 0], [0, 0, 1], 2)
-    expect(cameraFrontAlignment(back.position, back.target, [0, 0, 1]).aligned).toBe(true)
-    expect(back.position[2]).toBeGreaterThan(0)
+    expect(inferBodyFrontFromNormalVote(
+      { x: 2.5, z: 0.7 },
+      { pos: 40, neg: 10 },
+    )).toBeNull()
+
+    expect(inferBodyFrontFromNormalVote(
+      { x: 2.5, z: 0.7 },
+      { pos: 100, neg: 100 },
+    )).toBeNull()
+  })
+
+  it('places the camera on the requested view axis', () => {
+    const front = cameraPoseFacingAxis([0, 1, 0], [0, 0, 1], 2)
+    expect(cameraFrontAlignment(front.position, front.target, [0, 0, 1]).aligned).toBe(true)
+    expect(front.position[2]).toBeGreaterThan(0)
+
+    const back = cameraPoseFacingAxis([0, 1, 0], [0, 0, -1], 2)
+    expect(cameraFrontAlignment(back.position, back.target, [0, 0, -1]).aligned).toBe(true)
+    expect(back.position[2]).toBeLessThan(0)
   })
 })

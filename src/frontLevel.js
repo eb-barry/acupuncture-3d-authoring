@@ -17,6 +17,10 @@ export function snapHorizontalToCardinal(direction) {
  * thinner horizontal axis is depth. Front is the more protruding midline side
  * of the head/face (nose), not the ears.
  *
+ * Note: stylized heads can protrude farther at the occiput than the nose, so
+ * callers should prefer {@link inferBodyFrontFromNormalVote} when normals are
+ * available, and authored `frontAxis` for known built-in assets.
+ *
  * @param {{ x: number, z: number }} size horizontal bounding size
  * @param {{ maxAlong: number, minAlong: number, maxY: number, minY: number }} extremes
  *        depth-axis extremes among near-midline upper-body samples
@@ -36,6 +40,28 @@ export function inferBodyFrontFromBounds(size, extremes) {
       ? (Math.sign(extremes.maxAlong) || 1)
       : (Math.sign(extremes.minAlong) || -1)
   }
+  return depthIsZ ? [0, 0, frontSign] : [frontSign, 0, 0]
+}
+
+/**
+ * Infer front from midline depth-normal votes (faces point outward).
+ * Returns null when the vote is too weak / tied.
+ *
+ * @param {{ x: number, z: number }} size
+ * @param {{ pos: number, neg: number }} vote counts of normals with |n_depth| > threshold
+ */
+export function inferBodyFrontFromNormalVote(size, vote, {
+  minSamples = 80,
+  majorityRatio = 0.55,
+} = {}) {
+  const depthIsZ = size.z <= size.x
+  const pos = Number(vote?.pos) || 0
+  const neg = Number(vote?.neg) || 0
+  const total = pos + neg
+  if (total < minSamples || pos === neg) return null
+  const winner = pos > neg ? pos : neg
+  if (winner / total < majorityRatio) return null
+  const frontSign = pos > neg ? 1 : -1
   return depthIsZ ? [0, 0, frontSign] : [frontSign, 0, 0]
 }
 

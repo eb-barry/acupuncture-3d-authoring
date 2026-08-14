@@ -5,11 +5,15 @@ export const BODY_MODELS = {
     id: 'male',
     label: '男性',
     fileName: 'male_character.glb',
+    // Both built-in GLBs face +Z after framing; male head-extremes alone can
+    // mis-read the occiput as the nose, so lock the known asset orientation.
+    frontAxis: [0, 0, 1],
   },
   female: {
     id: 'female',
     label: '女性',
     fileName: 'female-character.glb',
+    frontAxis: [0, 0, 1],
   },
 }
 
