@@ -196,6 +196,8 @@ button:disabled { opacity: .35; cursor: default; }
 .tool span { font-size: 11px; }
 .tool.active { color: #ffdfb5; background: #6e4c29; border-color: #93693c; }
 .tool:disabled { opacity: .4; }
+.tool.danger-tool { color: #e9918b; }
+.tool.danger-tool:not(:disabled):hover { color: #ffb4ae; background: #3a2220; border-color: #59332f; }
 .finish { color: #10201c; background: var(--teal); border-color: var(--teal); font-size: 11px; }
 .hidden { display: none !important; }
 .stage-help {

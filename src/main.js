@@ -88,9 +88,10 @@ $('#app').innerHTML = `
       <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
       <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側場景物件所選經脈）">⌁ <span>顯示經脈</span></button>
       <button class="tool" data-tool="point">＋ <span>穴位</span></button>
-      <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈中線">▣ <span>正面朝向</span></button>
-      <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈中線">▦ <span>背面朝向</span></button>
+      <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
+      <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
+      <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
     </nav>
     <div id="viewport" tabindex="0"><div id="viewport-grid" class="viewport-grid" aria-hidden="true"></div></div>
     <div id="zoom-indicator" class="zoom-indicator" aria-live="polite">1.00×</div>
@@ -368,6 +369,24 @@ function updateShowMeridianButton() {
       : '完成所有穴位定位後開放')
 }
 
+function updateDeleteButton() {
+  const button = $('#delete-selection')
+  if (!button) return
+  const canDelete = Boolean(selected) && !meridianViewMode
+  button.disabled = !canDelete
+  if (!selected) {
+    button.title = '先選取穴位或經脈路線後再刪除'
+    return
+  }
+  if (meridianViewMode) {
+    button.title = '顯示經脈為僅檢視模式，請先關閉後再刪除'
+    return
+  }
+  button.title = selected.type === 'acupoint'
+    ? '刪除選取的穴位（左右配對會一併移除）'
+    : '刪除選取的經脈路線'
+}
+
 function buildMeridianRoutesFromPlaced(meridian, placedPoints, {
   previousRoutes = [],
   color = state.settings.lineColor,
@@ -541,26 +560,6 @@ function refreshBodyFrontAxis() {
   else bodyFront.set(1, 0, 0)
 }
 
-function snapHitToBodyMidline(hit) {
-  const guide = [0, hit.normal[1], hit.normal[2]]
-  if (Math.hypot(guide[1], guide[2]) < 1e-6) {
-    guide[1] = 0
-    guide[2] = bodyFront.z !== 0 ? Math.sign(bodyFront.z) || 1 : 1
-  }
-  const snapped = projectNearSurfaceOrFallback(
-    [0, hit.position[1], hit.position[2]],
-    guide,
-    {
-      position: [0, hit.position[1], hit.position[2]],
-      normal: hit.normal,
-    },
-  )
-  return {
-    position: [0, snapped.position[1], snapped.position[2]],
-    normal: snapped.normal,
-  }
-}
-
 function faceBodySide(side) {
   if (!modelMeshes.length) return toast('請先載入人體模型', 'warn')
   if (orbitLocked) setOrbitLocked(false)
@@ -593,10 +592,10 @@ function faceBodySide(side) {
   syncZoomUI({ force: true })
   if (side === 'back') {
     setStatus('已將身體背面朝向螢幕')
-    toast('背面已對準 · 可定位督脈中線')
+    toast('背面已對準 · 可定位督脈')
   } else {
     setStatus('已將身體正面朝向螢幕')
-    toast('正面已對準 · 可定位任脈中線')
+    toast('正面已對準 · 可定位任脈')
   }
 }
 
@@ -1201,6 +1200,7 @@ function updateUI() {
   renderProperties()
   renderCatalog()
   updateShowMeridianButton()
+  updateDeleteButton()
   document.body.classList.toggle('meridian-view-mode', meridianViewMode)
 }
 
@@ -1286,20 +1286,18 @@ function renderProperties() {
   const key = selected?.type === 'meridian' ? 'meridians' : 'acupoints'
   const item = selected && state[key].find((entry) => entry.id === selected.id)
   if (!item) {
-    form.innerHTML = '<p class="empty">選取穴位後，可在上方調整顏色與尺寸，或在此刪除</p>'
+    form.innerHTML = '<p class="empty">選取穴位後，可在上方調整顏色與尺寸；刪除請用第一排「刪除」</p>'
     return
   }
   form.innerHTML = selected.type === 'meridian' ? `
     <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.name)}</b></div>
     <div class="readonly-field"><span>側別</span><b>${sideLabel(item.side)}</b></div>
     <div class="readonly-field"><span>錨點</span><b>${item.nodes.length}</b></div>
-    <button class="danger" type="button" data-delete>刪除路線</button>
-    <p class="form-help">顏色與線寬請使用上方「樣式設定」。調整曲度請先按「鎖定旋轉」，再拖曳淺藍中點或金色控制點。</p>` : `
+    <p class="form-help">顏色與線寬請使用上方「樣式設定」。調整曲度請先按「鎖定旋轉」，再拖曳淺藍中點或金色控制點。刪除請用第一排「刪除」。</p>` : `
     <div class="readonly-field"><span>穴位</span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b></div>
     <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.meridianName)}</b></div>
     <div class="readonly-field"><span>側別</span><b>${item.pairId ? `${sideLabel(item.side)} · 左右鎖定配對` : '中線'}</b></div>
-    <button class="danger" type="button" data-delete>刪除穴位</button>
-    <p class="form-help">刪除經脈首／尾穴位時，相連線段會一併移除；重新定位後再開啟「顯示經脈」即可接回。</p>`
+    <p class="form-help">點選穴位後，按第一排「刪除」即可從模型移除（左右配對會一併刪除）。刪除經脈首／尾穴位時，相連線段會一併移除；重新定位後再開啟「顯示經脈」即可接回。</p>`
 }
 
 function setTool(tool) {
@@ -1321,16 +1319,16 @@ function setTool(tool) {
     ? selectedCatalog.meridianId
     : null
   const midlineHint = midlineId === 'GV'
-    ? ' · 督脈請先按「背面朝向」'
+    ? ' · 督脈建議先按「背面朝向」'
     : midlineId
-      ? ' · 任脈請先按「正面朝向」'
+      ? ' · 任脈建議先按「正面朝向」'
       : ''
   $('#stage-help').textContent = meridianViewMode
     ? `僅檢視 · ${meridianById(sceneMeridianId())?.name || ''}穴位與經脈線（無調整點）`
     : {
       navigate: orbitLocked
         ? '旋轉已鎖定 · 淺藍中點／金色控制點可拉動曲度'
-        : '拖曳旋轉 · 「正面／背面朝向」對準中線 · 開啟「顯示經脈」僅檢視',
+        : '拖曳旋轉 · 「正面／背面朝向」對準視角 · 選取後按「刪除」移除 · 「顯示經脈」僅檢視',
       point: selectedCatalog
         ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}${midlineHint}`
         : '請先選擇穴位',
@@ -1443,9 +1441,8 @@ function placeAcupoint(hit) {
     ]
     selected = { type: 'acupoint', id: points[0].id, pairId }
   } else {
-    // 任脈／督脈：強制吸到身體正中央。任脈用「正面朝向」、督脈用「背面朝向」。
-    const midlineHit = snapHitToBodyMidline(hit)
-    points = [makePoint(selectedCatalog, 'midline', null, midlineHit)]
+    // 任脈／督脈：保留點擊位置，不強制鎖到模型中線（幾何中心與視覺中線常有誤差）。
+    points = [makePoint(selectedCatalog, 'midline', null, hit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
   }
   syncSceneMeridianFilter(meridian.id)
@@ -1552,12 +1549,11 @@ function placeAt(event) {
 function updatePairedPoint(pointId, hit) {
   const point = getPoint(pointId)
   if (!point) return state
-  const nextHit = point.side === 'midline' ? snapHitToBodyMidline(hit) : hit
-  const mirrored = point.pairId ? mirroredNode(nextHit) : null
+  const mirrored = point.pairId ? mirroredNode(hit) : null
   return {
     ...state,
     acupoints: state.acupoints.map((item) => {
-      if (item.id === point.id) return { ...item, position: nextHit.position, normal: nextHit.normal }
+      if (item.id === point.id) return { ...item, position: hit.position, normal: hit.normal }
       if (point.pairId && item.pairId === point.pairId) {
         return { ...item, position: mirrored.position, normal: mirrored.normal }
       }
@@ -2114,6 +2110,10 @@ document.querySelectorAll('.tool[data-tool]').forEach((button) => button.addEven
 $('#show-meridian').addEventListener('click', () => {
   toggleMeridianViewMode()
 })
+$('#delete-selection').addEventListener('click', () => {
+  if (!selected) return toast('請先選取要刪除的穴位或經脈', 'warn')
+  removeSelected()
+})
 $('#face-front').addEventListener('click', () => {
   faceBodySide('front')
 })
@@ -2302,9 +2302,6 @@ $('#style-settings').addEventListener('input', (event) => {
   }
 })
 $('#properties').addEventListener('submit', (event) => event.preventDefault())
-$('#properties').addEventListener('click', (event) => {
-  if (event.target.matches('[data-delete]')) removeSelected()
-})
 
 $('#undo').addEventListener('click', () => applyHistory(history.undo(), '已復原'))
 $('#redo').addEventListener('click', () => applyHistory(history.redo(), '已重做'))
