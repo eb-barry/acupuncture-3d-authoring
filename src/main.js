@@ -61,10 +61,21 @@ const colorOptions = (selected) => PALETTE
 $('#app').innerHTML = `
 <header class="topbar">
   <div class="brand"><span>經</span><strong>經絡製圖室</strong><small>Meridian Studio</small></div>
-  <div class="file-actions">
-    <label class="button primary">載入 GLB<input id="model-file" type="file" accept=".glb,model/gltf-binary" hidden></label>
-    <label class="button">匯入 JSON<input id="json-file" type="file" accept=".json,application/json" hidden></label>
-    <button id="validate">驗證</button><button id="export">匯出</button>
+  <div class="topbar-center">
+    <div class="file-actions">
+      <label class="button primary">載入 GLB<input id="model-file" type="file" accept=".glb,model/gltf-binary" hidden></label>
+      <label class="button">匯入 JSON<input id="json-file" type="file" accept=".json,application/json" hidden></label>
+      <button id="validate">驗證</button><button id="export">匯出</button>
+    </div>
+    <nav class="tools" aria-label="編輯工具">
+      <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
+      <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側場景物件所選經脈）">⌁ <span>顯示經脈</span></button>
+      <button class="tool" data-tool="point">＋ <span>穴位</span></button>
+      <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
+      <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
+      <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
+      <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
+    </nav>
   </div>
   <div class="history-actions"><button id="undo" title="復原 Ctrl/⌘+Z">↶</button><button id="redo" title="重做 Ctrl/⌘+Shift+Z">↷</button></div>
 </header>
@@ -84,15 +95,6 @@ $('#app').innerHTML = `
     </div>
   </aside>
   <section class="stage">
-    <nav class="tools" aria-label="編輯工具">
-      <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
-      <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側場景物件所選經脈）">⌁ <span>顯示經脈</span></button>
-      <button class="tool" data-tool="point">＋ <span>穴位</span></button>
-      <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
-      <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
-      <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定模型旋轉，方便拉動經脈曲度">🔒 <span>鎖定旋轉</span></button>
-      <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
-    </nav>
     <div id="viewport" tabindex="0"><div id="viewport-grid" class="viewport-grid" aria-hidden="true"></div></div>
     <div id="zoom-indicator" class="zoom-indicator" aria-live="polite">1.00×</div>
     <div class="stage-help" id="stage-help">拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 平移</div>
@@ -1286,18 +1288,18 @@ function renderProperties() {
   const key = selected?.type === 'meridian' ? 'meridians' : 'acupoints'
   const item = selected && state[key].find((entry) => entry.id === selected.id)
   if (!item) {
-    form.innerHTML = '<p class="empty">選取穴位後，可在上方調整顏色與尺寸；刪除請用第一排「刪除」</p>'
+    form.innerHTML = '<p class="empty">選取穴位後，可在上方調整顏色與尺寸；刪除請用頂部「刪除」</p>'
     return
   }
   form.innerHTML = selected.type === 'meridian' ? `
     <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.name)}</b></div>
     <div class="readonly-field"><span>側別</span><b>${sideLabel(item.side)}</b></div>
     <div class="readonly-field"><span>錨點</span><b>${item.nodes.length}</b></div>
-    <p class="form-help">顏色與線寬請使用上方「樣式設定」。調整曲度請先按「鎖定旋轉」，再拖曳淺藍中點或金色控制點。刪除請用第一排「刪除」。</p>` : `
+    <p class="form-help">顏色與線寬請使用上方「樣式設定」。調整曲度請先按「鎖定旋轉」，再拖曳淺藍中點或金色控制點。刪除請用頂部「刪除」。</p>` : `
     <div class="readonly-field"><span>穴位</span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b></div>
     <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.meridianName)}</b></div>
     <div class="readonly-field"><span>側別</span><b>${item.pairId ? `${sideLabel(item.side)} · 左右鎖定配對` : '中線'}</b></div>
-    <p class="form-help">點選穴位後，按第一排「刪除」即可從模型移除（左右配對會一併刪除）。刪除經脈首／尾穴位時，相連線段會一併移除；重新定位後再開啟「顯示經脈」即可接回。</p>`
+    <p class="form-help">點選穴位後，按頂部「刪除」即可從模型移除（左右配對會一併刪除）。刪除經脈首／尾穴位時，相連線段會一併移除；重新定位後再開啟「顯示經脈」即可接回。</p>`
 }
 
 function setTool(tool) {
