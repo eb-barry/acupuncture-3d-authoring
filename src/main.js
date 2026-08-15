@@ -993,7 +993,7 @@ function createMeridianTube(points, color, lineWidth) {
   const curve = createPolylineCurve(points)
   const tubularSegments = Math.max(48, (points.length - 1) * 3)
   const anchor = points[Math.floor(points.length / 2)] || controls.target
-  const radius = pixelSizeToWorld(lineWidth, camera.position.distanceTo(anchor)) * 0.5
+  const radius = Math.max(0.0004, pixelSizeToWorld(lineWidth, camera.position.distanceTo(anchor)) * 0.5)
   const geometry = new THREE.TubeGeometry(curve, tubularSegments, radius, 10, false)
   const material = new THREE.MeshPhysicalMaterial({
     color,
@@ -1011,7 +1011,52 @@ function createMeridianTube(points, color, lineWidth) {
   const mesh = new THREE.Mesh(geometry, material)
   mesh.renderOrder = 2
   mesh.frustumCulled = false
+  mesh.userData.tubePoints = points.map((point) => point.clone())
+  mesh.userData.lineWidth = lineWidth
+  mesh.userData.tubeRadius = radius
   return mesh
+}
+
+function activeMeridianLineWidth() {
+  const meridianId = activeDisplayMeridianId()
+  const route = state.meridians.find((item) => item.meridianId === meridianId)
+  return Number(route?.width) || Number(state.settings.lineWidth) || 4
+}
+
+function markerFacingLift(point, pixelSize) {
+  const distance = camera.position.distanceTo(new THREE.Vector3(...resolvedNode(point).position))
+  const markerRadius = pixelSizeToWorld(pixelSize, distance) * 0.5
+  // Keep a small default lift so markers stay on the click/crosshair.
+  let lift = Math.max(0.003, markerRadius * 0.2)
+  if (meridianViewMode || orbitLocked) {
+    // Sit the sphere on the tube surface toward the camera so the meridian
+    // connects through the point without swallowing the red marker.
+    const tubeRadius = Math.max(0.0004, pixelSizeToWorld(activeMeridianLineWidth(), distance) * 0.5)
+    lift = Math.max(lift, tubeRadius + markerRadius * 0.45)
+  }
+  return lift
+}
+
+function updateRouteTubeRadii() {
+  routeVisuals.forEach(({ line, route }) => {
+    if (!line || !route) return
+    const points = line.userData.tubePoints
+    const lineWidth = line.userData.lineWidth ?? route.width
+    if (!Array.isArray(points) || points.length < 2) return
+    const anchor = points[Math.floor(points.length / 2)]
+    const nextRadius = Math.max(
+      0.0004,
+      pixelSizeToWorld(lineWidth, camera.position.distanceTo(anchor)) * 0.5,
+    )
+    const prevRadius = line.userData.tubeRadius || 0
+    if (prevRadius > 0 && Math.abs(nextRadius - prevRadius) / prevRadius < 0.04) return
+    const curve = createPolylineCurve(points)
+    const tubularSegments = Math.max(48, (points.length - 1) * 3)
+    const nextGeometry = new THREE.TubeGeometry(curve, tubularSegments, nextRadius, 10, false)
+    line.geometry.dispose()
+    line.geometry = nextGeometry
+    line.userData.tubeRadius = nextRadius
+  })
 }
 
 function createGlossySphereMaterial(color, { emissive = 0x000000, emissiveIntensity = 0 } = {}) {
@@ -1027,6 +1072,10 @@ function createGlossySphereMaterial(color, { emissive = 0x000000, emissiveIntens
     emissiveIntensity,
     depthTest: true,
     depthWrite: true,
+    // Prefer markers when depth is nearly equal to the meridian tube.
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   })
 }
 
@@ -1122,7 +1171,8 @@ function rebuildAnnotations() {
         && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
       const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
       // Camera-facing lift only: normal-offset made neck points (e.g. 天突) drift off the crosshair.
-      const anchor = cameraFacingAnchor(point, 0.003)
+      // When meridians are visible, lift above the tube so the red point stays on top.
+      const anchor = cameraFacingAnchor(point, markerFacingLift(point, pixelSize))
       const marker = new THREE.Mesh(
         new THREE.SphereGeometry(0.5, 20, 16),
         createGlossySphereMaterial(point.color, {
@@ -1148,12 +1198,13 @@ function rebuildAnnotations() {
 }
 
 function updateMarkerScales() {
+  updateRouteTubeRadii()
   markerVisuals.forEach(({ mesh, label, point }) => {
-    const anchor = cameraFacingAnchor(point, 0.003)
+    const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
+    const anchor = cameraFacingAnchor(point, markerFacingLift(point, pixelSize))
     mesh.position.copy(anchor)
     if (label) label.position.copy(anchor)
     const distance = camera.position.distanceTo(mesh.position)
-    const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
     mesh.scale.setScalar(pixelSizeToWorld(pixelSize, distance))
     if (label?.element) {
       label.element.style.setProperty('--marker-size', `${pixelSize}px`)
@@ -2462,21 +2513,23 @@ updateUI()
 applyViewportGrid()
 syncZoomUI({ force: true })
 resize()
-let lastTubeZoom = camera.position.distanceTo(controls.target)
+let lastTubeZoomFactor = getZoomFactor()
 let lastZoomForUi = getZoomFactor()
 controls.addEventListener('change', () => {
   const zoom = getZoomFactor()
   if (Math.abs(zoom - lastZoomForUi) < 0.0008) return
   lastZoomForUi = zoom
   syncZoomUI({ flash: true })
+  // Keep meridian thickness matched while zooming so tubes do not engulf points.
+  updateRouteTubeRadii()
 })
 controls.addEventListener('end', () => {
-  const distance = camera.position.distanceTo(controls.target)
-  if (Math.abs(distance - lastTubeZoom) / Math.max(distance, 0.01) > 0.1) {
-    lastTubeZoom = distance
+  const zoom = getZoomFactor()
+  if (Math.abs(zoom - lastTubeZoomFactor) / Math.max(zoom, 0.01) > 0.05) {
+    lastTubeZoomFactor = zoom
     rebuildAnnotations()
   }
-  lastZoomForUi = getZoomFactor()
+  lastZoomForUi = zoom
   syncZoomUI({ force: true })
 })
 $('#body-model-filter').addEventListener('change', (event) => {
