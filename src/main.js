@@ -151,7 +151,6 @@ $('#app').innerHTML = `
         <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。格線旋轉預設 0°，可調 ±90°。模型放大以載入後的預設視距為 1×，與滾輪縮放同步。</p>
       </form>
     </section>
-    <div class="inspector"><div class="panel-heading"><span>屬性</span></div><form id="properties"><p class="empty">選取經脈或穴位以編輯或刪除</p></form></div>
   </aside>
 </main>
 <footer><span id="model-status">正在載入人體模型…</span><span id="status">就緒</span><span>WebGL · 本機資料</span></footer>
@@ -264,6 +263,9 @@ let pointerDown = null
 let dragging = null
 let dragMoved = false
 let orbitLocked = false
+const lockedViewOffset = new THREE.Vector3()
+const lockedViewUp = new THREE.Vector3(0, 1, 0)
+let hasLockedView = false
 let meridianViewMode = false
 const linkedMeridianIds = new Set()
 const storageKeyForBody = (body) => `meridian-studio-document-v2-${inferBodyModel({ body })}`
@@ -318,6 +320,30 @@ function syncControlsEnabled() {
   }
   controls.enabled = true
   controls.enableRotate = !orbitLocked
+  // While rotation is locked, one-finger touch must not orbit the camera.
+  controls.touches = orbitLocked
+    ? { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }
+    : { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }
+}
+
+function captureLockedView() {
+  lockedViewOffset.copy(camera.position).sub(controls.target)
+  if (lockedViewOffset.lengthSq() < 1e-10) lockedViewOffset.set(0, 0.2, 1)
+  lockedViewUp.copy(camera.up).normalize()
+  hasLockedView = true
+}
+
+function clearLockedView() {
+  hasLockedView = false
+}
+
+function enforceLockedView() {
+  if (!orbitLocked || !hasLockedView) return
+  const distance = Math.max(camera.position.distanceTo(controls.target), 0.05)
+  const direction = lockedViewOffset.clone().normalize()
+  camera.position.copy(controls.target).addScaledVector(direction, distance)
+  camera.up.copy(lockedViewUp)
+  camera.lookAt(controls.target)
 }
 
 function setOrbitLocked(locked) {
@@ -331,10 +357,12 @@ function setOrbitLocked(locked) {
     button.classList.toggle('active', orbitLocked)
     button.setAttribute('aria-pressed', orbitLocked ? 'true' : 'false')
   }
+  if (orbitLocked) captureLockedView()
+  else clearLockedView()
   syncControlsEnabled()
   rebuildAnnotations()
   setStatus(orbitLocked
-    ? '模型旋轉已鎖定 · 已顯示曲度中點，可拉動調整經脈'
+    ? '模型旋轉已鎖定 · 視角固定 · 已顯示曲度中點，可拉動調整經脈'
     : '模型旋轉已解除鎖定 · 已隱藏曲度中點')
 }
 
@@ -1199,7 +1227,7 @@ function updateUI() {
   const heading = document.querySelector('.inspector-panel .panel-heading span')
   if (heading) heading.textContent = `場景物件（${meridianDone}/${MERIDIANS.length} 經脈）`
   renderObjects()
-  renderProperties()
+  syncStyleSettings()
   renderCatalog()
   updateShowMeridianButton()
   updateDeleteButton()
@@ -1275,33 +1303,6 @@ function applyStyleSettings(data) {
   commit({ ...state, settings }, '已更新新定位樣式預設值')
 }
 
-function renderProperties() {
-  syncStyleSettings()
-  const form = $('#properties')
-  if (meridianViewMode) {
-    const meridian = meridianById(sceneMeridianId())
-    form.innerHTML = `
-      <div class="readonly-field"><span>顯示中</span><b>${escapeHtml(meridian?.name || '')}</b></div>
-      <p class="form-help">目前為「顯示經脈」僅檢視模式：不顯示調整點，也無法編輯。關閉後才可定位、刪除或調整曲度。</p>`
-    return
-  }
-  const key = selected?.type === 'meridian' ? 'meridians' : 'acupoints'
-  const item = selected && state[key].find((entry) => entry.id === selected.id)
-  if (!item) {
-    form.innerHTML = '<p class="empty">選取穴位後，可在上方調整顏色與尺寸；刪除請用頂部「刪除」</p>'
-    return
-  }
-  form.innerHTML = selected.type === 'meridian' ? `
-    <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.name)}</b></div>
-    <div class="readonly-field"><span>側別</span><b>${sideLabel(item.side)}</b></div>
-    <div class="readonly-field"><span>錨點</span><b>${item.nodes.length}</b></div>
-    <p class="form-help">顏色與線寬請使用上方「樣式設定」。調整曲度請先按「鎖定旋轉」，再拖曳淺藍中點或金色控制點。刪除請用頂部「刪除」。</p>` : `
-    <div class="readonly-field"><span>穴位</span><b>${escapeHtml(item.code)} · ${escapeHtml(item.name)}</b></div>
-    <div class="readonly-field"><span>經脈</span><b>${escapeHtml(item.meridianName)}</b></div>
-    <div class="readonly-field"><span>側別</span><b>${item.pairId ? `${sideLabel(item.side)} · 左右鎖定配對` : '中線'}</b></div>
-    <p class="form-help">點選穴位後，按頂部「刪除」即可從模型移除（左右配對會一併刪除）。刪除經脈首／尾穴位時，相連線段會一併移除；重新定位後再開啟「顯示經脈」即可接回。</p>`
-}
-
 function setTool(tool) {
   if (tool === 'path') {
     setMeridianViewMode(true)
@@ -1329,7 +1330,7 @@ function setTool(tool) {
     ? `僅檢視 · ${meridianById(sceneMeridianId())?.name || ''}穴位與經脈線（無調整點）`
     : {
       navigate: orbitLocked
-        ? '旋轉已鎖定 · 淺藍中點／金色控制點可拉動曲度'
+        ? '旋轉已鎖定 · 視角固定 · 淺藍中點／金色控制點可拉動曲度'
         : '拖曳旋轉 · 「正面／背面朝向」對準視角 · 選取後按「刪除」移除 · 「顯示經脈」僅檢視',
       point: selectedCatalog
         ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}${midlineHint}`
@@ -1379,6 +1380,7 @@ function setMeridianViewMode(enabled) {
     }
     if (orbitLocked) {
       orbitLocked = false
+      clearLockedView()
       const lockButton = $('#lock-orbit')
       if (lockButton) {
         lockButton.classList.remove('active')
@@ -2032,6 +2034,7 @@ async function setActiveBodyModel(bodyId) {
   meridianViewMode = false
   selected = null
   orbitLocked = false
+  clearLockedView()
   const lockButton = $('#lock-orbit')
   if (lockButton) {
     lockButton.classList.remove('active')
@@ -2080,6 +2083,7 @@ function resize() {
 new ResizeObserver(resize).observe(viewport)
 renderer.setAnimationLoop((time) => {
   controls.update()
+  enforceLockedView()
   updateMarkerScales()
   updateLabelVisibility(time)
   renderer.render(scene, camera)
@@ -2122,6 +2126,19 @@ $('#face-front').addEventListener('click', () => {
 $('#face-back').addEventListener('click', () => {
   faceBodySide('back')
 })
+
+// Capture phase: stop OrbitControls from starting a rotate when editing handles,
+// and keep rotation inert while the lock is on.
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return
+  if (orbitLocked) {
+    controls.enableRotate = false
+  }
+  if (meridianViewMode || activeTool !== 'navigate') return
+  const hit = annotationHit(event, ['route-midpoint', 'acupoint', 'route-handle'])
+  if (!hit) return
+  controls.enabled = false
+}, true)
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerDown = { x: event.clientX, y: event.clientY }
@@ -2303,8 +2320,6 @@ $('#style-settings').addEventListener('input', (event) => {
     }
   }
 })
-$('#properties').addEventListener('submit', (event) => event.preventDefault())
-
 $('#undo').addEventListener('click', () => applyHistory(history.undo(), '已復原'))
 $('#redo').addEventListener('click', () => applyHistory(history.redo(), '已重做'))
 $('#validate').addEventListener('click', () => {
