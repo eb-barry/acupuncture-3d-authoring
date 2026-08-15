@@ -27,7 +27,6 @@ import {
 import {
   SKIN_LIFT,
   marchStandoff,
-  pixelWidthToWorldRadius,
   pruneBacktracking,
   slerpUnitVectors,
   surfaceStepLength,
@@ -159,8 +158,10 @@ $('#app').innerHTML = `
 const viewport = $('#viewport')
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x14161b)
-const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000)
-camera.position.set(2.5, 1.8, 3.2)
+const perspectiveCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 2000)
+perspectiveCamera.position.set(2.5, 1.8, 3.2)
+const orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 2000)
+let camera = perspectiveCamera
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
@@ -220,7 +221,7 @@ accentRing.rotation.x = -Math.PI / 2
 pedestal.add(accentRing)
 pedestal.visible = false
 
-const controls = new OrbitControls(camera, renderer.domElement)
+const controls = new OrbitControls(perspectiveCamera, renderer.domElement)
 controls.target.set(0, 1.0, 0)
 controls.enableDamping = true
 controls.dampingFactor = 0.08
@@ -240,7 +241,7 @@ controls.maxDistance = 500
 const modelGroup = new THREE.Group()
 const annotationGroup = new THREE.Group()
 scene.add(modelGroup, annotationGroup)
-let initialCamPos = camera.position.clone()
+let initialCamPos = perspectiveCamera.position.clone()
 let initialTarget = controls.target.clone()
 
 let modelMeshes = []
@@ -266,6 +267,9 @@ let orbitLocked = false
 const lockedViewOffset = new THREE.Vector3()
 const lockedViewUp = new THREE.Vector3(0, 1, 0)
 let hasLockedView = false
+let lockedPerspectiveDistance = 0
+let lockedOrthoHalfHeight = 1
+let lockedZoomFactor = 1
 let meridianViewMode = false
 const linkedMeridianIds = new Set()
 const storageKeyForBody = (body) => `meridian-studio-document-v2-${inferBodyModel({ body })}`
@@ -337,6 +341,54 @@ function clearLockedView() {
   hasLockedView = false
 }
 
+function syncOrthographicFrustum(halfHeight = lockedOrthoHalfHeight) {
+  const width = Math.max(viewport.clientWidth, 1)
+  const height = Math.max(viewport.clientHeight, 1)
+  const aspect = width / height
+  const safeHeight = Math.max(halfHeight, 1e-4)
+  orthographicCamera.left = -safeHeight * aspect
+  orthographicCamera.right = safeHeight * aspect
+  orthographicCamera.top = safeHeight
+  orthographicCamera.bottom = -safeHeight
+  orthographicCamera.near = perspectiveCamera.near
+  orthographicCamera.far = perspectiveCamera.far
+  orthographicCamera.updateProjectionMatrix()
+}
+
+function fitOrthographicToPerspective() {
+  const distance = Math.max(perspectiveCamera.position.distanceTo(controls.target), 0.05)
+  lockedPerspectiveDistance = distance
+  lockedZoomFactor = referenceZoomDistance > 0 ? referenceZoomDistance / distance : 1
+  lockedOrthoHalfHeight = Math.tan(THREE.MathUtils.degToRad(perspectiveCamera.fov) / 2) * distance
+  orthographicCamera.position.copy(perspectiveCamera.position)
+  orthographicCamera.quaternion.copy(perspectiveCamera.quaternion)
+  orthographicCamera.up.copy(perspectiveCamera.up)
+  orthographicCamera.zoom = 1
+  syncOrthographicFrustum(lockedOrthoHalfHeight)
+}
+
+function restorePerspectiveFromOrthographic() {
+  const target = controls.target.clone()
+  const direction = orthographicCamera.position.clone().sub(target)
+  if (direction.lengthSq() < 1e-10) direction.copy(lockedViewOffset)
+  const zoom = Math.max(orthographicCamera.zoom, 1e-4)
+  const distance = Math.min(
+    controls.maxDistance,
+    Math.max(controls.minDistance, lockedPerspectiveDistance / zoom),
+  )
+  direction.setLength(distance)
+  perspectiveCamera.position.copy(target).add(direction)
+  perspectiveCamera.up.copy(orthographicCamera.up)
+  perspectiveCamera.lookAt(target)
+  perspectiveCamera.updateProjectionMatrix()
+}
+
+function setActiveCamera(nextCamera) {
+  camera = nextCamera
+  controls.object = nextCamera
+  controls.update()
+}
+
 function enforceLockedView() {
   if (!orbitLocked || !hasLockedView) return
   const distance = Math.max(camera.position.distanceTo(controls.target), 0.05)
@@ -346,24 +398,66 @@ function enforceLockedView() {
   camera.lookAt(controls.target)
 }
 
+function pixelSizeToWorld(pixelSize, distanceForPerspective = 1) {
+  const viewportHeight = Math.max(viewport.clientHeight, 1)
+  const pixels = Number(pixelSize) || 1
+  if (camera.isOrthographicCamera) {
+    const viewHeight = (camera.top - camera.bottom) / Math.max(camera.zoom, 1e-6)
+    return Math.max(0.004, pixels * viewHeight / viewportHeight)
+  }
+  const fov = THREE.MathUtils.degToRad(camera.fov || 45)
+  const distance = Math.max(Number(distanceForPerspective) || 0.01, 0.01)
+  return Math.max(0.004, 2 * distance * Math.tan(fov / 2) * pixels / viewportHeight)
+}
+
+function detachOrbitLock({ restorePerspective = true } = {}) {
+  if (restorePerspective && camera.isOrthographicCamera) {
+    restorePerspectiveFromOrthographic()
+  }
+  orbitLocked = false
+  clearLockedView()
+  setActiveCamera(perspectiveCamera)
+  const lockButton = $('#lock-orbit')
+  if (lockButton) {
+    lockButton.classList.remove('active')
+    lockButton.setAttribute('aria-pressed', 'false')
+  }
+  syncControlsEnabled()
+}
+
 function setOrbitLocked(locked) {
   if (meridianViewMode && locked) {
     toast('顯示經脈為僅檢視模式，請先關閉後再調整曲度', 'warn')
     return
   }
-  orbitLocked = Boolean(locked)
-  const button = $('#lock-orbit')
-  if (button) {
-    button.classList.toggle('active', orbitLocked)
-    button.setAttribute('aria-pressed', orbitLocked ? 'true' : 'false')
+  const nextLocked = Boolean(locked)
+  if (nextLocked === orbitLocked) {
+    syncControlsEnabled()
+    return
   }
-  if (orbitLocked) captureLockedView()
-  else clearLockedView()
-  syncControlsEnabled()
+  if (nextLocked) {
+    orbitLocked = true
+    const button = $('#lock-orbit')
+    if (button) {
+      button.classList.add('active')
+      button.setAttribute('aria-pressed', 'true')
+    }
+    // Perspective pan makes off-center anatomy look turned; switch to ortho so
+    // left/right translation keeps the exact same facing.
+    fitOrthographicToPerspective()
+    setActiveCamera(orthographicCamera)
+    captureLockedView()
+    syncControlsEnabled()
+    rebuildAnnotations()
+    syncZoomUI({ force: true })
+    setStatus('模型旋轉已鎖定 · 視角固定（平移不改朝向）· 已顯示曲度中點')
+    return
+  }
+
+  detachOrbitLock({ restorePerspective: true })
   rebuildAnnotations()
-  setStatus(orbitLocked
-    ? '模型旋轉已鎖定 · 視角固定 · 已顯示曲度中點，可拉動調整經脈'
-    : '模型旋轉已解除鎖定 · 已隱藏曲度中點')
+  syncZoomUI({ force: true })
+  setStatus('模型旋轉已解除鎖定 · 已隱藏曲度中點')
 }
 
 function sceneMeridianId() {
@@ -899,12 +993,7 @@ function createMeridianTube(points, color, lineWidth) {
   const curve = createPolylineCurve(points)
   const tubularSegments = Math.max(48, (points.length - 1) * 3)
   const anchor = points[Math.floor(points.length / 2)] || controls.target
-  const radius = pixelWidthToWorldRadius(
-    lineWidth,
-    camera.position.distanceTo(anchor),
-    camera.fov,
-    viewport.clientHeight,
-  )
+  const radius = pixelSizeToWorld(lineWidth, camera.position.distanceTo(anchor)) * 0.5
   const geometry = new THREE.TubeGeometry(curve, tubularSegments, radius, 10, false)
   const material = new THREE.MeshPhysicalMaterial({
     color,
@@ -1059,24 +1148,19 @@ function rebuildAnnotations() {
 }
 
 function updateMarkerScales() {
-  const viewportHeight = Math.max(viewport.clientHeight, 1)
-  const fov = THREE.MathUtils.degToRad(camera.fov)
   markerVisuals.forEach(({ mesh, label, point }) => {
     const anchor = cameraFacingAnchor(point, 0.003)
     mesh.position.copy(anchor)
     if (label) label.position.copy(anchor)
     const distance = camera.position.distanceTo(mesh.position)
     const pixelSize = Math.max(5, Math.min(30, Number(point.size) || state.settings.markerSize))
-    const diameter = 2 * distance * Math.tan(fov / 2) * pixelSize / viewportHeight
-    mesh.scale.setScalar(Math.max(diameter, 0.004))
+    mesh.scale.setScalar(pixelSizeToWorld(pixelSize, distance))
     if (label?.element) {
       label.element.style.setProperty('--marker-size', `${pixelSize}px`)
     }
   })
-  const handleSize = (position, pixels = 14) => {
-    const distance = camera.position.distanceTo(position)
-    return Math.max(0.004, 2 * distance * Math.tan(fov / 2) * pixels / viewportHeight)
-  }
+  const handleSize = (position, pixels = 14) =>
+    pixelSizeToWorld(pixels, camera.position.distanceTo(position))
   handleVisuals.forEach(({ mesh }) => {
     mesh.scale.setScalar(handleSize(mesh.position, 15))
   })
@@ -1330,7 +1414,7 @@ function setTool(tool) {
     ? `僅檢視 · ${meridianById(sceneMeridianId())?.name || ''}穴位與經脈線（無調整點）`
     : {
       navigate: orbitLocked
-        ? '旋轉已鎖定 · 視角固定 · 淺藍中點／金色控制點可拉動曲度'
+        ? '旋轉已鎖定 · 正交視角 · 左右平移不改變朝向 · 可拉動曲度控制點'
         : '拖曳旋轉 · 「正面／背面朝向」對準視角 · 選取後按「刪除」移除 · 「顯示經脈」僅檢視',
       point: selectedCatalog
         ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}${midlineHint}`
@@ -1378,16 +1462,7 @@ function setMeridianViewMode(enabled) {
       toast(result.reason, 'warn')
       return
     }
-    if (orbitLocked) {
-      orbitLocked = false
-      clearLockedView()
-      const lockButton = $('#lock-orbit')
-      if (lockButton) {
-        lockButton.classList.remove('active')
-        lockButton.setAttribute('aria-pressed', 'false')
-      }
-      syncControlsEnabled()
-    }
+    if (orbitLocked) detachOrbitLock({ restorePerspective: true })
     meridianViewMode = true
     selected = null
     activeTool = 'navigate'
@@ -1737,20 +1812,24 @@ function applyModel(gltf, name, hash = null) {
     modelMeshes.push(object)
   })
 
-  const fovRad = THREE.MathUtils.degToRad(camera.fov)
+  const fovRad = THREE.MathUtils.degToRad(perspectiveCamera.fov)
   const dist = (maxDim / 2) / Math.tan(fovRad / 2) * 1.65
-  camera.near = Math.max(maxDim / 1000, 0.001)
-  camera.far = Math.max(maxDim * 100, 100)
-  camera.updateProjectionMatrix()
-  camera.position.set(dist * 0.72, dist * 0.55, dist * 0.72)
+  perspectiveCamera.near = Math.max(maxDim / 1000, 0.001)
+  perspectiveCamera.far = Math.max(maxDim * 100, 100)
+  perspectiveCamera.updateProjectionMatrix()
+  perspectiveCamera.position.set(dist * 0.72, dist * 0.55, dist * 0.72)
   controls.target.set(0, framedSize.y * 0.4, 0)
   controls.minDistance = maxDim * 0.05
   controls.maxDistance = maxDim * 20
+  if (orbitLocked) {
+    detachOrbitLock({ restorePerspective: false })
+  }
   controls.update()
-  initialCamPos = camera.position.clone()
+  initialCamPos = perspectiveCamera.position.clone()
   initialTarget = controls.target.clone()
-  referenceZoomDistance = camera.position.distanceTo(controls.target)
+  referenceZoomDistance = perspectiveCamera.position.distanceTo(controls.target)
   syncZoomUI({ force: true })
+  syncControlsEnabled()
 
   const body = inferBodyModel({ ...state.model, name, body: activeBody })
   state = {
@@ -1830,6 +1909,9 @@ function zoomLimits() {
 }
 
 function getZoomFactor() {
+  if (camera.isOrthographicCamera) {
+    return Math.max(lockedZoomFactor * camera.zoom, 1e-6)
+  }
   const distance = camera.position.distanceTo(controls.target)
   if (!(referenceZoomDistance > 0) || !(distance > 1e-6)) return 1
   return referenceZoomDistance / distance
@@ -1837,12 +1919,23 @@ function getZoomFactor() {
 
 function setZoomFactor(rawFactor, { announce = false } = {}) {
   if (!(referenceZoomDistance > 0)) {
-    referenceZoomDistance = Math.max(camera.position.distanceTo(controls.target), 0.05)
+    referenceZoomDistance = Math.max(perspectiveCamera.position.distanceTo(controls.target), 0.05)
   }
   const limits = zoomLimits()
   let factor = Number(rawFactor)
   if (!Number.isFinite(factor) || factor <= 0) factor = 1
   factor = Math.min(limits.max, Math.max(limits.min, factor))
+
+  if (camera.isOrthographicCamera) {
+    const base = Math.max(lockedZoomFactor, 1e-6)
+    camera.zoom = Math.max(factor / base, 1e-4)
+    camera.updateProjectionMatrix()
+    controls.update()
+    syncZoomUI({ force: true, flash: true })
+    if (announce) setStatus(`模型放大 ${formatZoomFactor(getZoomFactor())}`)
+    return
+  }
+
   const desiredDistance = referenceZoomDistance / factor
   const distance = Math.min(
     controls.maxDistance,
@@ -2033,14 +2126,7 @@ async function setActiveBodyModel(bodyId) {
   documentsByBody[activeBody] = structuredClone(state)
   meridianViewMode = false
   selected = null
-  orbitLocked = false
-  clearLockedView()
-  const lockButton = $('#lock-orbit')
-  if (lockButton) {
-    lockButton.classList.remove('active')
-    lockButton.setAttribute('aria-pressed', 'false')
-  }
-  syncControlsEnabled()
+  detachOrbitLock({ restorePerspective: false })
   await loadBodyModel(body, { keepDocument: false })
   rebuildAnnotations()
   updateUI()
@@ -2072,7 +2158,17 @@ async function loadModel(file) {
 
 function resize() {
   const { clientWidth, clientHeight } = viewport
-  camera.aspect = clientWidth / clientHeight
+  const aspect = Math.max(clientWidth, 1) / Math.max(clientHeight, 1)
+  perspectiveCamera.aspect = aspect
+  perspectiveCamera.updateProjectionMatrix()
+  if (orbitLocked) syncOrthographicFrustum(lockedOrthoHalfHeight)
+  else {
+    orthographicCamera.left = -aspect
+    orthographicCamera.right = aspect
+    orthographicCamera.top = 1
+    orthographicCamera.bottom = -1
+    orthographicCamera.updateProjectionMatrix()
+  }
   camera.updateProjectionMatrix()
   renderer.setSize(clientWidth, clientHeight, false)
   labelRenderer.setSize(clientWidth, clientHeight)
