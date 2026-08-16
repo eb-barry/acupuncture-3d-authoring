@@ -71,6 +71,7 @@ $('#app').innerHTML = `
       <button id="mode-edit" class="tool active" type="button" aria-pressed="true" title="編輯：點皮膚加穴、拖曳穴位與經脈曲度">✎ <span>編輯</span></button>
       <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
+      <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定旋轉：可上下左右平移，視角朝向不變，仍可編輯">🔒 <span>鎖定旋轉</span></button>
       <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
     </nav>
   </div>
@@ -277,6 +278,8 @@ let pointerDown = null
 let dragging = null
 let dragMoved = false
 let orbitLocked = false
+/** User pinned lock via the toolbar button; survives curve-handle release. */
+let orbitLockSticky = false
 const lockedViewOffset = new THREE.Vector3()
 const lockedViewUp = new THREE.Vector3(0, 1, 0)
 let hasLockedView = false
@@ -339,10 +342,21 @@ function syncControlsEnabled() {
   }
   controls.enabled = true
   controls.enableRotate = !orbitLocked
+  controls.enablePan = true
   // While rotation is locked, one-finger touch must not orbit the camera.
   controls.touches = orbitLocked
     ? { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }
     : { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }
+}
+
+function syncOrbitLockButton() {
+  const button = $('#lock-orbit')
+  if (!button) return
+  button.classList.toggle('active', orbitLocked)
+  button.setAttribute('aria-pressed', orbitLocked ? 'true' : 'false')
+  button.title = orbitLocked
+    ? '解除鎖定：恢復旋轉模型'
+    : '鎖定旋轉：可上下左右平移，視角朝向不變，仍可編輯'
 }
 
 function captureLockedView() {
@@ -430,31 +444,42 @@ function detachOrbitLock({ restorePerspective = true } = {}) {
     restorePerspectiveFromOrthographic()
   }
   orbitLocked = false
+  orbitLockSticky = false
   clearLockedView()
   setActiveCamera(perspectiveCamera)
   syncControlsEnabled()
+  syncOrbitLockButton()
 }
 
-function setOrbitLocked(locked) {
+function setOrbitLocked(locked, { sticky = false } = {}) {
   const nextLocked = Boolean(locked)
   if (nextLocked === orbitLocked) {
+    if (nextLocked && sticky) orbitLockSticky = true
+    if (!nextLocked) orbitLockSticky = false
     syncControlsEnabled()
+    syncOrbitLockButton()
     return
   }
   if (nextLocked) {
     orbitLocked = true
+    if (sticky) orbitLockSticky = true
     // Perspective pan makes off-center anatomy look turned; switch to ortho so
     // left/right translation keeps the exact same facing.
     fitOrthographicToPerspective()
     setActiveCamera(orthographicCamera)
     captureLockedView()
     syncControlsEnabled()
+    syncOrbitLockButton()
     syncZoomUI({ force: true })
+    setStatus(sticky
+      ? '旋轉已鎖定 · 可上下左右平移 · 視角朝向不變 · 仍可編輯'
+      : '編輯曲度中 · 旋轉暫時鎖定')
     return
   }
 
   detachOrbitLock({ restorePerspective: true })
   syncZoomUI({ force: true })
+  setStatus('模型旋轉已解除鎖定')
 }
 
 function meridiansWithPlacedData() {
@@ -1417,6 +1442,7 @@ function updateUI() {
   renderCatalog()
   updateDeleteButton()
   syncAppModeUI()
+  syncOrbitLockButton()
 }
 
 function syncStyleSettings() {
@@ -1490,11 +1516,15 @@ function syncAppModeUI() {
       ? ' · 任脈建議先按「正面朝向」'
       : ''
   if (appMode === 'view') {
-    $('#stage-help').textContent = '檢視模式 · 旋轉／縮放／平移 · 右側勾選顯示 · 可匯入匯出 · 穴位與經脈唯讀'
+    $('#stage-help').textContent = orbitLocked
+      ? '檢視模式 · 旋轉已鎖定 · 可上下左右平移 · 視角朝向不變'
+      : '檢視模式 · 旋轉／縮放／平移 · 右側勾選顯示 · 可匯入匯出 · 穴位與經脈唯讀'
     return
   }
   if (orbitLocked) {
-    $('#stage-help').textContent = '編輯曲度中 · 旋轉已暫時鎖定 · 放開編輯點後恢復'
+    $('#stage-help').textContent = orbitLockSticky
+      ? '編輯 · 旋轉已鎖定 · 可上下左右平移 · 視角朝向不變 · 可拖穴位／調曲度'
+      : '編輯曲度中 · 旋轉已暫時鎖定 · 放開編輯點後恢復'
     return
   }
   $('#stage-help').textContent = selectedCatalog
@@ -1508,7 +1538,7 @@ function setAppMode(mode) {
     syncAppModeUI()
     return
   }
-  if (orbitLocked) detachOrbitLock({ restorePerspective: true })
+  // Keep sticky orbit lock across view/edit so pan-without-rotate stays available.
   appMode = next
   rebuildAnnotations()
   updateUI()
@@ -1641,8 +1671,7 @@ function placeAcupoint(hit) {
   state = { ...state, acupoints: nextAcupoints, meridians: nextMeridians }
   if (progressPreview.complete) {
     linkedMeridianIds.add(meridian.id)
-    const createdNames = autoEnsureCompletedMeridians()
-    nextMeridians = state.meridians
+    autoEnsureCompletedMeridians()
   }
   commit({ ...state, acupoints: nextAcupoints, meridians: state.meridians },
     meridian.bilateral ? `已建立 ${selectedCatalog.code} 左右配對` : `已定位 ${selectedCatalog.code}`)
@@ -2457,7 +2486,7 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     const draggedId = dragging.id
     dragging = null
     dragMoved = false
-    if (wasHandle && orbitLocked) {
+    if (wasHandle && orbitLocked && !orbitLockSticky) {
       detachOrbitLock({ restorePerspective: true })
     }
     syncControlsEnabled()
@@ -2482,12 +2511,17 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     updateUI()
     if (moved) {
       setStatus(wasHandle
-        ? '曲度已更新'
+        ? (orbitLockSticky ? '曲度已更新（旋轉保持鎖定）' : '曲度已更新')
         : '穴位位置已更新並同步左右配對')
     }
     return
   }
   if (pointerDown && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) <= 4 && event.button === 0) placeAt(event)
+})
+
+$('#lock-orbit').addEventListener('click', () => {
+  setOrbitLocked(!orbitLocked, { sticky: true })
+  syncAppModeUI()
 })
 
 $('#objects').addEventListener('click', (event) => {
