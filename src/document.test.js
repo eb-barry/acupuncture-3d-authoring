@@ -64,7 +64,7 @@ describe('acupuncture document schema', () => {
     const result = parseDocument(JSON.stringify(legacy))
     expect(result.valid).toBe(true)
     expect(result.value.version).toBe(2)
-    expect(result.value.settings.markerSize).toBe(12)
+    expect(result.value.settings.markerSize).toBe(10)
     expect(result.value.model.body).toBe('male')
   })
 

@@ -33,10 +33,10 @@ export const emptyDocument = (body = 'male') => {
     version: 2,
     model: { name: preset.fileName, hash: null, body: resolved },
     settings: {
-      markerSize: 12,
+      markerSize: 10,
       markerColor: '#ef4444',
       lineColor: '#3b82f6',
-      lineWidth: 4,
+      lineWidth: 3,
     },
     meridians: [],
     acupoints: [],
