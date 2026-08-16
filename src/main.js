@@ -9,7 +9,7 @@ import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh'
-import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, pointsForMeridian } from './catalog.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
 import {
   BODY_MODELS,
   emptyDocument,
@@ -127,7 +127,14 @@ $('#app').innerHTML = `
       <form id="style-settings" class="style-settings">
         <label>穴位顏色<select name="markerColor"></select></label>
         <label>穴位直徑 <output id="marker-size-out">12px</output><input name="markerSize" type="range" min="5" max="30" value="12"></label>
-        <label>經脈顏色<select name="lineColor"></select></label>
+        <div class="meridian-color-legend" aria-label="經脈顏色全域設定">
+          <span class="meridian-color-legend-title">經脈顏色（全域）</span>
+          <ul>
+            <li><i style="background:#3b82f6"></i>任督二脈 · 藍</li>
+            <li><i style="background:#22c55e"></i>陰經 · 綠</li>
+            <li><i style="background:#ef4444"></i>陽經 · 紅</li>
+          </ul>
+        </div>
         <label>經脈線寬 <output id="line-width-out">4px</output><input name="lineWidth" type="range" min="1" max="10" value="4"></label>
         <label>模型表面<select name="surfaceFinish">
           <option value="skin" selected>皮膚色</option>
@@ -155,7 +162,7 @@ $('#app').innerHTML = `
             <input name="modelZoomInput" type="number" min="0.25" max="20" step="0.01" value="1" inputmode="decimal" title="可直接輸入放大倍數">
           </div>
         </label>
-        <p class="form-help">選取穴位或經脈後調整，會同步套用至左右配對；未選取時作為新定位預設值。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。格線旋轉預設 0°，可調 ±90°。模型放大以載入後的預設視距為 1×，與滾輪縮放同步。</p>
+        <p class="form-help">經脈顏色為全域設定：任督藍、陰經綠、陽經紅。選取穴位後可調整穴位顏色與尺寸；選取經脈後可調整線寬。表面材質僅影響目前載入的人體模型顯示。格線為螢幕固定輔助線，不隨模型縮放或旋轉改變，也不會寫入匯出 JSON。格線旋轉預設 0°，可調 ±90°。模型放大以載入後的預設視距為 1×，與滾輪縮放同步。</p>
       </form>
     </section>
   </aside>
@@ -568,7 +575,6 @@ function updateDeleteButton() {
 
 function buildMeridianRoutesFromPlaced(meridian, placedPoints, {
   previousRoutes = [],
-  color = state.settings.lineColor,
   width = state.settings.lineWidth,
 } = {}) {
   const required = pointsForMeridian(meridian.id)
@@ -576,6 +582,7 @@ function buildMeridianRoutesFromPlaced(meridian, placedPoints, {
     ? (previousRoutes.find((route) => route.pairId)?.pairId || makeId())
     : null
   const sides = meridian.bilateral ? ['left', 'right'] : ['midline']
+  const color = meridianLineColor(meridian.id)
   const routes = []
   for (const side of sides) {
     const previous = previousRoutes.find((route) => route.side === side)
@@ -587,7 +594,7 @@ function buildMeridianRoutesFromPlaced(meridian, placedPoints, {
       pairId: meridian.bilateral ? pairId : null,
       meridianId: meridian.id,
       name: meridian.name,
-      color: previous?.color || color,
+      color,
       width: previous?.width || width,
       side,
       nodes,
@@ -606,13 +613,39 @@ function syncMeridianRoutes(meridians, meridian, placedPoints, { allowCreate = f
   const unchanged = existing.length === nextForMeridian.length
     && nextForMeridian.every((route) => {
       const previous = existing.find((item) => item.id === route.id)
-      return previous && JSON.stringify(previous.nodes) === JSON.stringify(route.nodes)
+      return previous
+        && previous.color === route.color
+        && previous.width === route.width
+        && JSON.stringify(previous.nodes) === JSON.stringify(route.nodes)
     })
   if (unchanged) return meridians
   return [
     ...meridians.filter((route) => route.meridianId !== meridian.id),
     ...nextForMeridian,
   ]
+}
+
+function normalizeMeridianColors(meridians = state.meridians) {
+  let changed = false
+  const next = meridians.map((route) => {
+    const color = meridianLineColor(route.meridianId)
+    if (route.color === color) return route
+    changed = true
+    return { ...route, color }
+  })
+  return changed ? next : meridians
+}
+
+function applyGlobalMeridianColors({ commitHistory = false } = {}) {
+  const meridians = normalizeMeridianColors(state.meridians)
+  if (meridians === state.meridians) return false
+  if (commitHistory) {
+    commit({ ...state, meridians }, '經脈顏色已套用全域設定')
+  } else {
+    state = { ...state, meridians }
+    persistState()
+  }
+  return true
 }
 
 function commit(nextState, message) {
@@ -1212,7 +1245,7 @@ function rebuildAnnotations() {
       .forEach((route) => {
         const points = skinCurvePoints(route)
         if (points.length < 2) return
-        const mesh = createMeridianTube(points, route.color, route.width)
+        const mesh = createMeridianTube(points, meridianLineColor(route.meridianId), route.width)
         mesh.userData.type = 'meridian'
         mesh.userData.id = route.id
         annotationGroup.add(mesh)
@@ -1449,7 +1482,6 @@ function syncStyleSettings() {
   if (!form) return
   let markerColor = state.settings.markerColor
   let markerSize = state.settings.markerSize
-  let lineColor = state.settings.lineColor
   let lineWidth = state.settings.lineWidth
   if (selected?.type === 'acupoint') {
     const point = state.acupoints.find((entry) => entry.id === selected.id)
@@ -1459,13 +1491,9 @@ function syncStyleSettings() {
     }
   } else if (selected?.type === 'meridian') {
     const route = state.meridians.find((entry) => entry.id === selected.id)
-    if (route) {
-      lineColor = route.color
-      lineWidth = route.width
-    }
+    if (route) lineWidth = route.width
   }
   form.markerColor.innerHTML = colorOptions(markerColor)
-  form.lineColor.innerHTML = colorOptions(lineColor)
   form.markerSize.value = markerSize
   form.lineWidth.value = lineWidth
   if (form.surfaceFinish) form.surfaceFinish.value = surfaceFinish
@@ -1485,9 +1513,14 @@ function syncStyleSettings() {
 function applyStyleSettings(data) {
   const markerColor = data.markerColor
   const markerSize = Number(data.markerSize)
-  const lineColor = data.lineColor
   const lineWidth = Number(data.lineWidth)
-  const settings = { ...state.settings, markerColor, markerSize, lineColor, lineWidth }
+  const settings = {
+    ...state.settings,
+    markerColor,
+    markerSize,
+    lineWidth,
+    lineColor: state.settings.lineColor,
+  }
   if (selected?.type === 'acupoint') {
     const current = state.acupoints.find((item) => item.id === selected.id)
     if (!current) return
@@ -1505,9 +1538,11 @@ function applyStyleSettings(data) {
       const matches = item.id === current.id
         || (current.pairId && item.pairId === current.pairId)
         || (!current.pairId && item.meridianId === current.meridianId && item.name === current.name)
-      return matches ? { ...item, color: lineColor, width: lineWidth } : item
+      return matches
+        ? { ...item, color: meridianLineColor(item.meridianId), width: lineWidth }
+        : { ...item, color: meridianLineColor(item.meridianId) }
     })
-    commit({ ...state, settings, meridians }, '經脈樣式已套用')
+    commit({ ...state, settings, meridians }, '經脈線寬已套用（顏色依全域陰／陽／任督）')
     return
   }
   commit({ ...state, settings }, '已更新新定位樣式預設值')
@@ -1587,6 +1622,7 @@ function setMeridianViewMode(enabled) {
       toast('請先在右側勾選要顯示的經脈', 'warn')
       return
     }
+    applyGlobalMeridianColors()
     const succeeded = []
     const failures = []
     meridianIds.forEach((meridianId) => {
@@ -1598,6 +1634,8 @@ function setMeridianViewMode(enabled) {
       toast(failures[0]?.reason || '所選經脈尚無法顯示路線', 'warn')
       return
     }
+    // Re-apply after route creation so newly built tubes use yin/yang/ren-du colors.
+    applyGlobalMeridianColors()
     if (orbitLocked) detachOrbitLock({ restorePerspective: true })
     meridianViewMode = true
     selected = null
@@ -1888,6 +1926,7 @@ async function importJSON(file) {
   meridianViewMode = false
   linkedMeridianIds.clear()
   state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
+  state = { ...state, meridians: normalizeMeridianColors(state.meridians) }
   syncVisibleMeridiansFromDocument({ selectAll: true })
   persistState()
   syncBodyModelSelect()
@@ -2249,6 +2288,7 @@ async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
       history.replace(state)
       linkedMeridianIds.clear()
       state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
+      state = { ...state, meridians: normalizeMeridianColors(state.meridians) }
       syncVisibleMeridiansFromDocument({ selectAll: true })
     }
     applyModel(gltf, preset.fileName)
