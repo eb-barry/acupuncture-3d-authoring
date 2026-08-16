@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MERIDIANS, POINTS, POINT_BY_CODE, pointsForMeridian } from './catalog.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, meridianLineColor, pointsForMeridian } from './catalog.js'
 
 describe('authorized acupuncture catalog', () => {
   it('contains 361 unique points across fourteen meridians', () => {
@@ -25,5 +25,15 @@ describe('authorized acupuncture catalog', () => {
     expect(MERIDIANS.filter((item) => item.bilateral)).toHaveLength(12)
     expect(MERIDIANS.find((item) => item.id === 'CV').bilateral).toBe(false)
     expect(MERIDIANS.find((item) => item.id === 'GV').bilateral).toBe(false)
+  })
+
+  it('assigns global yin / yang / ren-du meridian line colors', () => {
+    expect(MERIDIANS.filter((item) => item.group === 'yin')).toHaveLength(6)
+    expect(MERIDIANS.filter((item) => item.group === 'yang')).toHaveLength(6)
+    expect(MERIDIANS.filter((item) => item.group === 'ren-du').map((item) => item.id)).toEqual(['CV', 'GV'])
+    expect(meridianLineColor('CV')).toBe('#3b82f6')
+    expect(meridianLineColor('GV')).toBe('#3b82f6')
+    expect(meridianLineColor('LU')).toBe('#22c55e')
+    expect(meridianLineColor('LI')).toBe('#ef4444')
   })
 })

@@ -1,21 +1,33 @@
 import rawCatalog from './data/acupuncture-data.json' with { type: 'json' }
 
 export const MERIDIANS = [
-  { id: 'LU', name: '手太陰肺經', bilateral: true },
-  { id: 'LI', name: '手陽明大腸經', bilateral: true },
-  { id: 'ST', name: '足陽明胃經', bilateral: true },
-  { id: 'SP', name: '足太陰脾經', bilateral: true },
-  { id: 'HT', name: '手少陰心經', bilateral: true },
-  { id: 'SI', name: '手太陽小腸經', bilateral: true },
-  { id: 'BL', name: '足太陽膀胱經', bilateral: true },
-  { id: 'KI', name: '足少陰腎經', bilateral: true },
-  { id: 'PC', name: '手厥陰心包經', bilateral: true },
-  { id: 'TE', name: '手少陽三焦經', bilateral: true },
-  { id: 'GB', name: '足少陽膽經', bilateral: true },
-  { id: 'LR', name: '足厥陰肝經', bilateral: true },
-  { id: 'CV', name: '任脈', bilateral: false },
-  { id: 'GV', name: '督脈', bilateral: false },
+  { id: 'LU', name: '手太陰肺經', bilateral: true, group: 'yin' },
+  { id: 'LI', name: '手陽明大腸經', bilateral: true, group: 'yang' },
+  { id: 'ST', name: '足陽明胃經', bilateral: true, group: 'yang' },
+  { id: 'SP', name: '足太陰脾經', bilateral: true, group: 'yin' },
+  { id: 'HT', name: '手少陰心經', bilateral: true, group: 'yin' },
+  { id: 'SI', name: '手太陽小腸經', bilateral: true, group: 'yang' },
+  { id: 'BL', name: '足太陽膀胱經', bilateral: true, group: 'yang' },
+  { id: 'KI', name: '足少陰腎經', bilateral: true, group: 'yin' },
+  { id: 'PC', name: '手厥陰心包經', bilateral: true, group: 'yin' },
+  { id: 'TE', name: '手少陽三焦經', bilateral: true, group: 'yang' },
+  { id: 'GB', name: '足少陽膽經', bilateral: true, group: 'yang' },
+  { id: 'LR', name: '足厥陰肝經', bilateral: true, group: 'yin' },
+  { id: 'CV', name: '任脈', bilateral: false, group: 'ren-du' },
+  { id: 'GV', name: '督脈', bilateral: false, group: 'ren-du' },
 ]
+
+/** Global meridian display colors: 任督藍、陰經綠、陽經紅. */
+export const MERIDIAN_LINE_COLORS = {
+  'ren-du': '#3b82f6',
+  yin: '#22c55e',
+  yang: '#ef4444',
+}
+
+export function meridianLineColor(meridianId) {
+  const meridian = meridianById(meridianId)
+  return MERIDIAN_LINE_COLORS[meridian?.group] || MERIDIAN_LINE_COLORS.yang
+}
 
 const meridianByName = new Map(MERIDIANS.map((item) => [item.name, item]))
 const codeParts = (code) => {
