@@ -245,6 +245,79 @@ button:disabled { opacity: .35; cursor: default; }
 .object-filters select {
   width: 100%; min-width: 0; border: 1px solid var(--line); background: #0e1614; border-radius: 4px; padding: 7px; font-size: 16px;
 }
+.visible-meridians-field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+}
+.visible-meridians-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.visible-meridians-heading > span { color: #c5d2cd; font-size: 12px; letter-spacing: .04em; }
+.visible-meridians-actions { display: flex; gap: 4px; }
+.visible-meridians-actions button {
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #c7d5d0;
+  background: #15211e;
+}
+.visible-meridians-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.visible-meridians {
+  max-height: 180px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #0e1614;
+  scrollbar-gutter: stable;
+}
+.visible-meridian-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #d5e0dc;
+}
+.visible-meridian-row:hover { background: #1a2622; }
+.visible-meridian-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex: 0 0 auto;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+.visible-meridian-row span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.visible-meridian-row b { font-size: 13px; font-weight: 500; color: #e4ece9; }
+.visible-meridian-row small { font-size: 11px; color: var(--muted); }
+.visible-meridians .empty { padding: 10px 6px; font-size: 11px; }
+.objects-group-label {
+  padding: 8px 8px 3px;
+  color: var(--gold);
+  font-size: 11px;
+  letter-spacing: .06em;
+}
 body.meridian-view-mode .style-settings,
 body.meridian-view-mode #lock-orbit { opacity: .55; pointer-events: none; }
 .objects {

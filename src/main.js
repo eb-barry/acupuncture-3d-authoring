@@ -68,7 +68,7 @@ $('#app').innerHTML = `
     </div>
     <nav class="tools" aria-label="編輯工具">
       <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
-      <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側場景物件所選經脈）">⌁ <span>顯示經脈</span></button>
+      <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側勾選的經脈）">⌁ <span>顯示經脈</span></button>
       <button class="tool" data-tool="point">＋ <span>穴位</span></button>
       <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
@@ -109,9 +109,17 @@ $('#app').innerHTML = `
           <option value="female">女性 · female-character</option>
         </select>
       </label>
-      <label class="scene-meridian-field">選擇經脈
-        <select id="scene-meridian-filter">${MERIDIANS.map((item) => `<option value="${item.id}">${item.name} · ${item.id}</option>`).join('')}</select>
-      </label>
+      <div class="visible-meridians-field">
+        <div class="visible-meridians-heading">
+          <span>顯示經脈／穴位</span>
+          <div class="visible-meridians-actions">
+            <button type="button" id="visible-meridians-all" title="勾選全部已定位經脈">全選</button>
+            <button type="button" id="visible-meridians-none" title="取消全部勾選">全不選</button>
+          </div>
+        </div>
+        <p class="visible-meridians-help">可複選；只影響畫布顯示，不影響左方編輯經脈。</p>
+        <div id="visible-meridians" class="visible-meridians" role="group" aria-label="顯示經脈與穴位"></div>
+      </div>
     </div>
     <div id="objects" class="objects"></div>
     <section class="style-panel">
@@ -271,6 +279,7 @@ let lockedPerspectiveDistance = 0
 let lockedOrthoHalfHeight = 1
 let lockedZoomFactor = 1
 let meridianViewMode = false
+const visibleMeridianIds = new Set()
 const linkedMeridianIds = new Set()
 const storageKeyForBody = (body) => `meridian-studio-document-v2-${inferBodyModel({ body })}`
 const raycaster = new THREE.Raycaster()
@@ -460,37 +469,83 @@ function setOrbitLocked(locked) {
   setStatus('模型旋轉已解除鎖定 · 已隱藏曲度中點')
 }
 
-function sceneMeridianId() {
-  return $('#scene-meridian-filter')?.value || $('#meridian-filter')?.value || selectedCatalog?.meridianId
+function meridiansWithPlacedData() {
+  const ids = new Set([
+    ...state.acupoints.map((point) => point.meridianId),
+    ...state.meridians.map((route) => route.meridianId),
+  ])
+  return MERIDIANS.filter((item) => ids.has(item.id))
 }
 
-function activeDisplayMeridianId() {
-  return meridianViewMode
-    ? sceneMeridianId()
-    : ($('#meridian-filter')?.value || selectedCatalog?.meridianId)
+function pruneVisibleMeridianIds() {
+  const available = new Set(meridiansWithPlacedData().map((item) => item.id))
+  for (const id of [...visibleMeridianIds]) {
+    if (!available.has(id)) visibleMeridianIds.delete(id)
+  }
 }
 
-function syncSceneMeridianFilter(meridianId) {
-  const select = $('#scene-meridian-filter')
-  if (select && meridianId && select.value !== meridianId) select.value = meridianId
+function ensureVisibleMeridian(meridianId, { exclusive = false } = {}) {
+  if (!meridianId) return
+  if (exclusive) visibleMeridianIds.clear()
+  visibleMeridianIds.add(meridianId)
+}
+
+function syncVisibleMeridiansFromDocument({ selectAll = false } = {}) {
+  const available = meridiansWithPlacedData().map((item) => item.id)
+  if (selectAll || visibleMeridianIds.size === 0) {
+    visibleMeridianIds.clear()
+    available.forEach((id) => visibleMeridianIds.add(id))
+    return
+  }
+  pruneVisibleMeridianIds()
+}
+
+function visibleMeridianIdList() {
+  return MERIDIANS
+    .map((item) => item.id)
+    .filter((id) => visibleMeridianIds.has(id))
+}
+
+function renderVisibleMeridianList() {
+  const root = $('#visible-meridians')
+  if (!root) return
+  pruneVisibleMeridianIds()
+  const items = meridiansWithPlacedData()
+  if (!items.length) {
+    root.innerHTML = '<p class="empty">尚無已定位經脈；於左方加入穴位後會顯示於此</p>'
+    return
+  }
+  root.innerHTML = items.map((item) => {
+    const placed = state.acupoints.filter((point) => point.meridianId === item.id).length
+    const routeCount = state.meridians.filter((route) => route.meridianId === item.id).length
+    const checked = visibleMeridianIds.has(item.id) ? 'checked' : ''
+    const meta = routeCount ? `${placed} 穴 · ${routeCount} 線` : `${placed} 穴`
+    return `<label class="visible-meridian-row">
+      <input type="checkbox" data-meridian-id="${item.id}" ${checked}>
+      <span><b>${escapeHtml(item.name)}</b><small>${item.id} · ${meta}</small></span>
+    </label>`
+  }).join('')
 }
 
 function updateShowMeridianButton() {
   const button = $('#show-meridian')
   if (!button) return
-  const meridianId = sceneMeridianId()
-  const required = pointsForMeridian(meridianId)
-  const placed = state.acupoints.filter((point) => point.meridianId === meridianId)
-  const progress = placementProgress(required, placed)
-  const hasRoutes = state.meridians.some((route) => route.meridianId === meridianId)
+  const visibleIds = visibleMeridianIdList()
+  const canShow = visibleIds.some((meridianId) => {
+    const required = pointsForMeridian(meridianId)
+    const placed = state.acupoints.filter((point) => point.meridianId === meridianId)
+    const progress = placementProgress(required, placed)
+    const hasRoutes = state.meridians.some((route) => route.meridianId === meridianId)
+    return progress.complete || hasRoutes
+  })
   button.classList.toggle('active', meridianViewMode)
   button.setAttribute('aria-pressed', meridianViewMode ? 'true' : 'false')
-  button.disabled = !meridianViewMode && !hasRoutes && !progress.complete
+  button.disabled = !meridianViewMode && !canShow
   button.title = meridianViewMode
     ? '關閉經脈僅檢視顯示'
-    : (progress.complete || hasRoutes
-      ? '開啟經脈僅檢視顯示（依右側所選經脈）'
-      : '完成所有穴位定位後開放')
+    : (canShow
+      ? '開啟經脈僅檢視顯示（依右側勾選的經脈）'
+      : '請勾選已完成定位或已有路線的經脈')
 }
 
 function updateDeleteButton() {
@@ -1017,8 +1072,7 @@ function createMeridianTube(points, color, lineWidth) {
   return mesh
 }
 
-function activeMeridianLineWidth() {
-  const meridianId = activeDisplayMeridianId()
+function lineWidthForMeridian(meridianId) {
   const route = state.meridians.find((item) => item.meridianId === meridianId)
   return Number(route?.width) || Number(state.settings.lineWidth) || 4
 }
@@ -1031,7 +1085,10 @@ function markerFacingLift(point, pixelSize) {
   if (meridianViewMode || orbitLocked) {
     // Sit the sphere on the tube surface toward the camera so the meridian
     // connects through the point without swallowing the red marker.
-    const tubeRadius = Math.max(0.0004, pixelSizeToWorld(activeMeridianLineWidth(), distance) * 0.5)
+    const tubeRadius = Math.max(
+      0.0004,
+      pixelSizeToWorld(lineWidthForMeridian(point.meridianId), distance) * 0.5,
+    )
     lift = Math.max(lift, tubeRadius + markerRadius * 0.45)
   }
   return lift
@@ -1145,27 +1202,28 @@ function rebuildAnnotations() {
   handleVisuals = []
   midpointVisuals = []
 
-  const activeMeridianId = activeDisplayMeridianId()
+  const displayIds = new Set(visibleMeridianIdList())
 
-  // 「顯示經脈」ON: tubes for the right-panel meridian, never edit handles.
+  // 「顯示經脈」ON: tubes for all checked meridians, never edit handles.
   // OFF: hide tubes unless orbit is locked for curve editing.
   if (meridianViewMode || orbitLocked) {
     state.meridians
-      .filter((route) => route.meridianId === activeMeridianId)
+      .filter((route) => displayIds.has(route.meridianId))
       .forEach((route) => {
         const points = skinCurvePoints(route)
         if (points.length < 2) return
         const mesh = createMeridianTube(points, route.color, route.width)
-        mesh.userData = { type: 'meridian', id: route.id }
+        mesh.userData.type = 'meridian'
+        mesh.userData.id = route.id
         annotationGroup.add(mesh)
         routeVisuals.push({ line: mesh, route })
         if (!meridianViewMode && isRouteSelected(route)) addRouteEditHandles(route)
       })
   }
 
-  // Show acupoints for the active meridian (right panel in view mode, left while editing).
+  // Show acupoints for every checked meridian on the right panel.
   state.acupoints
-    .filter((point) => point.meridianId === activeMeridianId)
+    .filter((point) => displayIds.has(point.meridianId))
     .forEach((point) => {
       const isSelected = selected?.type === 'acupoint'
         && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
@@ -1327,32 +1385,48 @@ function updateSideControl() {
 }
 
 function renderObjects() {
-  const meridianId = sceneMeridianId()
-  const meridian = meridianById(meridianId)
-  const required = pointsForMeridian(meridianId)
-  const placed = state.acupoints.filter((point) => point.meridianId === meridianId)
-  const placedByCode = new Map()
-  placed.forEach((point) => {
-    const list = placedByCode.get(point.code) || []
-    list.push(point)
-    placedByCode.set(point.code, list)
-  })
-  const rows = required
-    .filter((catalog) => placedByCode.has(catalog.code))
-    .map((catalog) => {
-      const group = placedByCode.get(catalog.code)
-      const primary = group.find((item) => item.side === 'left' || item.side === 'midline') || group[0]
-      const sides = [...new Set(group.map((item) => sideLabel(item.side)))].join('／')
-      const selectedHere = selected?.type === 'acupoint'
-        && group.some((item) => item.id === selected.id || (selected.pairId && item.pairId === selected.pairId))
-      return `<button data-type="acupoint" data-id="${primary.id}" class="${selectedHere ? 'selected' : ''}">
-        <i class="point-dot" style="background:${primary.color}"></i>
-        <span><b>${escapeHtml(catalog.code)} · ${escapeHtml(catalog.name)}</b><small>${sides}</small></span>
-      </button>`
+  const meridianIds = visibleMeridianIdList()
+  if (!meridianIds.length) {
+    $('#objects').innerHTML = '<p class="empty">請在上方勾選要顯示的經脈</p>'
+    $('#object-count').textContent = '0'
+    return
+  }
+
+  const rows = []
+  let pointRows = 0
+  let routeCount = 0
+  meridianIds.forEach((meridianId) => {
+    const meridian = meridianById(meridianId)
+    const required = pointsForMeridian(meridianId)
+    const placed = state.acupoints.filter((point) => point.meridianId === meridianId)
+    const placedByCode = new Map()
+    placed.forEach((point) => {
+      const list = placedByCode.get(point.code) || []
+      list.push(point)
+      placedByCode.set(point.code, list)
     })
-  const routeCount = state.meridians.filter((route) => route.meridianId === meridianId).length
-  $('#objects').innerHTML = rows.join('') || `<p class="empty">${escapeHtml(meridian?.name || '此經脈')}尚未定位任何穴位</p>`
-  $('#object-count').textContent = `${rows.length}${routeCount ? ` · ${routeCount}線` : ''}`
+    const groupRows = required
+      .filter((catalog) => placedByCode.has(catalog.code))
+      .map((catalog) => {
+        const group = placedByCode.get(catalog.code)
+        const primary = group.find((item) => item.side === 'left' || item.side === 'midline') || group[0]
+        const sides = [...new Set(group.map((item) => sideLabel(item.side)))].join('／')
+        const selectedHere = selected?.type === 'acupoint'
+          && group.some((item) => item.id === selected.id || (selected.pairId && item.pairId === selected.pairId))
+        return `<button data-type="acupoint" data-id="${primary.id}" class="${selectedHere ? 'selected' : ''}">
+          <i class="point-dot" style="background:${primary.color}"></i>
+          <span><b>${escapeHtml(catalog.code)} · ${escapeHtml(catalog.name)}</b><small>${sides}</small></span>
+        </button>`
+      })
+    routeCount += state.meridians.filter((route) => route.meridianId === meridianId).length
+    if (!groupRows.length) return
+    pointRows += groupRows.length
+    rows.push(`<div class="objects-group-label">${escapeHtml(meridian?.name || meridianId)}</div>`)
+    rows.push(...groupRows)
+  })
+
+  $('#objects').innerHTML = rows.join('') || '<p class="empty">勾選的經脈尚無定位穴位</p>'
+  $('#object-count').textContent = `${pointRows}${routeCount ? ` · ${routeCount}線` : ''}`
 }
 
 function updateUI() {
@@ -1361,6 +1435,7 @@ function updateUI() {
   const meridianDone = new Set(state.meridians.map((item) => item.meridianId)).size
   const heading = document.querySelector('.inspector-panel .panel-heading span')
   if (heading) heading.textContent = `場景物件（${meridianDone}/${MERIDIANS.length} 經脈）`
+  renderVisibleMeridianList()
   renderObjects()
   syncStyleSettings()
   renderCatalog()
@@ -1462,7 +1537,7 @@ function setTool(tool) {
       ? ' · 任脈建議先按「正面朝向」'
       : ''
   $('#stage-help').textContent = meridianViewMode
-    ? `僅檢視 · ${meridianById(sceneMeridianId())?.name || ''}穴位與經脈線（無調整點）`
+    ? `僅檢視 · 右側勾選經脈的穴位與經脈線（無調整點）`
     : {
       navigate: orbitLocked
         ? '旋轉已鎖定 · 正交視角 · 左右平移不改變朝向 · 可拉動曲度控制點'
@@ -1507,10 +1582,20 @@ function ensureMeridianRoutes(meridianId) {
 
 function setMeridianViewMode(enabled) {
   if (enabled) {
-    const meridianId = sceneMeridianId()
-    const result = ensureMeridianRoutes(meridianId)
-    if (!result.ok) {
-      toast(result.reason, 'warn')
+    const meridianIds = visibleMeridianIdList()
+    if (!meridianIds.length) {
+      toast('請先在右側勾選要顯示的經脈', 'warn')
+      return
+    }
+    const succeeded = []
+    const failures = []
+    meridianIds.forEach((meridianId) => {
+      const result = ensureMeridianRoutes(meridianId)
+      if (result.ok) succeeded.push(result)
+      else failures.push(result)
+    })
+    if (!succeeded.length) {
+      toast(failures[0]?.reason || '所選經脈尚無法顯示路線', 'warn')
       return
     }
     if (orbitLocked) detachOrbitLock({ restorePerspective: true })
@@ -1520,8 +1605,10 @@ function setMeridianViewMode(enabled) {
     rebuildAnnotations()
     updateUI()
     setTool('navigate')
-    toast(`僅檢視：${result.meridian.name}${result.created ? '（已自動連線）' : ''}`)
-    setStatus(`顯示經脈：${result.meridian.name}（僅檢視）`)
+    const names = succeeded.map((item) => item.meridian.name).join('、')
+    const created = succeeded.some((item) => item.created)
+    toast(`僅檢視：${names}${created ? '（已自動連線）' : ''}`)
+    setStatus(`顯示經脈：${names}（僅檢視）`)
     return
   }
 
@@ -1575,7 +1662,7 @@ function placeAcupoint(hit) {
     points = [makePoint(selectedCatalog, 'midline', null, hit)]
     selected = { type: 'acupoint', id: points[0].id, pairId: null }
   }
-  syncSceneMeridianFilter(meridian.id)
+  ensureVisibleMeridian(meridian.id)
   const nextAcupoints = [...state.acupoints, ...points]
   const nextMeridians = syncMeridianRoutes(state.meridians, meridian, nextAcupoints, {
     allowCreate: linkedMeridianIds.has(meridian.id) || meridianViewMode,
@@ -1752,6 +1839,7 @@ function applyHistory(nextState, message) {
   selected = null
   meridianViewMode = false
   state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
+  pruneVisibleMeridianIds()
   persistState()
   rebuildAnnotations()
   updateUI()
@@ -1800,6 +1888,7 @@ async function importJSON(file) {
   meridianViewMode = false
   linkedMeridianIds.clear()
   state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
+  syncVisibleMeridiansFromDocument({ selectAll: true })
   persistState()
   syncBodyModelSelect()
   await loadBodyModel(body, { keepDocument: true })
@@ -2160,6 +2249,7 @@ async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
       history.replace(state)
       linkedMeridianIds.clear()
       state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
+      syncVisibleMeridiansFromDocument({ selectAll: true })
     }
     applyModel(gltf, preset.fileName)
     syncBodyModelSelect()
@@ -2241,7 +2331,6 @@ $('#meridian-filter').addEventListener('change', () => {
   selectedCatalog = pointsForMeridian($('#meridian-filter').value)[0]
   $('#catalog-search').value = ''
   selected = null
-  if (!meridianViewMode) syncSceneMeridianFilter($('#meridian-filter').value)
   renderCatalog()
   rebuildAnnotations()
   updateUI()
@@ -2272,6 +2361,36 @@ $('#face-front').addEventListener('click', () => {
 })
 $('#face-back').addEventListener('click', () => {
   faceBodySide('back')
+})
+$('#visible-meridians').addEventListener('change', (event) => {
+  const input = event.target.closest('input[type="checkbox"][data-meridian-id]')
+  if (!input) return
+  const meridianId = input.dataset.meridianId
+  if (input.checked) visibleMeridianIds.add(meridianId)
+  else visibleMeridianIds.delete(meridianId)
+  if (!visibleMeridianIdList().length && meridianViewMode) {
+    meridianViewMode = false
+  } else if (meridianViewMode && input.checked) {
+    const result = ensureMeridianRoutes(meridianId)
+    if (!result.ok) toast(result.reason, 'warn')
+  }
+  rebuildAnnotations()
+  updateUI()
+  if (activeTool === 'navigate' || meridianViewMode) setTool('navigate')
+})
+$('#visible-meridians-all').addEventListener('click', () => {
+  meridiansWithPlacedData().forEach((item) => visibleMeridianIds.add(item.id))
+  if (meridianViewMode) {
+    visibleMeridianIdList().forEach((id) => ensureMeridianRoutes(id))
+  }
+  rebuildAnnotations()
+  updateUI()
+})
+$('#visible-meridians-none').addEventListener('click', () => {
+  visibleMeridianIds.clear()
+  if (meridianViewMode) meridianViewMode = false
+  rebuildAnnotations()
+  updateUI()
 })
 
 // Capture phase: stop OrbitControls from starting a rotate when editing handles,
@@ -2355,22 +2474,6 @@ $('#lock-orbit').addEventListener('click', () => {
   if (activeTool === 'navigate') setTool('navigate')
 })
 
-$('#scene-meridian-filter').addEventListener('change', () => {
-  selected = null
-  if (meridianViewMode) {
-    const result = ensureMeridianRoutes(sceneMeridianId())
-    if (!result.ok) {
-      toast(result.reason, 'warn')
-    }
-  } else {
-    $('#meridian-filter').value = sceneMeridianId()
-    selectedCatalog = pointsForMeridian(sceneMeridianId())[0]
-    renderCatalog()
-  }
-  rebuildAnnotations()
-  updateUI()
-  setTool(meridianViewMode ? 'navigate' : activeTool)
-})
 $('#objects').addEventListener('click', (event) => {
   const button = event.target.closest('[data-id]')
   if (!button) return
@@ -2505,6 +2608,7 @@ documentsByBody.male = structuredClone(state)
 documentsByBody.female = emptyDocument('female')
 history.replace(state)
 linkedMeridianIds.clear()
+visibleMeridianIds.clear()
 meridianViewMode = false
 selected = null
 syncBodyModelSelect()
