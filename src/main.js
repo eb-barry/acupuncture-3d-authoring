@@ -68,7 +68,7 @@ $('#app').innerHTML = `
     </div>
     <nav class="tools" aria-label="編輯工具">
       <button class="tool active" data-tool="navigate">◎ <span>檢視／調整</span></button>
-      <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈僅檢視顯示（依右側勾選的經脈）">⌁ <span>顯示經脈</span></button>
+      <button id="show-meridian" class="tool" type="button" aria-pressed="false" title="切換經脈顯示（依右側勾選的經脈；仍可定位穴位）">⌁ <span>顯示經脈</span></button>
       <button class="tool" data-tool="point">＋ <span>穴位</span></button>
       <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
@@ -90,7 +90,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>完成此經脈所有穴位定位後，開啟「顯示經脈」可依國際代碼自動連線並進入僅檢視模式。</p>
+      <p>完成此經脈所有穴位定位後，開啟「顯示經脈」可依國際代碼自動連線；顯示中仍可繼續定位或拖曳穴位。</p>
     </div>
   </aside>
   <section class="stage">
@@ -549,23 +549,19 @@ function updateShowMeridianButton() {
   button.setAttribute('aria-pressed', meridianViewMode ? 'true' : 'false')
   button.disabled = !meridianViewMode && !canShow
   button.title = meridianViewMode
-    ? '關閉經脈僅檢視顯示'
+    ? '關閉經脈顯示（可繼續定位穴位）'
     : (canShow
-      ? '開啟經脈僅檢視顯示（依右側勾選的經脈）'
+      ? '開啟經脈顯示（仍可定位與拖曳穴位）'
       : '請勾選已完成定位或已有路線的經脈')
 }
 
 function updateDeleteButton() {
   const button = $('#delete-selection')
   if (!button) return
-  const canDelete = Boolean(selected) && !meridianViewMode
+  const canDelete = Boolean(selected)
   button.disabled = !canDelete
   if (!selected) {
     button.title = '先選取穴位或經脈路線後再刪除'
-    return
-  }
-  if (meridianViewMode) {
-    button.title = '顯示經脈為僅檢視模式，請先關閉後再刪除'
     return
   }
   button.title = selected.type === 'acupoint'
@@ -1553,10 +1549,6 @@ function setTool(tool) {
     setMeridianViewMode(true)
     tool = 'navigate'
   }
-  if (meridianViewMode && tool === 'point') {
-    toast('顯示經脈為僅檢視模式，請先關閉後再定位穴位', 'warn')
-    tool = 'navigate'
-  }
   activeTool = tool
   document.querySelectorAll('.tool[data-tool]').forEach((button) =>
     button.classList.toggle('active', button.dataset.tool === tool))
@@ -1571,16 +1563,24 @@ function setTool(tool) {
     : midlineId
       ? ' · 任脈建議先按「正面朝向」'
       : ''
-  $('#stage-help').textContent = meridianViewMode
-    ? `僅檢視 · 右側勾選經脈的穴位與經脈線（無調整點）`
-    : {
-      navigate: orbitLocked
-        ? '旋轉已鎖定 · 正交視角 · 左右平移不改變朝向 · 可拉動曲度控制點'
-        : '拖曳旋轉 · 「正面／背面朝向」對準視角 · 選取後按「刪除」移除 · 「顯示經脈」僅檢視',
-      point: selectedCatalog
-        ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}${midlineHint}`
-        : '請先選擇穴位',
-    }[tool]
+  if (meridianViewMode && tool === 'point') {
+    $('#stage-help').textContent = selectedCatalog
+      ? `顯示經脈中 · 點擊皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name}；可拖曳已定位穴位${midlineHint}`
+      : '顯示經脈中 · 請先選擇穴位，或拖曳已定位穴位調整位置'
+    return
+  }
+  if (meridianViewMode) {
+    $('#stage-help').textContent = '顯示經脈 · 可切換「穴位」繼續定位 · 拖曳紅點可移動穴位'
+    return
+  }
+  $('#stage-help').textContent = {
+    navigate: orbitLocked
+      ? '旋轉已鎖定 · 正交視角 · 左右平移不改變朝向 · 可拉動曲度控制點'
+      : '拖曳旋轉 · 「正面／背面朝向」對準視角 · 選取後按「刪除」移除 · 「顯示經脈」可同時定位',
+    point: selectedCatalog
+      ? `點擊人體表面定位 ${selectedCatalog.code} ${selectedCatalog.name}；可拖曳已定位穴位${midlineHint}`
+      : '請先選擇穴位，或拖曳已定位穴位調整位置',
+  }[tool]
 }
 
 function ensureMeridianRoutes(meridianId) {
@@ -1639,14 +1639,14 @@ function setMeridianViewMode(enabled) {
     if (orbitLocked) detachOrbitLock({ restorePerspective: true })
     meridianViewMode = true
     selected = null
-    activeTool = 'navigate'
+    const keepPointTool = activeTool === 'point'
     rebuildAnnotations()
     updateUI()
-    setTool('navigate')
+    setTool(keepPointTool ? 'point' : 'navigate')
     const names = succeeded.map((item) => item.meridian.name).join('、')
     const created = succeeded.some((item) => item.created)
-    toast(`僅檢視：${names}${created ? '（已自動連線）' : ''}`)
-    setStatus(`顯示經脈：${names}（僅檢視）`)
+    toast(`顯示經脈：${names}${created ? '（已自動連線）' : ''} · 可繼續定位或拖曳穴位`)
+    setStatus(`顯示經脈：${names}`)
     return
   }
 
@@ -1654,7 +1654,7 @@ function setMeridianViewMode(enabled) {
   rebuildAnnotations()
   updateUI()
   setTool(activeTool === 'point' ? 'point' : 'navigate')
-  setStatus('已關閉經脈僅檢視，可繼續編輯穴位')
+  setStatus('已關閉經脈顯示，可繼續編輯穴位')
 }
 
 function toggleMeridianViewMode() {
@@ -1754,16 +1754,6 @@ function insertRouteControl(routeId, hit, afterIndex = null) {
 }
 
 function placeAt(event) {
-  if (meridianViewMode) {
-    const markerHit = annotationHit(event, ['acupoint'])
-    if (markerHit) {
-      const point = getPoint(markerHit.object.userData.id)
-      selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
-      rebuildAnnotations()
-      updateUI()
-    }
-    return
-  }
   if (activeTool === 'navigate') {
     const markerHit = annotationHit(event, ['acupoint'])
     if (markerHit) {
@@ -1773,6 +1763,7 @@ function placeAt(event) {
       updateUI()
       return
     }
+    if (meridianViewMode) return
     const midpointHit = annotationHit(event, ['route-midpoint'])
     if (midpointHit) {
       const data = midpointHit.object.userData
@@ -1796,6 +1787,16 @@ function placeAt(event) {
     return
   }
   if (activeTool !== 'point') return
+  const markerHit = annotationHit(event, ['acupoint'])
+  if (markerHit) {
+    const point = getPoint(markerHit.object.userData.id)
+    selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
+    selectedCatalog = POINT_BY_CODE.get(point.code) || selectedCatalog
+    if (point.meridianId) $('#meridian-filter').value = point.meridianId
+    rebuildAnnotations()
+    updateUI()
+    return
+  }
   const hit = surfaceHit(event)
   if (!hit) return toast('請點擊人體模型表面', 'warn')
   placeAcupoint(hit)
@@ -1840,10 +1841,6 @@ function updateRouteHandle(routeId, nodeIndex, hit) {
 
 function removeSelected() {
   if (!selected) return
-  if (meridianViewMode) {
-    toast('顯示經脈為僅檢視模式，請先關閉後再刪除', 'warn')
-    return
-  }
   if (selected.type === 'acupoint') {
     const point = getPoint(selected.id)
     const removedIds = new Set(state.acupoints
@@ -2433,22 +2430,55 @@ $('#visible-meridians-none').addEventListener('click', () => {
   updateUI()
 })
 
-// Capture phase: stop OrbitControls from starting a rotate when editing handles,
-// and keep rotation inert while the lock is on.
+// Capture phase: stop OrbitControls from starting a rotate when editing markers/handles.
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) return
   if (orbitLocked) {
     controls.enableRotate = false
   }
-  if (meridianViewMode || activeTool !== 'navigate') return
-  const hit = annotationHit(event, ['route-midpoint', 'acupoint', 'route-handle'])
+  const canDragAcupoint = activeTool === 'navigate' || activeTool === 'point'
+  const canDragHandles = !meridianViewMode && activeTool === 'navigate'
+  if (!canDragAcupoint && !canDragHandles) return
+  const types = [
+    ...(canDragAcupoint ? ['acupoint'] : []),
+    ...(canDragHandles ? ['route-midpoint', 'route-handle'] : []),
+  ]
+  const hit = annotationHit(event, types)
   if (!hit) return
   controls.enabled = false
 }, true)
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerDown = { x: event.clientX, y: event.clientY }
-  if (meridianViewMode || activeTool !== 'navigate' || event.button !== 0) return
+  if (event.button !== 0) return
+
+  const startAcupointDrag = (hit) => {
+    const point = getPoint(hit.object.userData.id)
+    if (!point) return false
+    dragging = {
+      type: 'acupoint',
+      id: point.id,
+      routeId: null,
+      nodeIndex: null,
+    }
+    selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
+    syncControlsEnabled()
+    return true
+  }
+
+  if (activeTool === 'point') {
+    const acupointHit = annotationHit(event, ['acupoint'])
+    if (acupointHit) startAcupointDrag(acupointHit)
+    return
+  }
+
+  if (activeTool !== 'navigate') return
+
+  if (meridianViewMode) {
+    const acupointHit = annotationHit(event, ['acupoint'])
+    if (acupointHit) startAcupointDrag(acupointHit)
+    return
+  }
 
   const midpointHit = annotationHit(event, ['route-midpoint'])
   if (midpointHit) {
@@ -2471,6 +2501,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 
   const hit = annotationHit(event, ['acupoint', 'route-handle'])
   if (!hit) return
+  if (hit.object.userData.type === 'acupoint') {
+    startAcupointDrag(hit)
+    return
+  }
   dragging = {
     type: hit.object.userData.type,
     id: hit.object.userData.id,
@@ -2493,17 +2527,35 @@ renderer.domElement.addEventListener('pointermove', (event) => {
 renderer.domElement.addEventListener('pointerup', (event) => {
   if (dragging) {
     const wasHandle = dragging.type === 'route-handle'
+    const wasAcupoint = dragging.type === 'acupoint'
     const moved = dragMoved
+    const draggedId = dragging.id
     dragging = null
     dragMoved = false
     syncControlsEnabled()
     if (moved) {
+      if (wasAcupoint && meridianViewMode) {
+        const point = getPoint(draggedId)
+        if (point) {
+          const meridian = meridianById(point.meridianId)
+          if (meridian) {
+            const synced = syncMeridianRoutes(state.meridians, meridian, state.acupoints, {
+              allowCreate: linkedMeridianIds.has(meridian.id),
+            })
+            state = { ...state, meridians: synced }
+          }
+        }
+      }
       state = history.commit(state)
       persistState()
     }
     rebuildAnnotations()
     updateUI()
-    setStatus(wasHandle ? '曲度已更新（模型旋轉保持鎖定，可再調下一段）' : '位置已更新並同步左右配對')
+    if (moved) {
+      setStatus(wasHandle
+        ? '曲度已更新（模型旋轉保持鎖定，可再調下一段）'
+        : '穴位位置已更新並同步左右配對')
+    }
     return
   }
   if (pointerDown && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) <= 4 && event.button === 0) placeAt(event)
