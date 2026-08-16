@@ -189,7 +189,6 @@ button:disabled { opacity: .35; cursor: default; }
 .point-marker .marker-dot { display: none; }
 .point-marker .point-name {
   position: absolute;
-  left: calc(100% + 6px);
   top: 50%;
   transform: translateY(-50%);
   padding: 2px 5px;
@@ -201,6 +200,17 @@ button:disabled { opacity: .35; cursor: default; }
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
+}
+/* Default / body-right: name sits to the right of the marker. */
+.point-marker.label-right .point-name,
+.point-marker:not(.label-left) .point-name {
+  left: calc(100% + 6px);
+  right: auto;
+}
+/* Body-left: name sits to the left of the marker to avoid L/R overlap. */
+.point-marker.label-left .point-name {
+  left: auto;
+  right: calc(100% + 6px);
 }
 .point-marker.selected .point-name {
   color: #fff;
