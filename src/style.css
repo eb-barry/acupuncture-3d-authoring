@@ -76,6 +76,12 @@ button:disabled { opacity: .35; cursor: default; }
   display: grid;
   grid-template-columns: 290px minmax(360px, 1fr) 300px;
 }
+body.app-view-mode .workspace {
+  grid-template-columns: minmax(360px, 1fr) 300px;
+}
+body.app-view-mode .catalog-panel {
+  display: none;
+}
 .panel {
   min-width: 0;
   min-height: 0;
@@ -179,11 +185,13 @@ button:disabled { opacity: .35; cursor: default; }
 }
 .point-label.selected { color: #fff; border-color: var(--gold); background: rgba(91, 61, 30, .92); }
 .point-marker {
-  /* Anchor box matches the glossy 3D sphere footprint; name sits beside it. */
+  /* Flat marker footprint; name sits beside the 10px disc. */
   position: relative;
   display: block;
-  width: var(--marker-size, 12px);
-  height: var(--marker-size, 12px);
+  width: var(--marker-size, 10px);
+  height: var(--marker-size, 10px);
+  margin-left: calc(var(--marker-size, 10px) / -2);
+  margin-top: calc(var(--marker-size, 10px) / -2);
   pointer-events: none;
 }
 .point-marker .marker-dot { display: none; }
@@ -328,7 +336,19 @@ button:disabled { opacity: .35; cursor: default; }
   font-size: 11px;
   letter-spacing: .06em;
 }
-body.meridian-view-mode #lock-orbit { opacity: .55; pointer-events: none; }
+body.app-view-mode .doc-style-field,
+body.app-view-mode .doc-style-field[data-disabled='true'] {
+  opacity: .45;
+  pointer-events: none;
+}
+body.app-view-mode #delete-selection {
+  opacity: .45;
+  pointer-events: none;
+}
+.style-settings .doc-style-field[data-disabled='true'] {
+  opacity: .45;
+  pointer-events: none;
+}
 .objects {
   flex: 1 1 28%;
   min-height: 96px;
