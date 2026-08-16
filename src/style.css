@@ -318,7 +318,6 @@ button:disabled { opacity: .35; cursor: default; }
   font-size: 11px;
   letter-spacing: .06em;
 }
-body.meridian-view-mode .style-settings,
 body.meridian-view-mode #lock-orbit { opacity: .55; pointer-events: none; }
 .objects {
   flex: 1 1 28%;
