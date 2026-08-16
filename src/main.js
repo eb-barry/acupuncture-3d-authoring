@@ -665,21 +665,21 @@ function offsetPosition(node, amount = 0.008) {
     .addScaledVector(new THREE.Vector3(...resolved.normal), amount)
 }
 
-/** Prefer label on the body-outward side so left/right names do not stack. */
+/** Place names outward from the Ren (mid-sagittal) line; Ren/Du stay on the right. */
 function labelPlacementClass(point) {
-  const x = Number(point?.position?.[0]) || 0
-  // Anatomical side first; fall back to world X for midline / unknown.
-  let outwardX = 0
-  if (point?.side === 'left') outwardX = -1
-  else if (point?.side === 'right') outwardX = 1
-  else outwardX = Math.sign(x) || 1
+  // 任督二脈／中線穴位：名稱固定在穴位右側（依附圖不變）
+  if (point?.side === 'midline' || point?.meridianId === 'CV' || point?.meridianId === 'GV') {
+    return 'label-right'
+  }
 
-  const origin = new THREE.Vector3(...(point?.position || [0, 0, 0]))
-  const probe = origin.clone().add(new THREE.Vector3(outwardX * 0.08, 0, 0))
-  const a = origin.clone().project(camera)
-  const b = probe.project(camera)
-  // Map anatomical outward onto the current screen axis.
-  return b.x >= a.x ? 'label-right' : 'label-left'
+  // 以實際位置相對任脈中線（x=0）決定：任脈左側→名稱靠左，右側→靠右
+  const x = Number(point?.position?.[0]) || 0
+  if (x < 0) return 'label-left'
+  if (x > 0) return 'label-right'
+
+  // 恰在中線附近時，退回宣告側別；仍預設靠右
+  if (point?.side === 'left') return 'label-left'
+  return 'label-right'
 }
 
 function applyLabelPlacement(labelElement, point) {
