@@ -676,7 +676,30 @@ function offsetPosition(node, amount = 0.008) {
     .addScaledVector(new THREE.Vector3(...resolved.normal), amount)
 }
 
-/** Lift toward the camera only — keeps screen position on the click/crosshair. */
+/** Prefer label on the body-outward side so left/right names do not stack. */
+function labelPlacementClass(point) {
+  const x = Number(point?.position?.[0]) || 0
+  // Anatomical side first; fall back to world X for midline / unknown.
+  let outwardX = 0
+  if (point?.side === 'left') outwardX = -1
+  else if (point?.side === 'right') outwardX = 1
+  else outwardX = Math.sign(x) || 1
+
+  const origin = new THREE.Vector3(...(point?.position || [0, 0, 0]))
+  const probe = origin.clone().add(new THREE.Vector3(outwardX * 0.08, 0, 0))
+  const a = origin.clone().project(camera)
+  const b = probe.project(camera)
+  // Map anatomical outward onto the current screen axis.
+  return b.x >= a.x ? 'label-right' : 'label-left'
+}
+
+function applyLabelPlacement(labelElement, point) {
+  if (!labelElement) return
+  const placement = labelPlacementClass(point)
+  labelElement.classList.toggle('label-left', placement === 'label-left')
+  labelElement.classList.toggle('label-right', placement === 'label-right')
+}
+
 function cameraFacingAnchor(node, amount = 0.003) {
   const resolved = resolvedNode(node)
   const position = new THREE.Vector3(...resolved.position)
@@ -1276,6 +1299,7 @@ function rebuildAnnotations() {
       label.className = `point-marker ${isSelected ? 'selected' : ''}`
       label.style.setProperty('--marker-size', `${pixelSize}px`)
       label.innerHTML = `<b class="point-name">${escapeHtml(point.name)}</b>`
+      applyLabelPlacement(label, point)
       const labelObject = new CSS2DObject(label)
       labelObject.position.copy(anchor)
       annotationGroup.add(labelObject)
@@ -1295,6 +1319,7 @@ function updateMarkerScales() {
     mesh.scale.setScalar(pixelSizeToWorld(pixelSize, distance))
     if (label?.element) {
       label.element.style.setProperty('--marker-size', `${pixelSize}px`)
+      applyLabelPlacement(label.element, point)
     }
   })
   const handleSize = (position, pixels = 14) =>
