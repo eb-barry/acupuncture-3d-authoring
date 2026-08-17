@@ -37,6 +37,7 @@ import {
   isSurfaceFacingCamera,
   mergeControlsIntoRoute,
   placementProgress,
+  previewHandleCount,
   removePointIdsFromRouteNodes,
   routeHasDrawableAcupoints,
 } from './workflow.js'
@@ -277,6 +278,7 @@ let appMode = 'edit'
 let pointerDown = null
 let dragging = null
 let dragMoved = false
+let dragBaseline = null
 let orbitLocked = false
 /** User pinned lock via the toolbar button; survives curve-handle release. */
 let orbitLockSticky = false
@@ -1149,8 +1151,39 @@ function isRouteSelected(route) {
     && (selected.id === route.id || (route.pairId && selected.pairId === route.pairId))
 }
 
+function isRenDuMeridian(meridianId) {
+  return meridianId === 'CV' || meridianId === 'GV'
+}
+
+function screenPixelDistance(positionA, positionB) {
+  const a = new THREE.Vector3(...positionA).project(camera)
+  const b = new THREE.Vector3(...positionB).project(camera)
+  const width = Math.max(viewport.clientWidth, 1)
+  const height = Math.max(viewport.clientHeight, 1)
+  return Math.hypot((a.x - b.x) * 0.5 * width, (a.y - b.y) * 0.5 * height)
+}
+
+function addPreviewHandle(route, afterIndex, projected) {
+  const handle = new THREE.Mesh(
+    new THREE.SphereGeometry(0.5, 14, 10),
+    createFlatMarkerMaterial(0x7dd3fc, { selected: false }),
+  )
+  handle.position.copy(offsetPosition(projected, 0.016))
+  handle.scale.setScalar(0.01)
+  handle.renderOrder = 5
+  handle.userData = {
+    type: 'route-midpoint',
+    routeId: route.id,
+    afterIndex,
+    position: projected.position,
+    normal: projected.normal,
+  }
+  annotationGroup.add(handle)
+  midpointVisuals.push({ mesh: handle, routeId: route.id, afterIndex })
+}
+
 function addRouteEditHandles(route) {
-  // Edit mode + selected route: show control handles and midpoints.
+  // Edit mode + selected route: show persisted control handles.
   if (appMode !== 'edit') return
 
   route.nodes.forEach((node, nodeIndex) => {
@@ -1167,39 +1200,29 @@ function addRouteEditHandles(route) {
     handleVisuals.push({ mesh: handle, routeId: route.id, nodeIndex })
   })
 
-  // Midpoints between consecutive acupoints — click/drag to bend the segment.
+  // 任督：不提供長線段預覽調整點。
+  if (isRenDuMeridian(route.meridianId)) return
+
+  // Preview handles between consecutive nodes (cap + min screen spacing).
+  // These are ephemeral: a click-drag writes one control at the grabbed spot.
   for (let index = 0; index < route.nodes.length - 1; index += 1) {
-    const a = route.nodes[index]
-    const b = route.nodes[index + 1]
-    if (a.type !== 'acupoint' || b.type !== 'acupoint') continue
-    const ra = resolvedNode(a)
-    const rb = resolvedNode(b)
-    const midPos = [
-      (ra.position[0] + rb.position[0]) * 0.5,
-      (ra.position[1] + rb.position[1]) * 0.5,
-      (ra.position[2] + rb.position[2]) * 0.5,
-    ]
-    const midNormal = slerpUnitVectors(ra.normal, rb.normal, 0.5)
-    const projected = projectNearSurfaceOrFallback(midPos, midNormal, {
-      position: midPos,
-      normal: midNormal,
-    })
-    const handle = new THREE.Mesh(
-      new THREE.SphereGeometry(0.5, 14, 10),
-      createFlatMarkerMaterial(0x7dd3fc, { selected: true }),
-    )
-    handle.position.copy(offsetPosition(projected, 0.016))
-    handle.scale.setScalar(0.01)
-    handle.renderOrder = 5
-    handle.userData = {
-      type: 'route-midpoint',
-      routeId: route.id,
-      afterIndex: index,
-      position: projected.position,
-      normal: projected.normal,
+    const ra = resolvedNode(route.nodes[index])
+    const rb = resolvedNode(route.nodes[index + 1])
+    const count = previewHandleCount(screenPixelDistance(ra.position, rb.position))
+    for (let step = 0; step < count; step += 1) {
+      const t = (step + 1) / (count + 1)
+      const midPos = [
+        ra.position[0] + (rb.position[0] - ra.position[0]) * t,
+        ra.position[1] + (rb.position[1] - ra.position[1]) * t,
+        ra.position[2] + (rb.position[2] - ra.position[2]) * t,
+      ]
+      const midNormal = slerpUnitVectors(ra.normal, rb.normal, t)
+      const projected = projectNearSurfaceOrFallback(midPos, midNormal, {
+        position: midPos,
+        normal: midNormal,
+      })
+      addPreviewHandle(route, index, projected)
     }
-    annotationGroup.add(handle)
-    midpointVisuals.push({ mesh: handle, routeId: route.id, afterIndex: index })
   }
 }
 
@@ -1528,8 +1551,8 @@ function syncAppModeUI() {
     return
   }
   $('#stage-help').textContent = selectedCatalog
-    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · 拖曳穴位／選經脈調曲度${midlineHint}`
-    : '編輯 · 請先在左側選穴位後點皮膚定位 · 可拖曳穴位 · 選經脈顯示曲度編輯點'
+    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · 拖曳穴位／選經脈後拖預覽點調曲度（任督除外）${midlineHint}`
+    : '編輯 · 請先在左側選穴位後點皮膚定位 · 可拖曳穴位 · 選左右經顯示曲度預覽點，拖過才寫入'
 }
 
 function setAppMode(mode) {
@@ -1696,9 +1719,10 @@ function nearestNodeSegment(route, point) {
   return best.index
 }
 
-function insertRouteControl(routeId, hit, afterIndex = null) {
+function insertRouteControl(routeId, hit, afterIndex = null, { persist = true } = {}) {
   const route = state.meridians.find((item) => item.id === routeId)
   if (!route) return toast('找不到經脈路線', 'warn')
+  if (isRenDuMeridian(route.meridianId)) return null
   const index = afterIndex == null ? nearestNodeSegment(route, hit.position) : afterIndex
   const node = { type: 'control', pointId: null, ...hit }
   const pairRoute = route.pairId && state.meridians.find((item) => item.pairId === route.pairId && item.id !== route.id)
@@ -1716,7 +1740,9 @@ function insertRouteControl(routeId, hit, afterIndex = null) {
     return item
   })
   selected = { type: 'meridian', id: route.id, pairId: route.pairId || null }
-  commit({ ...state, meridians: nextRoutes }, '已在線段加入曲度控制點')
+  const nextState = { ...state, meridians: nextRoutes }
+  if (persist) commit(nextState, '已在線段加入曲度控制點')
+  else replaceWithoutHistory(nextState)
   return index + 1
 }
 
@@ -1749,14 +1775,7 @@ function placeAt(event) {
   }
 
   const midpointHit = annotationHit(event, ['route-midpoint'])
-  if (midpointHit) {
-    const data = midpointHit.object.userData
-    insertRouteControl(data.routeId, {
-      position: data.position,
-      normal: data.normal,
-    }, data.afterIndex)
-    return
-  }
+  if (midpointHit) return
   const routeHit = annotationHit(event, ['meridian'])
   if (routeHit) {
     selected = {
@@ -2406,8 +2425,12 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   if (orbitLocked) {
     controls.enableRotate = false
   }
-  const hit = annotationHit(event, ['acupoint', 'route-midpoint', 'route-handle'])
+  const hit = annotationHit(event, ['acupoint', 'route-midpoint', 'route-handle', 'meridian'])
   if (!hit) return
+  if (hit.object.userData.type === 'meridian') {
+    const route = state.meridians.find((item) => item.id === hit.object.userData.id)
+    if (!isRouteSelected(route) || isRenDuMeridian(route?.meridianId)) return
+  }
   controls.enabled = false
 }, true)
 
@@ -2430,19 +2453,49 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return true
   }
 
-  const midpointHit = annotationHit(event, ['route-midpoint'])
-  if (midpointHit) {
-    const data = midpointHit.object.userData
-    const nodeIndex = insertRouteControl(data.routeId, {
-      position: data.position,
-      normal: data.normal,
-    }, data.afterIndex)
-    if (nodeIndex == null) return
+  const startPendingControlDrag = (routeId, hit, afterIndex = null) => {
+    const route = state.meridians.find((item) => item.id === routeId)
+    if (!route || isRenDuMeridian(route.meridianId)) return false
+    dragBaseline = structuredClone(state)
+    const nodeIndex = insertRouteControl(routeId, hit, afterIndex, { persist: false })
+    if (nodeIndex == null) {
+      dragBaseline = null
+      return false
+    }
     dragging = {
       type: 'route-handle',
       id: null,
-      routeId: data.routeId,
+      routeId,
       nodeIndex,
+      pendingInsert: true,
+    }
+    setOrbitLocked(true)
+    syncAppModeUI()
+    syncControlsEnabled()
+    return true
+  }
+
+  const midpointHit = annotationHit(event, ['route-midpoint'])
+  if (midpointHit) {
+    const data = midpointHit.object.userData
+    startPendingControlDrag(data.routeId, {
+      position: data.position,
+      normal: data.normal,
+    }, data.afterIndex)
+    return
+  }
+
+  const hit = annotationHit(event, ['acupoint', 'route-handle'])
+  if (hit?.object.userData.type === 'acupoint') {
+    startAcupointDrag(hit)
+    return
+  }
+  if (hit?.object.userData.type === 'route-handle') {
+    dragging = {
+      type: 'route-handle',
+      id: hit.object.userData.id,
+      routeId: hit.object.userData.routeId,
+      nodeIndex: hit.object.userData.nodeIndex,
     }
     setOrbitLocked(true)
     syncAppModeUI()
@@ -2450,23 +2503,19 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return
   }
 
-  const hit = annotationHit(event, ['acupoint', 'route-handle'])
-  if (!hit) return
-  if (hit.object.userData.type === 'acupoint') {
-    startAcupointDrag(hit)
-    return
+  const routeHit = annotationHit(event, ['meridian'])
+  if (routeHit) {
+    const route = state.meridians.find((item) => item.id === routeHit.object.userData.id)
+    if (route && isRouteSelected(route) && !isRenDuMeridian(route.meridianId)) {
+      const surface = surfaceHit(event) || (() => {
+        const point = toArray(routeHit.point)
+        const toCamera = camera.position.clone().sub(routeHit.point)
+        const normal = toCamera.lengthSq() > 1e-12 ? toArray(toCamera.normalize()) : [0, 0, 1]
+        return projectNearSurfaceOrFallback(point, normal, { position: point, normal })
+      })()
+      if (surface) startPendingControlDrag(route.id, surface)
+    }
   }
-  dragging = {
-    type: hit.object.userData.type,
-    id: hit.object.userData.id,
-    routeId: hit.object.userData.routeId,
-    nodeIndex: hit.object.userData.nodeIndex,
-  }
-  if (dragging.type === 'route-handle') {
-    setOrbitLocked(true)
-    syncAppModeUI()
-  }
-  syncControlsEnabled()
 })
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!dragging) return
@@ -2482,14 +2531,23 @@ renderer.domElement.addEventListener('pointerup', (event) => {
   if (dragging) {
     const wasHandle = dragging.type === 'route-handle'
     const wasAcupoint = dragging.type === 'acupoint'
+    const pendingInsert = Boolean(dragging.pendingInsert)
+    const baseline = dragBaseline
     const moved = dragMoved
     const draggedId = dragging.id
     dragging = null
     dragMoved = false
+    dragBaseline = null
     if (wasHandle && orbitLocked && !orbitLockSticky) {
       detachOrbitLock({ restorePerspective: true })
     }
     syncControlsEnabled()
+    if (!moved && pendingInsert && baseline) {
+      state = baseline
+      rebuildAnnotations()
+      updateUI()
+      return
+    }
     if (moved) {
       if (wasAcupoint) {
         const point = getPoint(draggedId)

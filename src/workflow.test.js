@@ -7,6 +7,7 @@ import {
   nextExpectedPoint,
   orderedPlacedPointsForSide,
   placementProgress,
+  previewHandleCount,
   removePointIdsFromRouteNodes,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
@@ -105,5 +106,15 @@ describe('meridian authoring workflow', () => {
     expect(isOcclusionHitBlocking(2.96, 3.0, 0.02)).toBe(false)
     // True occlusion: torso between camera and a front point viewed from back.
     expect(isOcclusionHitBlocking(1.2, 3.0, 1.8)).toBe(true)
+  })
+
+  it('caps curve-preview handles by screen spacing', () => {
+    expect(previewHandleCount(20)).toBe(0)
+    expect(previewHandleCount(40)).toBe(1)
+    expect(previewHandleCount(50)).toBe(1)
+    expect(previewHandleCount(99)).toBe(1)
+    expect(previewHandleCount(100)).toBe(2)
+    expect(previewHandleCount(250)).toBe(5)
+    expect(previewHandleCount(800)).toBe(5)
   })
 })
