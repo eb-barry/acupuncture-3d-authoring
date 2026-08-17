@@ -112,3 +112,18 @@ export function isOcclusionHitBlocking(hitDistance, targetDistance, hitToProbeDi
   if (hitToProbeDistance <= sameSurfaceRadius) return false
   return hitDistance < targetDistance - depthSlack
 }
+
+/**
+ * How many ephemeral curve-preview handles to show on a segment.
+ * `screenPixels` is the on-screen length of the segment; spacing is a minimum,
+ * with a hard cap so long limbs do not fill with unusable points.
+ */
+export function previewHandleCount(screenPixels, {
+  minSpacingPx = 50,
+  maxCount = 5,
+  minVisiblePx = 28,
+} = {}) {
+  const px = Number(screenPixels) || 0
+  if (px < minVisiblePx) return 0
+  return Math.min(maxCount, Math.max(1, Math.floor(px / minSpacingPx) || 1))
+}
