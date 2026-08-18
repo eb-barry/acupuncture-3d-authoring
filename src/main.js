@@ -33,11 +33,13 @@ import {
 } from './skinPath.js'
 import {
   buildRouteNodesFromPlaced,
+  clampHandleT,
+  closestTOnPolyline,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
   mergeControlsIntoRoute,
   placementProgress,
-  previewHandleCount,
+  pointAtPolylineT,
   removePointIdsFromRouteNodes,
   routeHasDrawableAcupoints,
 } from './workflow.js'
@@ -73,6 +75,7 @@ $('#app').innerHTML = `
       <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定旋轉：可上下左右平移，視角朝向不變，仍可編輯">🔒 <span>鎖定旋轉</span></button>
+      <button id="undo-step" class="tool" type="button" title="回復上一步（Ctrl／⌘+Z）">↩ <span>回復上一步</span></button>
       <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
     </nav>
   </div>
@@ -90,7 +93,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>編輯模式：點擊皮膚定位選中穴位。完成該經脈全部穴位後會自動連線並顯示經脈。</p>
+      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現一顆黑點：拖曳沿線滑動，Shift 直線拉伸，Ctrl／⌘ 曲線拉伸。拉錯可按「回復上一步」。</p>
     </div>
   </aside>
   <section class="stage">
@@ -1048,22 +1051,76 @@ function skinSegmentPoints(a, b) {
   return pruned.map((point) => new THREE.Vector3(...point))
 }
 
-/** Continuous on-skin polyline through every route node, endpoint-exact. */
+/** Continuous on-skin polyline through acupoints; one optional handle per pair. */
 function skinCurvePoints(route) {
-  const nodes = route.nodes.map(resolvedNode)
-  if (nodes.length === 0) return []
-  if (nodes.length === 1) return [offsetPosition(nodes[0], SKIN_LIFT)]
+  const nodes = route.nodes
+  if (!nodes.length) return []
+  const acupointIndexes = nodes
+    .map((node, index) => (node.type === 'acupoint' ? index : -1))
+    .filter((index) => index >= 0)
+  if (!acupointIndexes.length) return []
+  if (acupointIndexes.length === 1) return [offsetPosition(resolvedNode(nodes[acupointIndexes[0]]), SKIN_LIFT)]
 
   const points = []
   const previousRef = { current: null }
-  for (let index = 0; index < nodes.length - 1; index += 1) {
-    const segment = skinSegmentPoints(nodes[index], nodes[index + 1])
-    const start = index === 0 ? 0 : 1
+  for (let pair = 0; pair < acupointIndexes.length - 1; pair += 1) {
+    const fromIndex = acupointIndexes[pair]
+    const toIndex = acupointIndexes[pair + 1]
+    const a = resolvedNode(nodes[fromIndex])
+    const b = resolvedNode(nodes[toIndex])
+    const controls = nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')
+    const handle = controls.length === 1 ? controls[0] : null
+    let segment
+    if (handle?.style === 'linear') {
+      const mid = resolvedNode(handle)
+      segment = [...skinSegmentPoints(a, mid), ...skinSegmentPoints(mid, b).slice(1)]
+    } else if (handle?.style === 'curve') {
+      segment = skinCurveThroughHandle(a, resolvedNode(handle), b)
+    } else {
+      segment = skinSegmentPoints(a, b)
+    }
+    const start = points.length === 0 ? 0 : 1
     for (let i = start; i < segment.length; i += 1) {
       appendSkinPoint(points, segment[i], previousRef)
     }
   }
-  return points.length >= 2 ? points : nodes.map((node) => offsetPosition(node, SKIN_LIFT))
+  return points.length >= 2
+    ? points
+    : acupointIndexes.map((index) => offsetPosition(resolvedNode(nodes[index]), SKIN_LIFT))
+}
+
+function skinCurveThroughHandle(start, handle, end) {
+  const samples = []
+  const steps = 16
+  for (let step = 0; step <= steps; step += 1) {
+    const t = step / steps
+    const u = 1 - t
+    const position = [
+      u * u * start.position[0] + 2 * u * t * handle.position[0] + t * t * end.position[0],
+      u * u * start.position[1] + 2 * u * t * handle.position[1] + t * t * end.position[1],
+      u * u * start.position[2] + 2 * u * t * handle.position[2] + t * t * end.position[2],
+    ]
+    const normal = slerpUnitVectors(start.normal, end.normal, t)
+    const projected = projectNearSurfaceOrFallback(position, normal, { position, normal })
+    samples.push(offsetPosition(projected, SKIN_LIFT))
+  }
+  return samples
+}
+
+function restPathArrays(fromNode, toNode) {
+  return skinSegmentPoints(resolvedNode(fromNode), resolvedNode(toNode)).map(toArray)
+}
+
+function segmentHandlePosition(fromNode, toNode, handle) {
+  const rest = restPathArrays(fromNode, toNode)
+  if (handle?.style === 'linear' || handle?.style === 'curve') {
+    return { position: handle.position, normal: handle.normal }
+  }
+  const t = handle ? closestTOnPolyline(rest, handle.position) : 0.5
+  const position = pointAtPolylineT(rest, clampHandleT(t))
+  const normal = slerpUnitVectors(resolvedNode(fromNode).normal, resolvedNode(toNode).normal, clampHandleT(t))
+  const projected = projectNearSurfaceOrFallback(position, normal, { position, normal })
+  return projected
 }
 
 /** Polyline curve that stays exactly on the sampled skin points (no shortcut chords). */
@@ -1146,84 +1203,81 @@ function createFlatMarkerMaterial(color, { selected = false } = {}) {
   })
 }
 
+function isRenDuMeridian(meridianId) {
+  return meridianId === 'CV' || meridianId === 'GV'
+}
+
 function isRouteSelected(route) {
   return selected?.type === 'meridian'
     && (selected.id === route.id || (route.pairId && selected.pairId === route.pairId))
 }
 
-function isRenDuMeridian(meridianId) {
-  return meridianId === 'CV' || meridianId === 'GV'
+function isSegmentSelected(route, fromPointId, toPointId) {
+  return selected?.type === 'meridian'
+    && isRouteSelected(route)
+    && selected.fromPointId === fromPointId
+    && selected.toPointId === toPointId
 }
 
-function screenPixelDistance(positionA, positionB) {
-  const a = new THREE.Vector3(...positionA).project(camera)
-  const b = new THREE.Vector3(...positionB).project(camera)
-  const width = Math.max(viewport.clientWidth, 1)
-  const height = Math.max(viewport.clientHeight, 1)
-  return Math.hypot((a.x - b.x) * 0.5 * width, (a.y - b.y) * 0.5 * height)
-}
-
-function addPreviewHandle(route, afterIndex, projected) {
-  const handle = new THREE.Mesh(
-    new THREE.SphereGeometry(0.5, 14, 10),
-    createFlatMarkerMaterial(0x7dd3fc, { selected: false }),
-  )
-  handle.position.copy(offsetPosition(projected, 0.016))
-  handle.scale.setScalar(0.01)
-  handle.renderOrder = 5
-  handle.userData = {
-    type: 'route-midpoint',
-    routeId: route.id,
-    afterIndex,
-    position: projected.position,
-    normal: projected.normal,
+function acupointPairs(route) {
+  const indexes = route.nodes
+    .map((node, index) => (node.type === 'acupoint' ? index : -1))
+    .filter((index) => index >= 0)
+  const pairs = []
+  for (let index = 0; index < indexes.length - 1; index += 1) {
+    const fromIndex = indexes[index]
+    const toIndex = indexes[index + 1]
+    pairs.push({
+      fromIndex,
+      toIndex,
+      fromNode: route.nodes[fromIndex],
+      toNode: route.nodes[toIndex],
+      fromPointId: route.nodes[fromIndex].pointId,
+      toPointId: route.nodes[toIndex].pointId,
+      handle: route.nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')[0] || null,
+    })
   }
-  annotationGroup.add(handle)
-  midpointVisuals.push({ mesh: handle, routeId: route.id, afterIndex })
+  return pairs
+}
+
+function nearestAcupointPair(route, worldPoint) {
+  const probe = toArray(worldPoint)
+  let best = { pair: null, distance: Infinity }
+  acupointPairs(route).forEach((pair) => {
+    const rest = restPathArrays(pair.fromNode, pair.toNode)
+    const t = closestTOnPolyline(rest, probe)
+    const point = pointAtPolylineT(rest, t)
+    const distance = Math.hypot(point[0] - probe[0], point[1] - probe[1], point[2] - probe[2])
+    if (distance < best.distance) best = { pair, distance }
+  })
+  return best.pair
 }
 
 function addRouteEditHandles(route) {
-  // Edit mode + selected route: show persisted control handles.
   if (appMode !== 'edit') return
-
-  route.nodes.forEach((node, nodeIndex) => {
-    if (node.type !== 'control') return
-    const handle = new THREE.Mesh(
-      new THREE.SphereGeometry(0.5, 16, 12),
-      createFlatMarkerMaterial(0xffd28c, { selected: true }),
-    )
-    handle.position.copy(offsetPosition(node, 0.014))
-    handle.scale.setScalar(0.012)
-    handle.renderOrder = 6
-    handle.userData = { type: 'route-handle', routeId: route.id, nodeIndex }
-    annotationGroup.add(handle)
-    handleVisuals.push({ mesh: handle, routeId: route.id, nodeIndex })
-  })
-
-  // 任督：不提供長線段預覽調整點。
   if (isRenDuMeridian(route.meridianId)) return
+  if (selected?.type !== 'meridian' || !isRouteSelected(route) || !selected.fromPointId) return
 
-  // Preview handles between consecutive nodes (cap + min screen spacing).
-  // These are ephemeral: a click-drag writes one control at the grabbed spot.
-  for (let index = 0; index < route.nodes.length - 1; index += 1) {
-    const ra = resolvedNode(route.nodes[index])
-    const rb = resolvedNode(route.nodes[index + 1])
-    const count = previewHandleCount(screenPixelDistance(ra.position, rb.position))
-    for (let step = 0; step < count; step += 1) {
-      const t = (step + 1) / (count + 1)
-      const midPos = [
-        ra.position[0] + (rb.position[0] - ra.position[0]) * t,
-        ra.position[1] + (rb.position[1] - ra.position[1]) * t,
-        ra.position[2] + (rb.position[2] - ra.position[2]) * t,
-      ]
-      const midNormal = slerpUnitVectors(ra.normal, rb.normal, t)
-      const projected = projectNearSurfaceOrFallback(midPos, midNormal, {
-        position: midPos,
-        normal: midNormal,
-      })
-      addPreviewHandle(route, index, projected)
-    }
-  }
+  acupointPairs(route)
+    .filter((pair) => isSegmentSelected(route, pair.fromPointId, pair.toPointId))
+    .forEach((pair) => {
+      const placed = segmentHandlePosition(pair.fromNode, pair.toNode, pair.handle)
+      const handle = new THREE.Mesh(
+        new THREE.SphereGeometry(0.5, 12, 10),
+        createFlatMarkerMaterial(0x111111, { selected: true }),
+      )
+      handle.position.copy(offsetPosition(placed, 0.014))
+      handle.scale.setScalar(0.008)
+      handle.renderOrder = 6
+      handle.userData = {
+        type: 'route-handle',
+        routeId: route.id,
+        fromPointId: pair.fromPointId,
+        toPointId: pair.toPointId,
+      }
+      annotationGroup.add(handle)
+      handleVisuals.push({ mesh: handle, routeId: route.id })
+    })
 }
 
 function rebuildAnnotations() {
@@ -1296,7 +1350,7 @@ function updateMarkerScales() {
   const handleSize = (position, pixels = 14) =>
     pixelSizeToWorld(pixels, camera.position.distanceTo(position))
   handleVisuals.forEach(({ mesh }) => {
-    mesh.scale.setScalar(handleSize(mesh.position, 15))
+    mesh.scale.setScalar(handleSize(mesh.position, 5))
   })
   midpointVisuals.forEach(({ mesh }) => {
     mesh.scale.setScalar(handleSize(mesh.position, 12))
@@ -1466,6 +1520,8 @@ function updateUI() {
   updateDeleteButton()
   syncAppModeUI()
   syncOrbitLockButton()
+  const undoStep = $('#undo-step')
+  if (undoStep) undoStep.disabled = !history.canUndo
 }
 
 function syncStyleSettings() {
@@ -1551,8 +1607,8 @@ function syncAppModeUI() {
     return
   }
   $('#stage-help').textContent = selectedCatalog
-    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · 拖曳穴位／選經脈後拖預覽點調曲度（任督除外）${midlineHint}`
-    : '編輯 · 請先在左側選穴位後點皮膚定位 · 可拖曳穴位 · 選左右經顯示曲度預覽點，拖過才寫入'
+    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · 點兩穴之間的線出現黑點 · 拖曳沿線滑 · Shift 直線拉伸 · Ctrl／⌘ 曲線拉伸${midlineHint}`
+    : '編輯 · 點兩穴之間的經脈出現黑點 · 拖曳沿線滑動 · Shift 直線拉伸 · Ctrl／⌘ 曲線拉伸 · 拉錯按「回復上一步」'
 }
 
 function setAppMode(mode) {
@@ -1706,44 +1762,56 @@ function placeAcupoint(hit) {
   }
 }
 
-function nearestNodeSegment(route, point) {
-  let best = { index: 0, distance: Infinity }
-  for (let index = 0; index < route.nodes.length - 1; index += 1) {
-    const start = new THREE.Vector3(...resolvedNode(route.nodes[index]).position)
-    const end = new THREE.Vector3(...resolvedNode(route.nodes[index + 1]).position)
-    const line = new THREE.Line3(start, end)
-    const closest = line.closestPointToPoint(new THREE.Vector3(...point), true, new THREE.Vector3())
-    const distance = closest.distanceTo(new THREE.Vector3(...point))
-    if (distance < best.distance) best = { index, distance }
-  }
-  return best.index
+function replacePairControl(nodes, fromPointId, toPointId, control) {
+  const fromIndex = nodes.findIndex((node) => node.type === 'acupoint' && node.pointId === fromPointId)
+  const toIndex = nodes.findIndex((node) => node.type === 'acupoint' && node.pointId === toPointId)
+  if (fromIndex < 0 || toIndex <= fromIndex) return nodes
+  return [...nodes.slice(0, fromIndex + 1), control, ...nodes.slice(toIndex)]
 }
 
-function insertRouteControl(routeId, hit, afterIndex = null, { persist = true } = {}) {
+function setSegmentHandle(routeId, fromPointId, toPointId, hit, style) {
   const route = state.meridians.find((item) => item.id === routeId)
-  if (!route) return toast('找不到經脈路線', 'warn')
-  if (isRenDuMeridian(route.meridianId)) return null
-  const index = afterIndex == null ? nearestNodeSegment(route, hit.position) : afterIndex
-  const node = { type: 'control', pointId: null, ...hit }
-  const pairRoute = route.pairId && state.meridians.find((item) => item.pairId === route.pairId && item.id !== route.id)
-  const nextRoutes = state.meridians.map((item) => {
+  if (!route || isRenDuMeridian(route.meridianId)) return state
+  const control = {
+    type: 'control',
+    pointId: null,
+    position: hit.position,
+    normal: hit.normal,
+    style,
+  }
+  const pairRoute = route.pairId
+    && state.meridians.find((item) => item.pairId === route.pairId && item.id !== route.id)
+  const mirrorFrom = pairedPointId(fromPointId)
+  const mirrorTo = pairedPointId(toPointId)
+  const mirrored = { ...makeMirroredRouteNode(control), style }
+  const meridians = state.meridians.map((item) => {
     if (item.id === route.id) {
-      const nodes = [...item.nodes]
-      nodes.splice(index + 1, 0, node)
-      return { ...item, nodes }
+      return { ...item, nodes: replacePairControl(item.nodes, fromPointId, toPointId, control) }
     }
-    if (pairRoute && item.id === pairRoute.id) {
-      const nodes = [...item.nodes]
-      nodes.splice(index + 1, 0, makeMirroredRouteNode(node))
-      return { ...item, nodes }
+    if (pairRoute && item.id === pairRoute.id && mirrorFrom && mirrorTo) {
+      return { ...item, nodes: replacePairControl(item.nodes, mirrorFrom, mirrorTo, mirrored) }
     }
     return item
   })
-  selected = { type: 'meridian', id: route.id, pairId: route.pairId || null }
-  const nextState = { ...state, meridians: nextRoutes }
-  if (persist) commit(nextState, '已在線段加入曲度控制點')
-  else replaceWithoutHistory(nextState)
-  return index + 1
+  return { ...state, meridians }
+}
+
+function slideSegmentHandle(routeId, fromPointId, toPointId, probe) {
+  const route = state.meridians.find((item) => item.id === routeId)
+  if (!route) return state
+  const pair = acupointPairs(route).find((item) =>
+    item.fromPointId === fromPointId && item.toPointId === toPointId)
+  if (!pair) return state
+  const rest = restPathArrays(pair.fromNode, pair.toNode)
+  const t = clampHandleT(closestTOnPolyline(rest, probe.position || probe))
+  const position = pointAtPolylineT(rest, t)
+  const normal = slerpUnitVectors(
+    resolvedNode(pair.fromNode).normal,
+    resolvedNode(pair.toNode).normal,
+    t,
+  )
+  const projected = projectNearSurfaceOrFallback(position, normal, { position, normal })
+  return setSegmentHandle(routeId, fromPointId, toPointId, projected, 'along')
 }
 
 function placeAt(event) {
@@ -1760,34 +1828,25 @@ function placeAt(event) {
     return
   }
 
-  if (appMode === 'view') {
-    const routeHit = annotationHit(event, ['meridian'])
-    if (routeHit) {
-      selected = {
-        type: 'meridian',
-        id: routeHit.object.userData.id,
-        pairId: state.meridians.find((item) => item.id === routeHit.object.userData.id)?.pairId || null,
-      }
-      rebuildAnnotations()
-      updateUI()
-    }
-    return
-  }
-
-  const midpointHit = annotationHit(event, ['route-midpoint'])
-  if (midpointHit) return
   const routeHit = annotationHit(event, ['meridian'])
   if (routeHit) {
+    const route = state.meridians.find((item) => item.id === routeHit.object.userData.id)
+    const pair = route && !isRenDuMeridian(route.meridianId)
+      ? nearestAcupointPair(route, routeHit.point)
+      : null
     selected = {
       type: 'meridian',
       id: routeHit.object.userData.id,
-      pairId: state.meridians.find((item) => item.id === routeHit.object.userData.id)?.pairId || null,
+      pairId: route?.pairId || null,
+      fromPointId: pair?.fromPointId || null,
+      toPointId: pair?.toPointId || null,
     }
     rebuildAnnotations()
     updateUI()
     return
   }
 
+  if (appMode !== 'edit') return
   const hit = surfaceHit(event)
   if (!hit) return toast('請點擊人體模型表面', 'warn')
   placeAcupoint(hit)
@@ -1803,27 +1862,6 @@ function updatePairedPoint(pointId, hit) {
       if (item.id === point.id) return { ...item, position: hit.position, normal: hit.normal }
       if (point.pairId && item.pairId === point.pairId) {
         return { ...item, position: mirrored.position, normal: mirrored.normal }
-      }
-      return item
-    }),
-  }
-}
-
-function updateRouteHandle(routeId, nodeIndex, hit) {
-  const route = state.meridians.find((item) => item.id === routeId)
-  const mirrored = mirroredNode(hit)
-  return {
-    ...state,
-    meridians: state.meridians.map((item) => {
-      if (item.id === routeId) {
-        const nodes = [...item.nodes]
-        nodes[nodeIndex] = { type: 'control', pointId: null, ...hit }
-        return { ...item, nodes }
-      }
-      if (route?.pairId && item.pairId === route.pairId) {
-        const nodes = [...item.nodes]
-        nodes[nodeIndex] = { type: 'control', pointId: null, ...mirrored }
-        return { ...item, nodes }
       }
       return item
     }),
@@ -2425,11 +2463,11 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   if (orbitLocked) {
     controls.enableRotate = false
   }
-  const hit = annotationHit(event, ['acupoint', 'route-midpoint', 'route-handle', 'meridian'])
+  const hit = annotationHit(event, ['acupoint', 'route-handle', 'meridian'])
   if (!hit) return
   if (hit.object.userData.type === 'meridian') {
     const route = state.meridians.find((item) => item.id === hit.object.userData.id)
-    if (!isRouteSelected(route) || isRenDuMeridian(route?.meridianId)) return
+    if (isRenDuMeridian(route?.meridianId)) return
   }
   controls.enabled = false
 }, true)
@@ -2453,68 +2491,34 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return true
   }
 
-  const startPendingControlDrag = (routeId, hit, afterIndex = null) => {
-    const route = state.meridians.find((item) => item.id === routeId)
-    if (!route || isRenDuMeridian(route.meridianId)) return false
-    dragBaseline = structuredClone(state)
-    const nodeIndex = insertRouteControl(routeId, hit, afterIndex, { persist: false })
-    if (nodeIndex == null) {
-      dragBaseline = null
-      return false
-    }
+  const acupointHit = annotationHit(event, ['acupoint'])
+  if (acupointHit) {
+    startAcupointDrag(acupointHit)
+    return
+  }
+
+  const handleHit = annotationHit(event, ['route-handle'])
+  if (handleHit) {
+    const data = handleHit.object.userData
+    const stretchStyle = event.shiftKey ? 'linear' : (event.ctrlKey || event.metaKey ? 'curve' : null)
     dragging = {
       type: 'route-handle',
       id: null,
-      routeId,
-      nodeIndex,
-      pendingInsert: true,
+      routeId: data.routeId,
+      fromPointId: data.fromPointId,
+      toPointId: data.toPointId,
+      stretchStyle,
+    }
+    selected = {
+      type: 'meridian',
+      id: data.routeId,
+      pairId: state.meridians.find((item) => item.id === data.routeId)?.pairId || null,
+      fromPointId: data.fromPointId,
+      toPointId: data.toPointId,
     }
     setOrbitLocked(true)
     syncAppModeUI()
     syncControlsEnabled()
-    return true
-  }
-
-  const midpointHit = annotationHit(event, ['route-midpoint'])
-  if (midpointHit) {
-    const data = midpointHit.object.userData
-    startPendingControlDrag(data.routeId, {
-      position: data.position,
-      normal: data.normal,
-    }, data.afterIndex)
-    return
-  }
-
-  const hit = annotationHit(event, ['acupoint', 'route-handle'])
-  if (hit?.object.userData.type === 'acupoint') {
-    startAcupointDrag(hit)
-    return
-  }
-  if (hit?.object.userData.type === 'route-handle') {
-    dragging = {
-      type: 'route-handle',
-      id: hit.object.userData.id,
-      routeId: hit.object.userData.routeId,
-      nodeIndex: hit.object.userData.nodeIndex,
-    }
-    setOrbitLocked(true)
-    syncAppModeUI()
-    syncControlsEnabled()
-    return
-  }
-
-  const routeHit = annotationHit(event, ['meridian'])
-  if (routeHit) {
-    const route = state.meridians.find((item) => item.id === routeHit.object.userData.id)
-    if (route && isRouteSelected(route) && !isRenDuMeridian(route.meridianId)) {
-      const surface = surfaceHit(event) || (() => {
-        const point = toArray(routeHit.point)
-        const toCamera = camera.position.clone().sub(routeHit.point)
-        const normal = toCamera.lengthSq() > 1e-12 ? toArray(toCamera.normalize()) : [0, 0, 1]
-        return projectNearSurfaceOrFallback(point, normal, { position: point, normal })
-      })()
-      if (surface) startPendingControlDrag(route.id, surface)
-    }
   }
 })
 renderer.domElement.addEventListener('pointermove', (event) => {
@@ -2524,15 +2528,16 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   dragMoved = true
   const next = dragging.type === 'acupoint'
     ? updatePairedPoint(dragging.id, hit)
-    : updateRouteHandle(dragging.routeId, dragging.nodeIndex, hit)
+    : dragging.stretchStyle
+      ? setSegmentHandle(dragging.routeId, dragging.fromPointId, dragging.toPointId, hit, dragging.stretchStyle)
+      : slideSegmentHandle(dragging.routeId, dragging.fromPointId, dragging.toPointId, hit)
   replaceWithoutHistory(next)
 })
 renderer.domElement.addEventListener('pointerup', (event) => {
   if (dragging) {
     const wasHandle = dragging.type === 'route-handle'
     const wasAcupoint = dragging.type === 'acupoint'
-    const pendingInsert = Boolean(dragging.pendingInsert)
-    const baseline = dragBaseline
+    const stretchStyle = dragging.stretchStyle
     const moved = dragMoved
     const draggedId = dragging.id
     dragging = null
@@ -2542,12 +2547,6 @@ renderer.domElement.addEventListener('pointerup', (event) => {
       detachOrbitLock({ restorePerspective: true })
     }
     syncControlsEnabled()
-    if (!moved && pendingInsert && baseline) {
-      state = baseline
-      rebuildAnnotations()
-      updateUI()
-      return
-    }
     if (moved) {
       if (wasAcupoint) {
         const point = getPoint(draggedId)
@@ -2568,8 +2567,13 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     rebuildAnnotations()
     updateUI()
     if (moved) {
+      const handleMessage = stretchStyle === 'curve'
+        ? '已曲線拉伸（可按「回復上一步」還原）'
+        : stretchStyle === 'linear'
+          ? '已直線拉伸（可按「回復上一步」還原）'
+          : '已沿經脈調整黑點位置'
       setStatus(wasHandle
-        ? (orbitLockSticky ? '曲度已更新（旋轉保持鎖定）' : '曲度已更新')
+        ? handleMessage
         : '穴位位置已更新並同步左右配對')
     }
     return
@@ -2581,6 +2585,12 @@ $('#lock-orbit').addEventListener('click', () => {
   setOrbitLocked(!orbitLocked, { sticky: true })
   syncAppModeUI()
 })
+
+function undoLastStep() {
+  applyHistory(history.undo(), '已回復上一步')
+}
+
+$('#undo-step')?.addEventListener('click', undoLastStep)
 
 $('#objects').addEventListener('click', (event) => {
   const button = event.target.closest('[data-id]')
@@ -2655,7 +2665,7 @@ $('#style-settings').addEventListener('input', (event) => {
     return
   }
 })
-$('#undo').addEventListener('click', () => applyHistory(history.undo(), '已復原'))
+$('#undo').addEventListener('click', undoLastStep)
 $('#redo').addEventListener('click', () => applyHistory(history.redo(), '已重做'))
 $('#validate').addEventListener('click', () => {
   const result = validateDocument(state)
@@ -2669,7 +2679,7 @@ window.addEventListener('keydown', (event) => {
   const editing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
     event.preventDefault()
-    applyHistory(event.shiftKey ? history.redo() : history.undo(), event.shiftKey ? '已重做' : '已復原')
+    applyHistory(event.shiftKey ? history.redo() : history.undo(), event.shiftKey ? '已重做' : '已回復上一步')
   } else if (!editing && (event.key === 'Delete' || event.key === 'Backspace')) removeSelected()
 })
 

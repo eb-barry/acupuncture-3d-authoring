@@ -106,6 +106,7 @@ export const documentSchema = {
                 pointId: { type: ['string', 'null'] },
                 position: vector,
                 normal: vector,
+                style: { enum: ['along', 'linear', 'curve'] },
               },
             },
           },
@@ -165,6 +166,26 @@ export function parseDocument(text) {
   return { ...result, value: result.valid ? migrated : undefined }
 }
 
+function migrateRouteNodes(nodes = []) {
+  const list = nodes || []
+  const acupointIndexes = list
+    .map((node, index) => (node.type === 'acupoint' ? index : -1))
+    .filter((index) => index >= 0)
+  if (acupointIndexes.length < 2) return list.filter((node) => node.type === 'acupoint')
+  const result = []
+  for (let pair = 0; pair < acupointIndexes.length; pair += 1) {
+    result.push({ ...list[acupointIndexes[pair]] })
+    if (pair >= acupointIndexes.length - 1) break
+    const fromIndex = acupointIndexes[pair]
+    const toIndex = acupointIndexes[pair + 1]
+    const controls = list.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')
+    if (controls.length === 1 && ['along', 'linear', 'curve'].includes(controls[0].style)) {
+      result.push(controls[0])
+    }
+  }
+  return result
+}
+
 export function migrateDocument(value) {
   if (value?.format !== 'acupuncture-3d') return value
 
@@ -214,6 +235,10 @@ export function migrateDocument(value) {
         hash: value.model?.hash ?? null,
         body,
       },
+      meridians: (value.meridians || []).map((route) => ({
+        ...route,
+        nodes: migrateRouteNodes(route.nodes),
+      })),
     }
   }
 

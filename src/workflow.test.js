@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildRouteNodesFromPlaced,
+  clampHandleT,
+  closestTOnPolyline,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
   mergeControlsIntoRoute,
   nextExpectedPoint,
   orderedPlacedPointsForSide,
   placementProgress,
-  previewHandleCount,
+  pointAtPolylineT,
+  polylineArcLength,
   removePointIdsFromRouteNodes,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
+  stripControlNodes,
 } from './workflow.js'
 
 const required = [
@@ -79,7 +83,7 @@ describe('meridian authoring workflow', () => {
     expect(routeHasDrawableAcupoints(removePointIdsFromRouteNodes(nodes, ['a1', 'a2']))).toBe(false)
   })
 
-  it('re-links routes and keeps controls between surviving pairs', () => {
+  it('re-links routes and keeps a single control between surviving pairs', () => {
     const previous = [
       { type: 'acupoint', pointId: 'a2' },
       { type: 'control', pointId: null, position: [0, 1, 0] },
@@ -92,6 +96,23 @@ describe('meridian authoring workflow', () => {
     ]
     expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || 'control'))
       .toEqual(['a1', 'a2', 'control', 'a3'])
+  })
+
+  it('discards legacy multi-handle paths between a pair', () => {
+    const previous = [
+      { type: 'acupoint', pointId: 'a1' },
+      { type: 'control', pointId: null },
+      { type: 'control', pointId: null },
+      { type: 'control', pointId: null },
+      { type: 'acupoint', pointId: 'a2' },
+    ]
+    const next = [
+      { type: 'acupoint', pointId: 'a1' },
+      { type: 'acupoint', pointId: 'a2' },
+    ]
+    expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || 'control'))
+      .toEqual(['a1', 'a2'])
+    expect(stripControlNodes(previous).map((node) => node.pointId)).toEqual(['a1', 'a2'])
   })
 
   it('hides front-surface labels from a rear camera', () => {
@@ -108,13 +129,13 @@ describe('meridian authoring workflow', () => {
     expect(isOcclusionHitBlocking(1.2, 3.0, 1.8)).toBe(true)
   })
 
-  it('caps curve-preview handles by screen spacing', () => {
-    expect(previewHandleCount(20)).toBe(0)
-    expect(previewHandleCount(40)).toBe(1)
-    expect(previewHandleCount(50)).toBe(1)
-    expect(previewHandleCount(99)).toBe(1)
-    expect(previewHandleCount(100)).toBe(2)
-    expect(previewHandleCount(250)).toBe(5)
-    expect(previewHandleCount(800)).toBe(5)
+  it('clamps the segment handle away from endpoints and samples polylines', () => {
+    expect(clampHandleT(0)).toBe(0.1)
+    expect(clampHandleT(1)).toBe(0.9)
+    expect(clampHandleT(0.5)).toBe(0.5)
+    const line = [[0, 0, 0], [10, 0, 0]]
+    expect(polylineArcLength(line)).toBe(10)
+    expect(pointAtPolylineT(line, 0.5)).toEqual([5, 0, 0])
+    expect(closestTOnPolyline(line, [7, 1, 0])).toBeCloseTo(0.7)
   })
 })
