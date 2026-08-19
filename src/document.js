@@ -1,4 +1,5 @@
 import Ajv from 'ajv'
+import { keepPairHandles } from './workflow.js'
 
 export const BODY_MODELS = {
   male: {
@@ -179,9 +180,7 @@ function migrateRouteNodes(nodes = []) {
     const fromIndex = acupointIndexes[pair]
     const toIndex = acupointIndexes[pair + 1]
     const controls = list.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')
-    if (controls.length === 1 && ['along', 'linear', 'curve'].includes(controls[0].style)) {
-      result.push(controls[0])
-    }
+    result.push(...keepPairHandles(controls))
   }
   return result
 }

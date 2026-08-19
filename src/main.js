@@ -32,16 +32,24 @@ import {
   surfaceStepLength,
 } from './skinPath.js'
 import {
+  FALLBACK_SHORT_SEGMENT_ARC,
   buildRouteNodesFromPlaced,
   clampHandleT,
+  clampPairedHandleT,
   closestTOnPolyline,
+  defaultHandleTs,
+  handlesBendPath,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
+  keepPairHandles,
   mergeControlsIntoRoute,
   placementProgress,
   pointAtPolylineT,
+  polylineArcLength,
   removePointIdsFromRouteNodes,
+  resolveHandleSlots,
   routeHasDrawableAcupoints,
+  visibleHandleCount,
 } from './workflow.js'
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
@@ -93,7 +101,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現一顆黑點：拖曳沿線滑動，Shift 直線拉伸，Ctrl／⌘ 曲線拉伸。拉錯可按「回復上一步」。</p>
+      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現一或兩顆黑點（長段兩顆）：拖曳沿線滑動，Shift 直線拉伸，Ctrl／⌘ 貼皮弧線（穴→點一→點二→穴）。拉錯可按「回復上一步」。</p>
     </div>
   </aside>
   <section class="stage">
@@ -1051,7 +1059,24 @@ function skinSegmentPoints(a, b) {
   return pruned.map((point) => new THREE.Vector3(...point))
 }
 
-/** Continuous on-skin polyline through acupoints; one optional handle per pair. */
+/** Concatenate on-skin marches; never leave floating air samples. */
+function joinOnSkin(anchors) {
+  if (!anchors.length) return []
+  if (anchors.length === 1) return [offsetPosition(resolvedNode(anchors[0]), SKIN_LIFT)]
+  const points = []
+  const previousRef = { current: null }
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const piece = skinSegmentPoints(resolvedNode(anchors[index]), resolvedNode(anchors[index + 1]))
+    if (piece.length < 2) return null
+    const start = points.length === 0 ? 0 : 1
+    for (let i = start; i < piece.length; i += 1) {
+      appendSkinPoint(points, piece[i], previousRef)
+    }
+  }
+  return points.length >= 2 ? points : null
+}
+
+/** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
 function skinCurvePoints(route) {
   const nodes = route.nodes
   if (!nodes.length) return []
@@ -1061,24 +1086,22 @@ function skinCurvePoints(route) {
   if (!acupointIndexes.length) return []
   if (acupointIndexes.length === 1) return [offsetPosition(resolvedNode(nodes[acupointIndexes[0]]), SKIN_LIFT)]
 
+  const referenceArc = shortSegmentReferenceArc(route.side)
   const points = []
   const previousRef = { current: null }
   for (let pair = 0; pair < acupointIndexes.length - 1; pair += 1) {
     const fromIndex = acupointIndexes[pair]
     const toIndex = acupointIndexes[pair + 1]
-    const a = resolvedNode(nodes[fromIndex])
-    const b = resolvedNode(nodes[toIndex])
-    const controls = nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')
-    const handle = controls.length === 1 ? controls[0] : null
-    let segment
-    if (handle?.style === 'linear') {
-      const mid = resolvedNode(handle)
-      segment = [...skinSegmentPoints(a, mid), ...skinSegmentPoints(mid, b).slice(1)]
-    } else if (handle?.style === 'curve') {
-      segment = skinCurveThroughHandle(a, resolvedNode(handle), b)
-    } else {
-      segment = skinSegmentPoints(a, b)
-    }
+    const fromNode = nodes[fromIndex]
+    const toNode = nodes[toIndex]
+    const a = resolvedNode(fromNode)
+    const b = resolvedNode(toNode)
+    const handles = keepPairHandles(nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control'))
+    const rest = restPathArrays(fromNode, toNode)
+    const count = visibleHandleCount(polylineArcLength(rest), referenceArc, handles.length)
+    const waypoints = pairWaypoints(fromNode, toNode, handles, count, rest)
+    const bent = handlesBendPath(handles) ? joinOnSkin([a, ...waypoints, b]) : null
+    const segment = bent && bent.length >= 2 ? bent : skinSegmentPoints(a, b)
     const start = points.length === 0 ? 0 : 1
     for (let i = start; i < segment.length; i += 1) {
       appendSkinPoint(points, segment[i], previousRef)
@@ -1089,38 +1112,80 @@ function skinCurvePoints(route) {
     : acupointIndexes.map((index) => offsetPosition(resolvedNode(nodes[index]), SKIN_LIFT))
 }
 
-function skinCurveThroughHandle(start, handle, end) {
-  const samples = []
-  const steps = 16
-  for (let step = 0; step <= steps; step += 1) {
-    const t = step / steps
-    const u = 1 - t
-    const position = [
-      u * u * start.position[0] + 2 * u * t * handle.position[0] + t * t * end.position[0],
-      u * u * start.position[1] + 2 * u * t * handle.position[1] + t * t * end.position[1],
-      u * u * start.position[2] + 2 * u * t * handle.position[2] + t * t * end.position[2],
-    ]
-    const normal = slerpUnitVectors(start.normal, end.normal, t)
-    const projected = projectNearSurfaceOrFallback(position, normal, { position, normal })
-    samples.push(offsetPosition(projected, SKIN_LIFT))
-  }
-  return samples
-}
-
 function restPathArrays(fromNode, toNode) {
   return skinSegmentPoints(resolvedNode(fromNode), resolvedNode(toNode)).map(toArray)
 }
 
-function segmentHandlePosition(fromNode, toNode, handle) {
-  const rest = restPathArrays(fromNode, toNode)
+let shortArcCache = null
+
+function lu34Pair(side) {
+  const lu3 = state.acupoints.find((point) => point.code === 'LU3' && (!side || point.side === side))
+    || state.acupoints.find((point) => point.code === 'LU3')
+  if (!lu3) return null
+  const lu4 = state.acupoints.find((point) => point.code === 'LU4' && point.side === lu3.side)
+    || state.acupoints.find((point) => point.code === 'LU4')
+  return lu4 ? { lu3, lu4 } : null
+}
+
+/** 天府–俠白 rest-path arc; fallback when those points are missing. */
+function shortSegmentReferenceArc(side) {
+  const pair = lu34Pair(side) || lu34Pair(null)
+  const fingerprint = pair
+    ? `${pair.lu3.id}:${pair.lu3.position.join(',')}:${pair.lu4.position.join(',')}`
+    : 'missing'
+  const key = `${side || 'any'}|${fingerprint}`
+  if (shortArcCache?.[key] != null) return shortArcCache[key]
+  const value = pair
+    ? polylineArcLength(restPathArrays(pair.lu3, pair.lu4))
+    : FALLBACK_SHORT_SEGMENT_ARC
+  const resolved = Number.isFinite(value) && value > 1e-4 ? value : FALLBACK_SHORT_SEGMENT_ARC
+  shortArcCache = { [key]: resolved }
+  return resolved
+}
+
+function restPathAnchor(fromNode, toNode, rest, t) {
+  const clamped = clampHandleT(t)
+  const position = pointAtPolylineT(rest, clamped)
+  const normal = slerpUnitVectors(
+    resolvedNode(fromNode).normal,
+    resolvedNode(toNode).normal,
+    clamped,
+  )
+  return projectNearSurfaceOrFallback(position, normal, { position, normal })
+}
+
+function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(fromNode, toNode)) {
   if (handle?.style === 'linear' || handle?.style === 'curve') {
     return { position: handle.position, normal: handle.normal }
   }
   const t = handle ? closestTOnPolyline(rest, handle.position) : 0.5
-  const position = pointAtPolylineT(rest, clampHandleT(t))
-  const normal = slerpUnitVectors(resolvedNode(fromNode).normal, resolvedNode(toNode).normal, clampHandleT(t))
-  const projected = projectNearSurfaceOrFallback(position, normal, { position, normal })
-  return projected
+  return restPathAnchor(fromNode, toNode, rest, t)
+}
+
+function pairWaypoints(fromNode, toNode, handles, count, rest) {
+  const slots = resolveHandleSlots(handles, count, rest)
+  const defaults = defaultHandleTs(count)
+  return slots.map((handle, index) => {
+    if (handle) return segmentHandlePosition(fromNode, toNode, handle, rest)
+    return restPathAnchor(fromNode, toNode, rest, defaults[index])
+  })
+}
+
+function pairHandleRecords(fromNode, toNode, handles, count, rest) {
+  const slots = resolveHandleSlots(handles, count, rest)
+  const defaults = defaultHandleTs(count)
+  return slots.map((handle, index) => {
+    const placed = handle
+      ? segmentHandlePosition(fromNode, toNode, handle, rest)
+      : restPathAnchor(fromNode, toNode, rest, defaults[index])
+    return {
+      type: 'control',
+      pointId: null,
+      position: [...placed.position],
+      normal: [...placed.normal],
+      style: handle?.style || 'along',
+    }
+  })
 }
 
 /** Polyline curve that stays exactly on the sampled skin points (no shortcut chords). */
@@ -1234,7 +1299,9 @@ function acupointPairs(route) {
       toNode: route.nodes[toIndex],
       fromPointId: route.nodes[fromIndex].pointId,
       toPointId: route.nodes[toIndex].pointId,
-      handle: route.nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')[0] || null,
+      handles: keepPairHandles(
+        route.nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control'),
+      ),
     })
   }
   return pairs
@@ -1258,25 +1325,31 @@ function addRouteEditHandles(route) {
   if (isRenDuMeridian(route.meridianId)) return
   if (selected?.type !== 'meridian' || !isRouteSelected(route) || !selected.fromPointId) return
 
+  const referenceArc = shortSegmentReferenceArc(route.side)
   acupointPairs(route)
     .filter((pair) => isSegmentSelected(route, pair.fromPointId, pair.toPointId))
     .forEach((pair) => {
-      const placed = segmentHandlePosition(pair.fromNode, pair.toNode, pair.handle)
-      const handle = new THREE.Mesh(
-        new THREE.SphereGeometry(0.5, 12, 10),
-        createFlatMarkerMaterial(0x111111, { selected: true }),
-      )
-      handle.position.copy(offsetPosition(placed, 0.014))
-      handle.scale.setScalar(0.008)
-      handle.renderOrder = 6
-      handle.userData = {
-        type: 'route-handle',
-        routeId: route.id,
-        fromPointId: pair.fromPointId,
-        toPointId: pair.toPointId,
-      }
-      annotationGroup.add(handle)
-      handleVisuals.push({ mesh: handle, routeId: route.id })
+      const rest = restPathArrays(pair.fromNode, pair.toNode)
+      const count = visibleHandleCount(polylineArcLength(rest), referenceArc, pair.handles.length)
+      pairWaypoints(pair.fromNode, pair.toNode, pair.handles, count, rest)
+        .forEach((placed, handleIndex) => {
+          const handle = new THREE.Mesh(
+            new THREE.SphereGeometry(0.5, 12, 10),
+            createFlatMarkerMaterial(0x111111, { selected: true }),
+          )
+          handle.position.copy(offsetPosition(placed, 0.014))
+          handle.scale.setScalar(0.008)
+          handle.renderOrder = 6
+          handle.userData = {
+            type: 'route-handle',
+            routeId: route.id,
+            fromPointId: pair.fromPointId,
+            toPointId: pair.toPointId,
+            handleIndex,
+          }
+          annotationGroup.add(handle)
+          handleVisuals.push({ mesh: handle, routeId: route.id })
+        })
     })
 }
 
@@ -1607,8 +1680,8 @@ function syncAppModeUI() {
     return
   }
   $('#stage-help').textContent = selectedCatalog
-    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · 點兩穴之間的線出現黑點 · 拖曳沿線滑 · Shift 直線拉伸 · Ctrl／⌘ 曲線拉伸${midlineHint}`
-    : '編輯 · 點兩穴之間的經脈出現黑點 · 拖曳沿線滑動 · Shift 直線拉伸 · Ctrl／⌘ 曲線拉伸 · 拉錯按「回復上一步」'
+    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · 點兩穴之間的線出現黑點 · 拖曳沿線滑 · Shift 直線拉伸 · Ctrl／⌘ 貼皮弧線${midlineHint}`
+    : '編輯 · 點兩穴之間的經脈出現一或兩顆黑點 · 拖曳沿線滑動 · Shift 直線拉伸 · Ctrl／⌘ 貼皮弧線 · 拉錯按「回復上一步」'
 }
 
 function setAppMode(mode) {
@@ -1762,56 +1835,101 @@ function placeAcupoint(hit) {
   }
 }
 
-function replacePairControl(nodes, fromPointId, toPointId, control) {
+function replacePairHandles(nodes, fromPointId, toPointId, controls) {
   const fromIndex = nodes.findIndex((node) => node.type === 'acupoint' && node.pointId === fromPointId)
   const toIndex = nodes.findIndex((node) => node.type === 'acupoint' && node.pointId === toPointId)
   if (fromIndex < 0 || toIndex <= fromIndex) return nodes
-  return [...nodes.slice(0, fromIndex + 1), control, ...nodes.slice(toIndex)]
+  return [...nodes.slice(0, fromIndex + 1), ...controls, ...nodes.slice(toIndex)]
 }
 
-function setSegmentHandle(routeId, fromPointId, toPointId, hit, style) {
+function writePairHandles(routeId, fromPointId, toPointId, controls) {
   const route = state.meridians.find((item) => item.id === routeId)
   if (!route || isRenDuMeridian(route.meridianId)) return state
-  const control = {
-    type: 'control',
-    pointId: null,
-    position: hit.position,
-    normal: hit.normal,
-    style,
-  }
   const pairRoute = route.pairId
     && state.meridians.find((item) => item.pairId === route.pairId && item.id !== route.id)
   const mirrorFrom = pairedPointId(fromPointId)
   const mirrorTo = pairedPointId(toPointId)
-  const mirrored = { ...makeMirroredRouteNode(control), style }
+  const mirrored = controls.map((control) => ({
+    ...makeMirroredRouteNode(control),
+    style: control.style,
+  }))
   const meridians = state.meridians.map((item) => {
     if (item.id === route.id) {
-      return { ...item, nodes: replacePairControl(item.nodes, fromPointId, toPointId, control) }
+      return { ...item, nodes: replacePairHandles(item.nodes, fromPointId, toPointId, controls) }
     }
     if (pairRoute && item.id === pairRoute.id && mirrorFrom && mirrorTo) {
-      return { ...item, nodes: replacePairControl(item.nodes, mirrorFrom, mirrorTo, mirrored) }
+      return { ...item, nodes: replacePairHandles(item.nodes, mirrorFrom, mirrorTo, mirrored) }
     }
     return item
   })
   return { ...state, meridians }
 }
 
-function slideSegmentHandle(routeId, fromPointId, toPointId, probe) {
+function setSegmentHandle(routeId, fromPointId, toPointId, hit, style, handleIndex = 0) {
+  const route = state.meridians.find((item) => item.id === routeId)
+  if (!route || isRenDuMeridian(route.meridianId)) return state
+  const pair = acupointPairs(route).find((item) =>
+    item.fromPointId === fromPointId && item.toPointId === toPointId)
+  if (!pair) return state
+  const rest = restPathArrays(pair.fromNode, pair.toNode)
+  const count = visibleHandleCount(
+    polylineArcLength(rest),
+    shortSegmentReferenceArc(route.side),
+    pair.handles.length,
+  )
+  const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
+  const index = Math.min(Math.max(0, handleIndex), records.length - 1)
+  const sibling = records.length === 2 ? records[1 - index] : null
+  if (sibling) {
+    const gap = Math.hypot(
+      hit.position[0] - sibling.position[0],
+      hit.position[1] - sibling.position[1],
+      hit.position[2] - sibling.position[2],
+    )
+    if (gap < 0.01) return state
+  }
+  records[index] = {
+    type: 'control',
+    pointId: null,
+    position: [...hit.position],
+    normal: [...hit.normal],
+    style,
+  }
+  return writePairHandles(routeId, fromPointId, toPointId, records)
+}
+
+function slideSegmentHandle(routeId, fromPointId, toPointId, probe, handleIndex = 0) {
   const route = state.meridians.find((item) => item.id === routeId)
   if (!route) return state
   const pair = acupointPairs(route).find((item) =>
     item.fromPointId === fromPointId && item.toPointId === toPointId)
   if (!pair) return state
   const rest = restPathArrays(pair.fromNode, pair.toNode)
-  const t = clampHandleT(closestTOnPolyline(rest, probe.position || probe))
-  const position = pointAtPolylineT(rest, t)
-  const normal = slerpUnitVectors(
-    resolvedNode(pair.fromNode).normal,
-    resolvedNode(pair.toNode).normal,
-    t,
+  const count = visibleHandleCount(
+    polylineArcLength(rest),
+    shortSegmentReferenceArc(route.side),
+    pair.handles.length,
   )
-  const projected = projectNearSurfaceOrFallback(position, normal, { position, normal })
-  return setSegmentHandle(routeId, fromPointId, toPointId, projected, 'along')
+  const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
+  const index = Math.min(Math.max(0, handleIndex), records.length - 1)
+  const siblingT = records.length === 2
+    ? closestTOnPolyline(rest, records[1 - index].position)
+    : null
+  const t = clampPairedHandleT(
+    closestTOnPolyline(rest, probe.position || probe),
+    index,
+    siblingT,
+    records.length,
+  )
+  const placed = restPathAnchor(pair.fromNode, pair.toNode, rest, t)
+  records[index] = {
+    type: 'control',
+    pointId: null,
+    position: [...placed.position],
+    normal: [...placed.normal],
+    style: 'along',
+  }
+  return writePairHandles(routeId, fromPointId, toPointId, records)
 }
 
 function placeAt(event) {
@@ -2507,6 +2625,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       routeId: data.routeId,
       fromPointId: data.fromPointId,
       toPointId: data.toPointId,
+      handleIndex: data.handleIndex ?? 0,
       stretchStyle,
     }
     selected = {
@@ -2529,8 +2648,21 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   const next = dragging.type === 'acupoint'
     ? updatePairedPoint(dragging.id, hit)
     : dragging.stretchStyle
-      ? setSegmentHandle(dragging.routeId, dragging.fromPointId, dragging.toPointId, hit, dragging.stretchStyle)
-      : slideSegmentHandle(dragging.routeId, dragging.fromPointId, dragging.toPointId, hit)
+      ? setSegmentHandle(
+        dragging.routeId,
+        dragging.fromPointId,
+        dragging.toPointId,
+        hit,
+        dragging.stretchStyle,
+        dragging.handleIndex,
+      )
+      : slideSegmentHandle(
+        dragging.routeId,
+        dragging.fromPointId,
+        dragging.toPointId,
+        hit,
+        dragging.handleIndex,
+      )
   replaceWithoutHistory(next)
 })
 renderer.domElement.addEventListener('pointerup', (event) => {
@@ -2568,7 +2700,7 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     updateUI()
     if (moved) {
       const handleMessage = stretchStyle === 'curve'
-        ? '已曲線拉伸（可按「回復上一步」還原）'
+        ? '已貼皮弧線拉伸（可按「回復上一步」還原）'
         : stretchStyle === 'linear'
           ? '已直線拉伸（可按「回復上一步」還原）'
           : '已沿經脈調整黑點位置'

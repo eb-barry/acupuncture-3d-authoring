@@ -141,4 +141,56 @@ describe('acupuncture document schema', () => {
     expect(result.valid).toBe(true)
     expect(result.value.meridians[0].nodes.map((node) => node.type)).toEqual(['acupoint', 'acupoint'])
   })
+
+  it('keeps two styled segment handles when migrating version 2 documents', () => {
+    const document = {
+      ...emptyDocument(),
+      meridians: [{
+        id: 'm1',
+        pairId: null,
+        meridianId: 'LU',
+        name: '手太陰肺經',
+        color: '#22c55e',
+        width: 3,
+        side: 'left',
+        nodes: [
+          { type: 'acupoint', pointId: 'p1', position: [0, 1, 0], normal: [0, 0, 1] },
+          { type: 'control', pointId: null, position: [0, 1.3, 0], normal: [0, 0, 1], style: 'curve' },
+          { type: 'control', pointId: null, position: [0, 1.6, 0], normal: [0, 0, 1], style: 'along' },
+          { type: 'acupoint', pointId: 'p2', position: [0, 2, 0], normal: [0, 0, 1] },
+        ],
+      }],
+      acupoints: [{
+        id: 'p1',
+        pairId: null,
+        name: '雲門',
+        code: 'LU2',
+        meridianId: 'LU',
+        meridianName: '手太陰肺經',
+        sequence: 2,
+        side: 'left',
+        color: '#ef4444',
+        size: 10,
+        position: [0, 1, 0],
+        normal: [0, 0, 1],
+      }, {
+        id: 'p2',
+        pairId: null,
+        name: '天府',
+        code: 'LU3',
+        meridianId: 'LU',
+        meridianName: '手太陰肺經',
+        sequence: 3,
+        side: 'left',
+        color: '#ef4444',
+        size: 10,
+        position: [0, 2, 0],
+        normal: [0, 0, 1],
+      }],
+    }
+    const result = parseDocument(JSON.stringify(document))
+    expect(result.valid).toBe(true)
+    expect(result.value.meridians[0].nodes.map((node) => node.style || node.type))
+      .toEqual(['acupoint', 'curve', 'along', 'acupoint'])
+  })
 })

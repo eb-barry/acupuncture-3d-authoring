@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   buildRouteNodesFromPlaced,
   clampHandleT,
+  clampPairedHandleT,
   closestTOnPolyline,
+  defaultHandleTs,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
+  keepPairHandles,
   mergeControlsIntoRoute,
   nextExpectedPoint,
   orderedPlacedPointsForSide,
@@ -12,9 +15,12 @@ import {
   pointAtPolylineT,
   polylineArcLength,
   removePointIdsFromRouteNodes,
+  resolveHandleSlots,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
+  segmentHandleCount,
   stripControlNodes,
+  visibleHandleCount,
 } from './workflow.js'
 
 const required = [
@@ -86,7 +92,7 @@ describe('meridian authoring workflow', () => {
   it('re-links routes and keeps a single control between surviving pairs', () => {
     const previous = [
       { type: 'acupoint', pointId: 'a2' },
-      { type: 'control', pointId: null, position: [0, 1, 0] },
+      { type: 'control', pointId: null, style: 'along', position: [0, 1, 0] },
       { type: 'acupoint', pointId: 'a3' },
     ]
     const next = [
@@ -96,6 +102,22 @@ describe('meridian authoring workflow', () => {
     ]
     expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || 'control'))
       .toEqual(['a1', 'a2', 'control', 'a3'])
+  })
+
+  it('re-links routes and keeps two styled controls between a pair', () => {
+    const previous = [
+      { type: 'acupoint', pointId: 'a2' },
+      { type: 'control', pointId: null, style: 'curve', position: [0, 1, 0] },
+      { type: 'control', pointId: null, style: 'along', position: [0, 1.2, 0] },
+      { type: 'acupoint', pointId: 'a3' },
+    ]
+    const next = [
+      { type: 'acupoint', pointId: 'a1' },
+      { type: 'acupoint', pointId: 'a2' },
+      { type: 'acupoint', pointId: 'a3' },
+    ]
+    expect(mergeControlsIntoRoute(previous, next).map((node) => node.style || node.pointId))
+      .toEqual(['a1', 'a2', 'curve', 'along', 'a3'])
   })
 
   it('discards legacy multi-handle paths between a pair', () => {
@@ -137,5 +159,34 @@ describe('meridian authoring workflow', () => {
     expect(polylineArcLength(line)).toBe(10)
     expect(pointAtPolylineT(line, 0.5)).toEqual([5, 0, 0])
     expect(closestTOnPolyline(line, [7, 1, 0])).toBeCloseTo(0.7)
+  })
+
+  it('gives long rest-path segments two handles against the LU3–LU4 reference', () => {
+    expect(segmentHandleCount(0.032, 0.033)).toBe(1)
+    expect(segmentHandleCount(0.178, 0.033)).toBe(2)
+    expect(segmentHandleCount(0.178, null)).toBe(2)
+    expect(segmentHandleCount(0.03, null)).toBe(1)
+    expect(visibleHandleCount(0.03, 0.033, 0)).toBe(1)
+    expect(visibleHandleCount(0.18, 0.033, 0)).toBe(2)
+    expect(visibleHandleCount(0.03, 0.033, 2)).toBe(2)
+  })
+
+  it('keeps one or two styled handles and fills default slots', () => {
+    const along = { type: 'control', style: 'along', position: [3, 0, 0] }
+    const curve = { type: 'control', style: 'curve', position: [7, 0, 0] }
+    const line = [[0, 0, 0], [10, 0, 0]]
+    expect(keepPairHandles([{ type: 'control', position: [1, 0, 0] }, { type: 'control', position: [2, 0, 0] }]))
+      .toEqual([])
+    expect(keepPairHandles([along, curve]).map((node) => node.style)).toEqual(['along', 'curve'])
+    expect(defaultHandleTs(1)).toEqual([0.5])
+    expect(defaultHandleTs(2)).toEqual([1 / 3, 2 / 3])
+    expect(resolveHandleSlots([], 2, line)).toEqual([null, null])
+    expect(resolveHandleSlots([along], 2, line)[0]).toBe(along)
+    expect(resolveHandleSlots([along], 2, line)[1]).toBeNull()
+    expect(resolveHandleSlots([curve], 2, line)[0]).toBeNull()
+    expect(resolveHandleSlots([curve], 2, line)[1]).toBe(curve)
+    expect(clampPairedHandleT(0.5, 0, 0.67, 2)).toBeCloseTo(0.5)
+    expect(clampPairedHandleT(0.8, 0, 0.67, 2)).toBeCloseTo(0.55)
+    expect(clampPairedHandleT(0.1, 1, 0.33, 2)).toBeCloseTo(0.45)
   })
 })

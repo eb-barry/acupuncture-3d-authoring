@@ -62,7 +62,97 @@ export function removePointIdsFromRouteNodes(nodes, removedIds) {
   return filtered.slice(start, end)
 }
 
-/** Reinsert at most one control between surviving acupoint pairs. */
+export const HANDLE_STYLES = ['along', 'linear', 'curve']
+/** LU3–LU4 (天府–俠白) rest-path length when those points are missing. */
+export const FALLBACK_SHORT_SEGMENT_ARC = 0.034
+export const DEFAULT_SINGLE_HANDLE_T = 0.5
+export const DEFAULT_PAIR_HANDLE_TS = [1 / 3, 2 / 3]
+export const MIN_HANDLE_GAP = 0.12
+export const HANDLE_END_MARGIN = 0.1
+
+export function isStyledHandle(node) {
+  return node?.type === 'control' && HANDLE_STYLES.includes(node.style)
+}
+
+/** Keep 1–2 styled handles; drop unstyled legacy piles. At most two. */
+export function keepPairHandles(controls = []) {
+  return (controls || []).filter(isStyledHandle).slice(0, 2)
+}
+
+export function defaultHandleTs(count) {
+  return count >= 2 ? [...DEFAULT_PAIR_HANDLE_TS] : [DEFAULT_SINGLE_HANDLE_T]
+}
+
+/** Long rest paths get two black handles; short ones get one. */
+export function segmentHandleCount(restArcLength, referenceArcLength) {
+  const rest = Number(restArcLength)
+  if (!Number.isFinite(rest) || rest <= 0) return 1
+  const reference = Number.isFinite(referenceArcLength) && referenceArcLength > 1e-4
+    ? referenceArcLength
+    : FALLBACK_SHORT_SEGMENT_ARC
+  return rest > reference ? 2 : 1
+}
+
+/** Rest-path length wins; already-saved handles are never hidden. */
+export function visibleHandleCount(restArcLength, referenceArcLength, storedCount = 0) {
+  const byLength = segmentHandleCount(restArcLength, referenceArcLength)
+  const stored = Math.min(2, Math.max(0, Number(storedCount) || 0))
+  return Math.min(2, Math.max(byLength, stored))
+}
+
+/**
+ * Clamp one handle's rest-path t: 10% from acupoints, and not overlapping
+ * the sibling handle.
+ */
+export function clampPairedHandleT(t, handleIndex, siblingT, count, {
+  margin = HANDLE_END_MARGIN,
+  gap = MIN_HANDLE_GAP,
+} = {}) {
+  if (count < 2 || !Number.isFinite(siblingT)) return clampHandleT(t, margin)
+  let minT = margin
+  let maxT = 1 - margin
+  if (handleIndex <= 0) maxT = Math.min(maxT, siblingT - gap)
+  else minT = Math.max(minT, siblingT + gap)
+  if (minT > maxT) {
+    return handleIndex <= 0
+      ? Math.max(margin, siblingT - gap)
+      : Math.min(1 - margin, siblingT + gap)
+  }
+  const value = Number.isFinite(Number(t)) ? Number(t) : (minT + maxT) / 2
+  return Math.min(maxT, Math.max(minT, value))
+}
+
+/**
+ * Fill 1 or 2 visual slots. Stored handles keep identity; empty slots are
+ * null so the caller can sit them at 33%/67% (or 50%) on the rest path.
+ */
+export function resolveHandleSlots(storedHandles, count, restPath = []) {
+  const stored = keepPairHandles(storedHandles)
+  const ordered = stored
+    .map((handle, index) => ({
+      handle,
+      index,
+      t: closestTOnPolyline(restPath, handle.position),
+    }))
+    .sort((a, b) => a.t - b.t || a.index - b.index)
+    .map((item) => item.handle)
+
+  if (count <= 1) return [ordered[0] || null]
+  if (ordered.length >= 2) return [ordered[0], ordered[1]]
+  if (ordered.length === 1) {
+    const t = closestTOnPolyline(restPath, ordered[0].position)
+    const defaults = defaultHandleTs(2)
+    const useFirstSlot = Math.abs(t - defaults[0]) <= Math.abs(t - defaults[1])
+    return useFirstSlot ? [ordered[0], null] : [null, ordered[0]]
+  }
+  return [null, null]
+}
+
+export function handlesBendPath(handles = []) {
+  return (handles || []).some((handle) => handle?.style === 'linear' || handle?.style === 'curve')
+}
+
+/** Reinsert up to two styled controls between surviving acupoint pairs. */
 export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
   if (!nextAcupointNodes.length) return []
   if (!previousNodes?.length) return [...nextAcupointNodes]
@@ -79,8 +169,7 @@ export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
     for (let cursor = fromIndex + 1; cursor < toIndex; cursor += 1) {
       if (previousNodes[cursor].type === 'control') controls.push(previousNodes[cursor])
     }
-    // Old multi-handle paths are discarded; keep a single new-style handle only.
-    if (controls.length === 1) result.push(controls[0])
+    result.push(...keepPairHandles(controls))
   }
   return result
 }
