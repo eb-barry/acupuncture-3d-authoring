@@ -34,6 +34,7 @@ import {
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
   buildRouteNodesFromPlaced,
+  circularArcPoints,
   clampHandleT,
   clampPairedHandleT,
   closestTOnPolyline,
@@ -46,9 +47,11 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  primaryBendStyle,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
+  straightLinePoints,
   visibleHandleCount,
 } from './workflow.js'
 
@@ -83,6 +86,8 @@ $('#app').innerHTML = `
       <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定旋轉：可上下左右平移，視角朝向不變，仍可編輯">🔒 <span>鎖定旋轉</span></button>
+      <button id="meridian-arc" class="tool" type="button" aria-pressed="false" title="弧線經脈：拖曳一顆黑點，線段以圓弧貼皮">⌒ <span>弧線經脈</span></button>
+      <button id="meridian-linear" class="tool" type="button" aria-pressed="false" title="直線經脈：拖曳一顆黑點，線段以直線貼皮">／ <span>直線經脈</span></button>
       <button id="undo-step" class="tool" type="button" title="回復上一步（Ctrl／⌘+Z）">↩ <span>回復上一步</span></button>
       <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
     </nav>
@@ -101,7 +106,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現一或兩顆黑點（長段兩顆）：拖曳沿線滑動，Shift 直線拉伸，Ctrl／⌘ 貼皮弧線（穴→點一→點二→穴）。拉錯可按「回復上一步」。</p>
+      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現一或兩顆黑點（長段兩顆）。開啟上方「弧線經脈」或「直線經脈」後，一次只拖一顆黑點來改線段；未開啟時黑點沿預設路徑滑動。拉錯可按「回復上一步」。</p>
     </div>
   </aside>
   <section class="stage">
@@ -293,6 +298,8 @@ let dragBaseline = null
 let orbitLocked = false
 /** User pinned lock via the toolbar button; survives curve-handle release. */
 let orbitLockSticky = false
+/** @type {null | 'curve' | 'linear'} */
+let meridianDragStyle = null
 const lockedViewOffset = new THREE.Vector3()
 const lockedViewUp = new THREE.Vector3(0, 1, 0)
 let hasLockedView = false
@@ -360,6 +367,34 @@ function syncControlsEnabled() {
   controls.touches = orbitLocked
     ? { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }
     : { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }
+}
+
+function syncMeridianDragButtons() {
+  const arcBtn = $('#meridian-arc')
+  const linearBtn = $('#meridian-linear')
+  const disabled = appMode !== 'edit'
+  if (arcBtn) {
+    arcBtn.disabled = disabled
+    arcBtn.classList.toggle('active', meridianDragStyle === 'curve')
+    arcBtn.setAttribute('aria-pressed', meridianDragStyle === 'curve' ? 'true' : 'false')
+  }
+  if (linearBtn) {
+    linearBtn.disabled = disabled
+    linearBtn.classList.toggle('active', meridianDragStyle === 'linear')
+    linearBtn.setAttribute('aria-pressed', meridianDragStyle === 'linear' ? 'true' : 'false')
+  }
+}
+
+function setMeridianDragStyle(style) {
+  if (appMode !== 'edit') return toast('檢視模式為唯讀，請切換編輯後再調整經脈', 'warn')
+  meridianDragStyle = meridianDragStyle === style ? null : style
+  syncMeridianDragButtons()
+  syncAppModeUI()
+  setStatus(meridianDragStyle === 'curve'
+    ? '弧線經脈已開啟：拖一顆黑點，線段以圓弧變化'
+    : meridianDragStyle === 'linear'
+      ? '直線經脈已開啟：拖一顆黑點，線段以直線變化'
+      : '已關閉弧線／直線：拖黑點改為沿預設路徑滑動')
 }
 
 function syncOrbitLockButton() {
@@ -1076,6 +1111,114 @@ function joinOnSkin(anchors) {
   return points.length >= 2 ? points : null
 }
 
+const SKIN_SAMPLE_MAX_JUMP = 0.036
+
+function projectSamplesOnSkin(samples, startNode, endNode) {
+  if (!samples?.length) return null
+  const start = resolvedNode(startNode)
+  const end = resolvedNode(endNode)
+  const points = []
+  const previousRef = { current: null }
+  const span = Math.max(samples.length - 1, 1)
+  for (let index = 0; index < samples.length; index += 1) {
+    const t = index / span
+    const guide = slerpUnitVectors(start.normal, end.normal, t)
+    const projected = projectNearSurface(samples[index], guide)
+    if (!projected) {
+      if (index === 0 || index === samples.length - 1) return null
+      continue
+    }
+    const lifted = offsetPosition(projected, SKIN_LIFT)
+    if (previousRef.current && lifted.distanceTo(previousRef.current) > SKIN_SAMPLE_MAX_JUMP) {
+      return null
+    }
+    appendSkinPoint(points, lifted, previousRef)
+  }
+  return points.length >= 2 ? points : null
+}
+
+function closestSampleIndex(points, node) {
+  const target = offsetPosition(resolvedNode(node), SKIN_LIFT)
+  let best = 0
+  let bestDist = Infinity
+  points.forEach((point, index) => {
+    const distance = point.distanceToSquared(target)
+    if (distance < bestDist) {
+      bestDist = distance
+      best = index
+    }
+  })
+  return best
+}
+
+function concatSkinPieces(pieces) {
+  const points = []
+  const previousRef = { current: null }
+  for (const piece of pieces) {
+    if (!piece || piece.length < 2) return null
+    const start = points.length === 0 ? 0 : 1
+    for (let index = start; index < piece.length; index += 1) {
+      appendSkinPoint(points, piece[index], previousRef)
+    }
+  }
+  return points.length >= 2 ? points : null
+}
+
+/** Straight chords 穴→點一→點二→穴, projected onto skin. */
+function skinStraightSegments(anchors) {
+  const nodes = anchors.map((node) => resolvedNode(node))
+  if (nodes.length < 2) return joinOnSkin(anchors)
+  const pieces = []
+  for (let index = 0; index < nodes.length - 1; index += 1) {
+    const samples = straightLinePoints(nodes[index].position, nodes[index + 1].position, 16)
+    const piece = projectSamplesOnSkin(samples, nodes[index], nodes[index + 1])
+      || skinSegmentPoints(nodes[index], nodes[index + 1])
+    if (!piece || piece.length < 2) return joinOnSkin(anchors)
+    pieces.push(piece)
+  }
+  return concatSkinPieces(pieces) || joinOnSkin(anchors)
+}
+
+/** Circular arcs through consecutive triples, projected onto skin. */
+function skinCircularArcs(anchors) {
+  const nodes = anchors.map((node) => resolvedNode(node))
+  if (nodes.length < 3) return joinOnSkin(anchors)
+  if (nodes.length === 3) {
+    const samples = circularArcPoints(nodes[0].position, nodes[1].position, nodes[2].position, 24)
+    return projectSamplesOnSkin(samples, nodes[0], nodes[2]) || joinOnSkin(anchors)
+  }
+  const pieces = []
+  for (let index = 0; index <= nodes.length - 3; index += 1) {
+    const a = nodes[index]
+    const mid = nodes[index + 1]
+    const b = nodes[index + 2]
+    const samples = circularArcPoints(a.position, mid.position, b.position, 24)
+    const projected = projectSamplesOnSkin(samples, a, b)
+    if (!projected) return joinOnSkin(anchors)
+    const isLast = index === nodes.length - 3
+    if (!isLast) {
+      const until = closestSampleIndex(projected, b)
+      pieces.push(projected.slice(0, until + 1))
+    } else if (pieces.length) {
+      const from = closestSampleIndex(projected, mid)
+      pieces.push(projected.slice(from))
+    } else {
+      pieces.push(projected)
+    }
+  }
+  return concatSkinPieces(pieces) || joinOnSkin(anchors)
+}
+
+function bentSegmentPoints(anchors, handles) {
+  const style = primaryBendStyle(handles)
+  const bent = style === 'curve'
+    ? skinCircularArcs(anchors)
+    : style === 'linear'
+      ? skinStraightSegments(anchors)
+      : null
+  return (bent && bent.length >= 2) ? bent : joinOnSkin(anchors)
+}
+
 /** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
 function skinCurvePoints(route) {
   const nodes = route.nodes
@@ -1100,7 +1243,7 @@ function skinCurvePoints(route) {
     const rest = restPathArrays(fromNode, toNode)
     const count = visibleHandleCount(polylineArcLength(rest), referenceArc, handles.length)
     const waypoints = pairWaypoints(fromNode, toNode, handles, count, rest)
-    const bent = handlesBendPath(handles) ? joinOnSkin([a, ...waypoints, b]) : null
+    const bent = handlesBendPath(handles) ? bentSegmentPoints([a, ...waypoints, b], handles) : null
     const segment = bent && bent.length >= 2 ? bent : skinSegmentPoints(a, b)
     const start = points.length === 0 ? 0 : 1
     for (let i = start; i < segment.length; i += 1) {
@@ -1658,6 +1801,7 @@ function syncAppModeUI() {
   }
   document.body.classList.toggle('app-view-mode', appMode === 'view')
   document.body.classList.toggle('app-edit-mode', appMode === 'edit')
+  syncMeridianDragButtons()
   viewport.className = appMode === 'edit' && selectedCatalog ? 'placing' : ''
   const midlineId = selectedCatalog && !meridianById(selectedCatalog.meridianId)?.bilateral
     ? selectedCatalog.meridianId
@@ -1679,9 +1823,14 @@ function syncAppModeUI() {
       : '編輯曲度中 · 旋轉已暫時鎖定 · 放開編輯點後恢復'
     return
   }
+  const dragHint = meridianDragStyle === 'curve'
+    ? '弧線經脈已開 · 一次只拖一顆黑點 · 線段以圓弧變化'
+    : meridianDragStyle === 'linear'
+      ? '直線經脈已開 · 一次只拖一顆黑點 · 線段以直線變化'
+      : '可沿線拖黑點 · 或開啟「弧線經脈／直線經脈」後拖一顆黑點改線段'
   $('#stage-help').textContent = selectedCatalog
-    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · 點兩穴之間的線出現黑點 · 拖曳沿線滑 · Shift 直線拉伸 · Ctrl／⌘ 貼皮弧線${midlineHint}`
-    : '編輯 · 點兩穴之間的經脈出現一或兩顆黑點 · 拖曳沿線滑動 · Shift 直線拉伸 · Ctrl／⌘ 貼皮弧線 · 拉錯按「回復上一步」'
+    ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · ${dragHint}${midlineHint}`
+    : `編輯 · 點兩穴之間的經脈出現黑點 · ${dragHint} · 拉錯按「回復上一步」`
 }
 
 function setAppMode(mode) {
@@ -2618,7 +2767,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   const handleHit = annotationHit(event, ['route-handle'])
   if (handleHit) {
     const data = handleHit.object.userData
-    const stretchStyle = event.shiftKey ? 'linear' : (event.ctrlKey || event.metaKey ? 'curve' : null)
+    const stretchStyle = meridianDragStyle
     dragging = {
       type: 'route-handle',
       id: null,
@@ -2700,9 +2849,9 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     updateUI()
     if (moved) {
       const handleMessage = stretchStyle === 'curve'
-        ? '已貼皮弧線拉伸（可按「回復上一步」還原）'
+        ? '已以圓弧調整經脈（可按「回復上一步」還原）'
         : stretchStyle === 'linear'
-          ? '已直線拉伸（可按「回復上一步」還原）'
+          ? '已以直線調整經脈（可按「回復上一步」還原）'
           : '已沿經脈調整黑點位置'
       setStatus(wasHandle
         ? handleMessage
@@ -2717,6 +2866,8 @@ $('#lock-orbit').addEventListener('click', () => {
   setOrbitLocked(!orbitLocked, { sticky: true })
   syncAppModeUI()
 })
+$('#meridian-arc').addEventListener('click', () => setMeridianDragStyle('curve'))
+$('#meridian-linear').addEventListener('click', () => setMeridianDragStyle('linear'))
 
 function undoLastStep() {
   applyHistory(history.undo(), '已回復上一步')

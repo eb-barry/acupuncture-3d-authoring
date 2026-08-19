@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildRouteNodesFromPlaced,
+  circularArcPoints,
   clampHandleT,
   clampPairedHandleT,
   closestTOnPolyline,
@@ -14,11 +15,13 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  primaryBendStyle,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
   segmentHandleCount,
+  straightLinePoints,
   stripControlNodes,
   visibleHandleCount,
 } from './workflow.js'
@@ -188,5 +191,28 @@ describe('meridian authoring workflow', () => {
     expect(clampPairedHandleT(0.5, 0, 0.67, 2)).toBeCloseTo(0.5)
     expect(clampPairedHandleT(0.8, 0, 0.67, 2)).toBeCloseTo(0.55)
     expect(clampPairedHandleT(0.1, 1, 0.33, 2)).toBeCloseTo(0.45)
+  })
+
+  it('samples a circular arc through three points and a straight chord', () => {
+    const arc = circularArcPoints([1, 0, 0], [0, 1, 0], [-1, 0, 0], 16)
+    expect(arc[0][0]).toBeCloseTo(1)
+    expect(arc[0][1]).toBeCloseTo(0)
+    expect(arc[arc.length - 1][0]).toBeCloseTo(-1)
+    expect(arc[arc.length - 1][1]).toBeCloseTo(0)
+    const crest = arc[Math.floor(arc.length / 2)]
+    expect(crest[1]).toBeCloseTo(1, 1)
+    arc.forEach((point) => {
+      expect(Math.hypot(point[0], point[1], point[2])).toBeCloseTo(1, 5)
+    })
+    const line = straightLinePoints([0, 0, 0], [2, 0, 0], 4)
+    expect(line[0]).toEqual([0, 0, 0])
+    expect(line[line.length - 1]).toEqual([2, 0, 0])
+    expect(line[2]).toEqual([1, 0, 0])
+    const collinear = circularArcPoints([0, 0, 0], [1, 0, 0], [2, 0, 0], 8)
+    expect(collinear[0]).toEqual([0, 0, 0])
+    expect(collinear[collinear.length - 1]).toEqual([2, 0, 0])
+    expect(primaryBendStyle([{ style: 'linear' }, { style: 'curve' }])).toBe('curve')
+    expect(primaryBendStyle([{ style: 'linear' }])).toBe('linear')
+    expect(primaryBendStyle([{ style: 'along' }])).toBeNull()
   })
 })
