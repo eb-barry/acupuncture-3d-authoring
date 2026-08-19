@@ -230,6 +230,7 @@ body.app-view-mode .catalog-panel {
   align-items: center;
   gap: 3px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   padding: 3px;
   border: 1px solid #34453f;
   background: #0e1513;
