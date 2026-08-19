@@ -152,6 +152,13 @@ export function handlesBendPath(handles = []) {
   return (handles || []).some((handle) => handle?.style === 'linear' || handle?.style === 'curve')
 }
 
+/** Curve wins if mixed; otherwise linear. */
+export function primaryBendStyle(handles = []) {
+  if ((handles || []).some((handle) => handle?.style === 'curve')) return 'curve'
+  if ((handles || []).some((handle) => handle?.style === 'linear')) return 'linear'
+  return null
+}
+
 /** Reinsert up to two styled controls between surviving acupoint pairs. */
 export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
   if (!nextAcupointNodes.length) return []
@@ -275,4 +282,117 @@ export function isOcclusionHitBlocking(hitDistance, targetDistance, hitToProbeDi
   if (!(hitDistance >= 0) || !(targetDistance > 0)) return false
   if (hitToProbeDistance <= sameSurfaceRadius) return false
   return hitDistance < targetDistance - depthSlack
+}
+
+function vecAdd(a, b) {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+function vecSub(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+function vecScale(a, s) {
+  return [a[0] * s, a[1] * s, a[2] * s]
+}
+
+function vecDot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+function vecCross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ]
+}
+
+function vecNorm(a) {
+  const length = Math.hypot(a[0], a[1], a[2]) || 1
+  return vecScale(a, 1 / length)
+}
+
+function lerp3(a, b, t) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ]
+}
+
+function unwrapDelta(from, to) {
+  let delta = to - from
+  while (delta <= -Math.PI) delta += Math.PI * 2
+  while (delta > Math.PI) delta -= Math.PI * 2
+  return delta
+}
+
+/** Straight samples from A to B, inclusive. */
+export function straightLinePoints(start, end, steps = 16) {
+  const count = Math.max(2, Math.floor(steps) + 1)
+  const samples = []
+  for (let index = 0; index < count; index += 1) {
+    samples.push(lerp3(start, end, index / (count - 1)))
+  }
+  return samples
+}
+
+/**
+ * Circular-arc samples from start through mid to end.
+ * Collinear points fall back to a two-span polyline.
+ */
+export function circularArcPoints(start, mid, end, steps = 24) {
+  const count = Math.max(4, Math.floor(steps))
+  const am = vecSub(mid, start)
+  const ab = vecSub(end, start)
+  const normal = vecCross(am, ab)
+  if (Math.hypot(...normal) < 1e-8) {
+    const half = Math.max(1, Math.floor(count / 2))
+    const samples = []
+    for (let index = 0; index <= half; index += 1) {
+      samples.push(lerp3(start, mid, index / half))
+    }
+    for (let index = 1; index <= count - half; index += 1) {
+      samples.push(lerp3(mid, end, index / (count - half)))
+    }
+    return samples
+  }
+  const n2 = vecDot(normal, normal)
+  const offset = vecCross(
+    vecSub(vecScale(ab, vecDot(am, am)), vecScale(am, vecDot(ab, ab))),
+    normal,
+  )
+  const center = vecAdd(start, vecScale(offset, 1 / (2 * n2)))
+  const radius = dist3(start, center)
+  const axis = vecNorm(normal)
+  const xAxis = vecNorm(vecSub(start, center))
+  const yAxis = vecNorm(vecCross(axis, xAxis))
+  const angleOf = (point) => {
+    const vector = vecSub(point, center)
+    return Math.atan2(vecDot(vector, yAxis), vecDot(vector, xAxis))
+  }
+  const midAngle = angleOf(mid)
+  const endAngle = angleOf(end)
+  const toMid = unwrapDelta(0, midAngle)
+  const direction = Math.sign(toMid) || 1
+  let toEnd = unwrapDelta(0, endAngle)
+  if (Math.sign(toEnd) !== direction && Math.abs(toEnd) > 1e-6) {
+    toEnd += direction * Math.PI * 2
+  }
+  if (Math.abs(toEnd) < Math.abs(toMid) - 1e-6) {
+    toEnd += direction * Math.PI * 2
+  }
+  const samples = []
+  for (let index = 0; index <= count; index += 1) {
+    const angle = toEnd * (index / count)
+    samples.push(vecAdd(
+      center,
+      vecAdd(
+        vecScale(xAxis, Math.cos(angle) * radius),
+        vecScale(yAxis, Math.sin(angle) * radius),
+      ),
+    ))
+  }
+  return samples
 }
