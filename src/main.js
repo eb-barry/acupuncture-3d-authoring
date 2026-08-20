@@ -55,7 +55,9 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  polylineTangent,
   primaryBendStyle,
+  splitAlongAndSide,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
@@ -958,37 +960,107 @@ function cameraPlanePoint(event, anchor) {
   return raycaster.ray.intersectPlane(plane, target) ? target : null
 }
 
+function worldToScreen(position) {
+  const ndc = new THREE.Vector3(...position).project(camera)
+  const rect = renderer.domElement.getBoundingClientRect()
+  return {
+    x: rect.left + (ndc.x + 1) * 0.5 * rect.width,
+    y: rect.top + (-ndc.y + 1) * 0.5 * rect.height,
+  }
+}
+
+function screenTangentFromWorld(origin, tangent3) {
+  const start = worldToScreen(origin)
+  const end = worldToScreen([
+    origin[0] + tangent3[0] * 0.03,
+    origin[1] + tangent3[1] * 0.03,
+    origin[2] + tangent3[2] * 0.03,
+  ])
+  const x = end.x - start.x
+  const y = end.y - start.y
+  const length = Math.hypot(x, y) || 1
+  return { x: x / length, y: y / length }
+}
+
+function stretchSkinHit(event, drag) {
+  const rest = drag.rest
+  const anchor = drag.anchor
+  if (!rest?.length || !anchor || !pointerDown) return null
+  const split = splitAlongAndSide(
+    { x: event.clientX - pointerDown.x, y: event.clientY - pointerDown.y },
+    drag.tangentScreen || { x: 0, y: 1 },
+  )
+  const restLength = polylineArcLength(rest) || 1
+  const worldPerPixel = pixelSizeToWorld(1, camera.position.distanceTo(new THREE.Vector3(...anchor.position)))
+  const t = clampHandleT((drag.anchorT ?? 0.5) + (split.along * worldPerPixel) / restLength, 0.1)
+  const onPath = pointAtPolylineT(rest, t)
+  const onPathV = new THREE.Vector3(...onPath)
+  const tangent3 = new THREE.Vector3(...(drag.tangent3 || polylineTangent(rest, t)))
+  if (tangent3.lengthSq() < 1e-8) tangent3.set(0, 1, 0)
+  tangent3.normalize()
+  const towardCamera = camera.position.clone().sub(onPathV)
+  if (towardCamera.lengthSq() < 1e-10) return { position: [...onPath], normal: [...anchor.normal] }
+  towardCamera.normalize()
+  const side3 = new THREE.Vector3().crossVectors(towardCamera, tangent3)
+  if (side3.lengthSq() < 1e-10) side3.crossVectors(new THREE.Vector3(1, 0, 0), tangent3)
+  side3.normalize()
+  const probe = onPathV.clone().addScaledVector(side3, 0.03)
+  const probeScreen = worldToScreen(toArray(probe))
+  const originScreen = worldToScreen(onPath)
+  const screenSide = {
+    x: probeScreen.x - originScreen.x,
+    y: probeScreen.y - originScreen.y,
+  }
+  const wanted = { x: -(drag.tangentScreen?.y || 0), y: drag.tangentScreen?.x || 1 }
+  if (screenSide.x * wanted.x + screenSide.y * wanted.y < 0) side3.negate()
+
+  const offset = split.side * worldPerPixel
+  const planePoint = onPathV.clone().addScaledVector(side3, offset)
+  const towardLimb = onPathV.clone().sub(planePoint)
+  let hit = null
+  if (Math.abs(offset) > 0.004 && towardLimb.lengthSq() > 1e-8) {
+    hit = projectNearSurface(toArray(planePoint), toArray(towardLimb.normalize()), 0.5)
+  }
+  if (!hit) {
+    hit = projectNearSurface(onPath, anchor.normal, HANDLE_STRETCH_PROJECT_RADIUS)
+      || { position: [...onPath], normal: [...anchor.normal] }
+  }
+  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)) {
+    return { position: [...onPath], normal: [...anchor.normal] }
+  }
+  return hit
+}
+
 function projectHandleOnSkin(planePoint, guideNormal, radius) {
   return projectNearSurface(toArray(planePoint), guideNormal, radius)
     || projectNearSurface(toArray(planePoint), guideNormal, radius * 1.6)
 }
 
-/** Drag sideways on a camera plane, snap to the same limb, never the opposite leg. */
+/** Along-slide stays on the rest path; stretch pulls the segment off to either side. */
 function handleDragHit(event, drag) {
   const rest = drag.rest
   const anchor = drag.anchor
   if (!rest?.length || !anchor) return null
-  const stretch = Boolean(drag.stretchStyle)
-  const maxOffPath = stretch ? HANDLE_STRETCH_MAX_OFF_PATH : HANDLE_SLIDE_MAX_OFF_PATH
-  const projectRadius = stretch ? HANDLE_STRETCH_PROJECT_RADIUS : HANDLE_SLIDE_PROJECT_RADIUS
+  if (drag.stretchStyle) return stretchSkinHit(event, drag)
+
+  const maxOffPath = HANDLE_SLIDE_MAX_OFF_PATH
+  const projectRadius = HANDLE_SLIDE_PROJECT_RADIUS
   const anchorPos = new THREE.Vector3(...anchor.position)
   const planePoint = cameraPlanePoint(event, anchorPos)
   const accept = (hit) => hit && isProbeOnSameLimbSegment(rest, hit.position, maxOffPath)
-
   if (planePoint) {
     const projected = projectHandleOnSkin(planePoint, anchor.normal, projectRadius)
     if (accept(projected)) return projected
   }
-
   screenPointer(event)
   const hits = raycaster.intersectObjects(modelMeshes, false)
   const target = planePoint || anchorPos
   let best = null
   let bestScore = Infinity
-  hits.forEach((hit) => {
-    const skin = meshHitToSkin(hit)
+  hits.forEach((item) => {
+    const skin = meshHitToSkin(item)
     if (!accept(skin)) return
-    const score = hit.point.distanceTo(target)
+    const score = item.point.distanceTo(target)
     if (score < bestScore) {
       bestScore = score
       best = skin
@@ -1012,12 +1084,17 @@ function handleDragAnchor(data) {
   const waypoints = pairWaypoints(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const placed = waypoints[data.handleIndex ?? 0]
   if (!placed) return null
+  const anchorT = closestTOnPolyline(rest, placed.position)
+  const tangent3 = polylineTangent(rest, anchorT)
   return {
     rest,
     anchor: {
       position: [...placed.position],
       normal: [...placed.normal],
     },
+    anchorT,
+    tangent3,
+    tangentScreen: screenTangentFromWorld(placed.position, tangent3),
   }
 }
 
@@ -2909,6 +2986,9 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       stretchStyle,
       rest: start?.rest || null,
       anchor: start?.anchor || null,
+      anchorT: start?.anchorT ?? 0.5,
+      tangent3: start?.tangent3 || [0, 1, 0],
+      tangentScreen: start?.tangentScreen || { x: 0, y: 1 },
     }
     selected = {
       type: 'meridian',
