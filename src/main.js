@@ -33,17 +33,15 @@ import {
 } from './skinPath.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
-  HANDLE_SLIDE_MAX_OFF_PATH,
-  HANDLE_SLIDE_PROJECT_RADIUS,
   HANDLE_STRETCH_MAX_OFF_PATH,
   HANDLE_STRETCH_PROJECT_RADIUS,
   HANDLE_PICK_RADIUS_PX,
   buildRouteNodesFromPlaced,
-  circularArcPoints,
   clampHandleT,
   closestTOnPolyline,
   defaultHandleTs,
   exceedsDragThreshold,
+  isDisorderedPolyline,
   isOcclusionHitBlocking,
   isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
@@ -53,14 +51,11 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
-  polylineTangent,
-  primaryBendStyle,
+  distanceToPolyline,
+  polylineSlice,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
-  slideHandleOnPolyline,
-  splitAlongAndSide,
-  straightLinePoints,
   visibleHandleCount,
 } from './workflow.js'
 
@@ -95,9 +90,7 @@ $('#app').innerHTML = `
       <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定旋轉：可上下左右平移，視角朝向不變，仍可編輯">🔒 <span>鎖定旋轉</span></button>
-      <button id="handle-slide" class="tool" type="button" aria-pressed="false" title="移動定位點：沿目前畫面上的經脈拖一顆黑點，不改變左右偏移">↔ <span>移動定位點</span></button>
-      <button id="meridian-arc" class="tool" type="button" aria-pressed="false" title="弧線經脈：左右拉一顆黑點，只改與兩側鄰點之間的圓弧">⌒ <span>弧線經脈</span></button>
-      <button id="meridian-linear" class="tool" type="button" aria-pressed="false" title="直線經脈：左右拉一顆黑點，只改與兩側鄰點之間的直線">／ <span>直線經脈</span></button>
+      <button id="redraw-segment" class="tool finish" type="button" disabled title="依目前黑點，沿皮膚重繪這兩個穴位之間的經脈">⟳ <span>重繪經脈</span></button>
       <button id="undo-step" class="tool" type="button" title="回復上一步（Ctrl／⌘+Z）">↩ <span>回復上一步</span></button>
       <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
     </nav>
@@ -116,7 +109,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現一或兩顆黑點（長段兩顆）。先選「移動定位點」可沿目前線段滑動一顆黑點（拉伸後仍沿新線，不回到預設路徑）；選「弧線經脈」或「直線經脈」則左右拉該點，只改與兩側鄰點之間的線，另一顆黑點與穴位不動。未選工具時黑點不可拖。拉錯可按「回復上一步」。</p>
+      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現黑點（短段一顆，長段三顆）。黑點可像穴位一樣在皮膚上拖；放開或按「重繪經脈」後，這一段會依穴1→點→穴2 沿皮膚重畫。任督二脈沒有黑點。拉錯可按「回復上一步」。</p>
     </div>
   </aside>
   <section class="stage">
@@ -308,8 +301,6 @@ let dragBaseline = null
 let orbitLocked = false
 /** User pinned lock via the toolbar button; survives curve-handle release. */
 let orbitLockSticky = false
-/** @type {null | 'slide' | 'curve' | 'linear'} */
-let handleTool = null
 const lockedViewOffset = new THREE.Vector3()
 const lockedViewUp = new THREE.Vector3(0, 1, 0)
 let hasLockedView = false
@@ -379,40 +370,23 @@ function syncControlsEnabled() {
     : { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }
 }
 
-function syncMeridianDragButtons() {
-  const slideBtn = $('#handle-slide')
-  const arcBtn = $('#meridian-arc')
-  const linearBtn = $('#meridian-linear')
-  const disabled = appMode !== 'edit'
-  if (slideBtn) {
-    slideBtn.disabled = disabled
-    slideBtn.classList.toggle('active', handleTool === 'slide')
-    slideBtn.setAttribute('aria-pressed', handleTool === 'slide' ? 'true' : 'false')
-  }
-  if (arcBtn) {
-    arcBtn.disabled = disabled
-    arcBtn.classList.toggle('active', handleTool === 'curve')
-    arcBtn.setAttribute('aria-pressed', handleTool === 'curve' ? 'true' : 'false')
-  }
-  if (linearBtn) {
-    linearBtn.disabled = disabled
-    linearBtn.classList.toggle('active', handleTool === 'linear')
-    linearBtn.setAttribute('aria-pressed', handleTool === 'linear' ? 'true' : 'false')
-  }
+function selectedSegmentReady() {
+  return appMode === 'edit'
+    && selected?.type === 'meridian'
+    && Boolean(selected.fromPointId)
+    && Boolean(selected.toPointId)
 }
 
-function setHandleTool(tool) {
-  if (appMode !== 'edit') return toast('檢視模式為唯讀，請切換編輯後再調整經脈', 'warn')
-  handleTool = handleTool === tool ? null : tool
-  syncMeridianDragButtons()
-  syncAppModeUI()
-  setStatus(handleTool === 'slide'
-    ? '移動定位點已開啟：沿目前經脈拖一顆黑點'
-    : handleTool === 'curve'
-      ? '弧線經脈已開啟：左右拉一顆黑點，只改與兩側鄰點之間的圓弧'
-      : handleTool === 'linear'
-        ? '直線經脈已開啟：左右拉一顆黑點，只改與兩側鄰點之間的直線'
-        : '已關閉工具：點經脈可看黑點，請再選移動定位點／弧線／直線後拖曳')
+function syncRedrawButton() {
+  const button = $('#redraw-segment')
+  if (!button) return
+  const enabled = selectedSegmentReady()
+    && !isRenDuMeridian(state.meridians.find((item) => item.id === selected.id)?.meridianId)
+  button.disabled = !enabled
+}
+
+function syncMeridianDragButtons() {
+  syncRedrawButton()
 }
 
 function syncOrbitLockButton() {
@@ -949,16 +923,6 @@ function nearestHandleHit(event) {
   return { object: meshes[index], point: meshes[index].position.clone() }
 }
 
-function meshHitToSkin(hit) {
-  if (!hit?.face) return null
-  const normal = hit.face.normal.clone()
-    .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
-    .normalize()
-  const toCamera = camera.position.clone().sub(hit.point)
-  if (toCamera.lengthSq() > 1e-10 && normal.dot(toCamera) < 0) normal.negate()
-  return { position: toArray(hit.point), normal: toArray(normal) }
-}
-
 function cameraPlanePoint(event, anchor) {
   screenPointer(event)
   const towardCamera = camera.position.clone().sub(anchor)
@@ -968,112 +932,29 @@ function cameraPlanePoint(event, anchor) {
   return raycaster.ray.intersectPlane(plane, target) ? target : null
 }
 
-function worldToScreen(position) {
-  const ndc = new THREE.Vector3(...position).project(camera)
-  const rect = renderer.domElement.getBoundingClientRect()
-  return {
-    x: rect.left + (ndc.x + 1) * 0.5 * rect.width,
-    y: rect.top + (-ndc.y + 1) * 0.5 * rect.height,
-  }
-}
-
-function screenTangentFromWorld(origin, tangent3) {
-  const start = worldToScreen(origin)
-  const end = worldToScreen([
-    origin[0] + tangent3[0] * 0.03,
-    origin[1] + tangent3[1] * 0.03,
-    origin[2] + tangent3[2] * 0.03,
-  ])
-  const x = end.x - start.x
-  const y = end.y - start.y
-  const length = Math.hypot(x, y) || 1
-  return { x: x / length, y: y / length }
-}
-
 function projectHandleOnSkin(planePoint, guideNormal, radius) {
   return projectNearSurface(toArray(planePoint), guideNormal, radius)
     || projectNearSurface(toArray(planePoint), guideNormal, radius * 1.6)
 }
 
-function stretchSkinHit(event, drag) {
+/** Move a locator on skin like an acupoint; stay on this limb. */
+function handleSkinHit(event, drag) {
   const rest = drag.rest
   const anchor = drag.anchor
-  if (!rest?.length || !anchor || !pointerDown) return null
-  const split = splitAlongAndSide(
-    { x: event.clientX - pointerDown.x, y: event.clientY - pointerDown.y },
-    drag.tangentScreen || { x: 0, y: 1 },
-  )
-  const worldPerPixel = pixelSizeToWorld(1, camera.position.distanceTo(new THREE.Vector3(...anchor.position)))
-  const onPathV = new THREE.Vector3(...anchor.position)
-  const tangent3 = new THREE.Vector3(...(drag.tangent3 || [0, 1, 0]))
-  if (tangent3.lengthSq() < 1e-8) tangent3.set(0, 1, 0)
-  tangent3.normalize()
-  const towardCamera = camera.position.clone().sub(onPathV)
-  if (towardCamera.lengthSq() < 1e-10) return { position: [...anchor.position], normal: [...anchor.normal] }
-  towardCamera.normalize()
-  const side3 = new THREE.Vector3().crossVectors(towardCamera, tangent3)
-  if (side3.lengthSq() < 1e-10) side3.crossVectors(new THREE.Vector3(1, 0, 0), tangent3)
-  side3.normalize()
-  const probe = onPathV.clone().addScaledVector(side3, 0.03)
-  const probeScreen = worldToScreen(toArray(probe))
-  const originScreen = worldToScreen(anchor.position)
-  const screenSide = {
-    x: probeScreen.x - originScreen.x,
-    y: probeScreen.y - originScreen.y,
-  }
-  const wanted = { x: -(drag.tangentScreen?.y || 0), y: drag.tangentScreen?.x || 1 }
-  if (screenSide.x * wanted.x + screenSide.y * wanted.y < 0) side3.negate()
-
-  const offset = split.side * worldPerPixel
-  const planePoint = onPathV.clone().addScaledVector(side3, offset)
-  const towardLimb = onPathV.clone().sub(planePoint)
-  let hit = null
-  if (Math.abs(offset) > 0.004 && towardLimb.lengthSq() > 1e-8) {
-    hit = projectNearSurface(toArray(planePoint), toArray(towardLimb.normalize()), 0.5)
-  }
-  if (!hit) {
-    hit = projectHandleOnSkin(planePoint, anchor.normal, HANDLE_STRETCH_PROJECT_RADIUS)
-      || { position: [...anchor.position], normal: [...anchor.normal] }
-  }
-  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)) return null
-  return hit
-}
-
-function slideSkinHit(event, drag) {
-  const guide = drag.current?.length ? drag.current : drag.rest
-  const anchor = drag.anchor
-  if (!guide?.length || !anchor) return null
-  const projectRadius = HANDLE_SLIDE_PROJECT_RADIUS
-  const anchorPos = new THREE.Vector3(...anchor.position)
-  const planePoint = cameraPlanePoint(event, anchorPos)
-  const accept = (hit) => hit && isProbeOnSameLimbSegment(guide, hit.position, HANDLE_SLIDE_MAX_OFF_PATH)
-
+  if (!rest?.length || !anchor) return null
+  const accept = (hit) => hit && isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)
+  const direct = surfaceHit(event)
+  if (accept(direct)) return direct
+  const planePoint = cameraPlanePoint(event, new THREE.Vector3(...anchor.position))
   if (planePoint) {
-    const projected = projectHandleOnSkin(planePoint, anchor.normal, projectRadius)
+    const projected = projectHandleOnSkin(planePoint, anchor.normal, HANDLE_STRETCH_PROJECT_RADIUS)
     if (accept(projected)) return projected
   }
-
-  screenPointer(event)
-  const hits = raycaster.intersectObjects(modelMeshes, false)
-  const target = planePoint || anchorPos
-  let best = null
-  let bestScore = Infinity
-  hits.forEach((hit) => {
-    const skin = meshHitToSkin(hit)
-    if (!accept(skin)) return
-    const score = hit.point.distanceTo(target)
-    if (score < bestScore) {
-      bestScore = score
-      best = skin
-    }
-  })
-  return best
+  return null
 }
 
-/** Slide stays on the currently drawn path; stretch pulls only sideways. */
 function handleDragHit(event, drag) {
-  if (drag.stretchStyle) return stretchSkinHit(event, drag)
-  return slideSkinHit(event, drag)
+  return handleSkinHit(event, drag)
 }
 
 function handleDragAnchor(data) {
@@ -1088,23 +969,16 @@ function handleDragAnchor(data) {
     shortSegmentReferenceArc(route.side),
     pair.handles.length,
   )
-  const current = pairCurrentPolyline(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const placed = records[data.handleIndex ?? 0]
   if (!placed) return null
-  const anchorT = closestTOnPolyline(current, placed.position)
-  const tangent3 = polylineTangent(current, anchorT)
   return {
     rest,
-    current,
     records,
     anchor: {
       position: [...placed.position],
       normal: [...placed.normal],
     },
-    anchorT,
-    tangent3,
-    tangentScreen: screenTangentFromWorld(placed.position, tangent3),
   }
 }
 
@@ -1324,44 +1198,22 @@ function joinOnSkin(anchors) {
   return points.length >= 2 ? points : null
 }
 
-const SKIN_SAMPLE_MAX_JUMP = 0.036
-
-function projectSamplesOnSkin(samples, startNode, endNode) {
-  if (!samples?.length) return null
-  const start = resolvedNode(startNode)
-  const end = resolvedNode(endNode)
-  const points = []
-  const previousRef = { current: null }
-  const span = Math.max(samples.length - 1, 1)
-  for (let index = 0; index < samples.length; index += 1) {
-    const t = index / span
-    const guide = slerpUnitVectors(start.normal, end.normal, t)
-    const projected = projectNearSurface(samples[index], guide)
-    if (!projected) {
-      if (index === 0 || index === samples.length - 1) return null
-      continue
-    }
-    const lifted = offsetPosition(projected, SKIN_LIFT)
-    if (previousRef.current && lifted.distanceTo(previousRef.current) > SKIN_SAMPLE_MAX_JUMP) {
-      return null
-    }
-    appendSkinPoint(points, lifted, previousRef)
-  }
-  return points.length >= 2 ? points : null
+function arraysFromSkin(points = []) {
+  return points.map((point) => (point?.isVector3 ? toArray(point) : [...point]))
 }
 
-function closestSampleIndex(points, node) {
-  const target = offsetPosition(resolvedNode(node), SKIN_LIFT)
-  let best = 0
-  let bestDist = Infinity
-  points.forEach((point, index) => {
-    const distance = point.distanceToSquared(target)
-    if (distance < bestDist) {
-      bestDist = distance
-      best = index
-    }
-  })
-  return best
+function vectorsFromArrays(points = []) {
+  return points.map((point) => (point?.isVector3 ? point : new THREE.Vector3(...point)))
+}
+
+function preferCleanSkinPath(candidate, fallback, guide = [], maxLengthRatio = 1.85) {
+  if (!candidate || candidate.length < 2) return fallback
+  const arrays = arraysFromSkin(candidate)
+  const pruned = pruneBacktracking(arrays, arrays[arrays.length - 1])
+  if (isDisorderedPolyline(pruned, guide, { maxLengthRatio })) {
+    return fallback
+  }
+  return vectorsFromArrays(pruned)
 }
 
 function concatSkinPieces(pieces) {
@@ -1377,95 +1229,40 @@ function concatSkinPieces(pieces) {
   return points.length >= 2 ? points : null
 }
 
-/** Straight chords 穴→點一→點二→穴, projected onto skin. */
-function skinStraightSegments(anchors) {
-  const nodes = anchors.map((node) => resolvedNode(node))
-  if (nodes.length < 2) return joinOnSkin(anchors)
+function restSliceBetween(rest, fromPos, toPos) {
+  const t0 = closestTOnPolyline(rest, fromPos)
+  const t1 = closestTOnPolyline(rest, toPos)
+  return polylineSlice(rest, t0, t1, 20)
+}
+
+/** Localizers are extra on-skin points: 穴1 → 點… → 穴2, marched like acupoints. */
+function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
+  const original = rest?.length >= 2
+    ? vectorsFromArrays(rest)
+    : skinSegmentPoints(fromResolved, toResolved)
+  if (!records.length) return original
+  const guide = rest?.length >= 2 ? rest : arraysFromSkin(original)
+  const movedOffPath = records.some((record) => distanceToPolyline(guide, record.position) > 0.012)
+  if (!movedOffPath) return original
+  const anchors = [
+    fromResolved,
+    ...records.map((record) => ({
+      position: record.position,
+      normal: record.normal,
+    })),
+    toResolved,
+  ]
   const pieces = []
-  for (let index = 0; index < nodes.length - 1; index += 1) {
-    const samples = straightLinePoints(nodes[index].position, nodes[index + 1].position, 16)
-    const piece = projectSamplesOnSkin(samples, nodes[index], nodes[index + 1])
-      || skinSegmentPoints(nodes[index], nodes[index + 1])
-    if (!piece || piece.length < 2) return joinOnSkin(anchors)
-    pieces.push(piece)
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const a = resolvedNode(anchors[index])
+    const b = resolvedNode(anchors[index + 1])
+    const marched = skinSegmentPoints(a, b)
+    const slice = restSliceBetween(guide, a.position, b.position)
+    const clean = preferCleanSkinPath(marched, null, slice, 1.7)
+    if (!clean || clean.length < 2) return original
+    pieces.push(clean)
   }
-  return concatSkinPieces(pieces) || joinOnSkin(anchors)
-}
-
-/** Circular arcs through consecutive triples, projected onto skin. */
-function skinCircularArcs(anchors) {
-  const nodes = anchors.map((node) => resolvedNode(node))
-  if (nodes.length < 3) return joinOnSkin(anchors)
-  if (nodes.length === 3) {
-    const samples = circularArcPoints(nodes[0].position, nodes[1].position, nodes[2].position, 24)
-    return projectSamplesOnSkin(samples, nodes[0], nodes[2]) || joinOnSkin(anchors)
-  }
-  const pieces = []
-  for (let index = 0; index <= nodes.length - 3; index += 1) {
-    const a = nodes[index]
-    const mid = nodes[index + 1]
-    const b = nodes[index + 2]
-    const samples = circularArcPoints(a.position, mid.position, b.position, 24)
-    const projected = projectSamplesOnSkin(samples, a, b)
-    if (!projected) return joinOnSkin(anchors)
-    const isLast = index === nodes.length - 3
-    if (!isLast) {
-      const until = closestSampleIndex(projected, b)
-      pieces.push(projected.slice(0, until + 1))
-    } else if (pieces.length) {
-      const from = closestSampleIndex(projected, mid)
-      pieces.push(projected.slice(from))
-    } else {
-      pieces.push(projected)
-    }
-  }
-  return concatSkinPieces(pieces) || joinOnSkin(anchors)
-}
-
-function bentSegmentPoints(anchors, handles) {
-  const style = primaryBendStyle(handles)
-  const bent = style === 'curve'
-    ? skinCircularArcs(anchors)
-    : style === 'linear'
-      ? skinStraightSegments(anchors)
-      : null
-  return (bent && bent.length >= 2) ? bent : joinOnSkin(anchors)
-}
-
-function sliceSkinFromNode(points, node) {
-  if (!points?.length) return points
-  const index = closestSampleIndex(points, node)
-  const sliced = points.slice(index)
-  return sliced.length >= 2 ? sliced : points
-}
-
-/** Local 3-point stretch: only the dragged handle's two neighbors change. */
-function pairDrawnSkinPoints(fromResolved, toResolved, records) {
-  if (!records.length) return skinSegmentPoints(fromResolved, toResolved)
-  const waypoints = records.map((record) => ({
-    position: record.position,
-    normal: record.normal,
-  }))
-  if (records.length === 1) {
-    if (records[0].style === 'curve' || records[0].style === 'linear') {
-      return bentSegmentPoints([fromResolved, waypoints[0], toResolved], records)
-    }
-    return skinSegmentPoints(fromResolved, toResolved)
-  }
-  const [first, second] = records
-  const p0 = waypoints[0]
-  const p1 = waypoints[1]
-  const leftBent = first.style === 'curve' || first.style === 'linear'
-  const rightBent = second.style === 'curve' || second.style === 'linear'
-  if (!leftBent && !rightBent) return skinSegmentPoints(fromResolved, toResolved)
-  const left = leftBent
-    ? bentSegmentPoints([fromResolved, p0, p1], [first])
-    : skinSegmentPoints(fromResolved, p0)
-  const rightFull = rightBent
-    ? bentSegmentPoints([p0, p1, toResolved], [second])
-    : skinSegmentPoints(p1, toResolved)
-  const right = leftBent && rightBent ? sliceSkinFromNode(rightFull, p1) : rightFull
-  return concatSkinPieces([left, right]) || skinSegmentPoints(fromResolved, toResolved)
+  return concatSkinPieces(pieces) || original
 }
 
 /** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
@@ -1492,7 +1289,7 @@ function skinCurvePoints(route) {
     const rest = restPathArrays(fromNode, toNode)
     const count = visibleHandleCount(polylineArcLength(rest), referenceArc, handles.length)
     const records = pairHandleRecords(fromNode, toNode, handles, count, rest)
-    const segment = pairDrawnSkinPoints(a, b, records)
+    const segment = pairDrawnSkinPoints(a, b, records, rest)
     const start = points.length === 0 ? 0 : 1
     for (let i = start; i < segment.length; i += 1) {
       appendSkinPoint(points, segment[i], previousRef)
@@ -1546,10 +1343,10 @@ function restPathAnchor(fromNode, toNode, rest, t) {
 }
 
 function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(fromNode, toNode)) {
-  if (handle?.style === 'linear' || handle?.style === 'curve') {
+  if (handle?.position) {
     return { position: handle.position, normal: handle.normal }
   }
-  const t = handle ? closestTOnPolyline(rest, handle.position) : 0.5
+  const t = 0.5
   return restPathAnchor(fromNode, toNode, rest, t)
 }
 
@@ -1577,12 +1374,6 @@ function pairHandleRecords(fromNode, toNode, handles, count, rest) {
       style: handle?.style || 'along',
     }
   })
-}
-
-function pairCurrentPolyline(fromNode, toNode, handles, count, rest) {
-  const records = pairHandleRecords(fromNode, toNode, handles, count, rest)
-  const drawn = pairDrawnSkinPoints(resolvedNode(fromNode), resolvedNode(toNode), records)
-  return drawn?.length >= 2 ? drawn.map(toArray) : rest
 }
 
 /** Polyline curve that stays exactly on the sampled skin points (no shortcut chords). */
@@ -2078,13 +1869,9 @@ function syncAppModeUI() {
       : '編輯曲度中 · 旋轉已暫時鎖定 · 放開編輯點後恢復'
     return
   }
-  const dragHint = handleTool === 'slide'
-    ? '移動定位點已開 · 沿目前經脈拖一顆黑點'
-    : handleTool === 'curve'
-      ? '弧線經脈已開 · 左右拉一顆黑點 · 只改與兩側鄰點之間的圓弧'
-      : handleTool === 'linear'
-        ? '直線經脈已開 · 左右拉一顆黑點 · 只改與兩側鄰點之間的直線'
-        : '點經脈出現黑點後，請選「移動定位點／弧線經脈／直線經脈」再拖'
+  const dragHint = selectedSegmentReady()
+    ? '可拖黑點改走向 · 放開或按「重繪經脈」後沿皮膚重畫這一段'
+    : '點兩穴之間的經脈出現黑點（短段一顆，長段三顆），再拖到皮膚上的新位置'
   $('#stage-help').textContent = selectedCatalog
     ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · ${dragHint}${midlineHint}`
     : `編輯 · 點兩穴之間的經脈出現黑點 · ${dragHint} · 拉錯按「回復上一步」`
@@ -2271,7 +2058,7 @@ function writePairHandles(routeId, fromPointId, toPointId, controls) {
   return { ...state, meridians }
 }
 
-function setSegmentHandle(routeId, fromPointId, toPointId, hit, style, handleIndex = 0) {
+function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0) {
   const route = state.meridians.find((item) => item.id === routeId)
   if (!route || isRenDuMeridian(route.meridianId)) return state
   const pair = acupointPairs(route).find((item) =>
@@ -2286,54 +2073,70 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, style, handleInd
   const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const index = Math.min(Math.max(0, handleIndex), records.length - 1)
   if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)) return state
-  const sibling = records.length === 2 ? records[1 - index] : null
-  if (sibling) {
+  const tooClose = records.some((record, cursor) => {
+    if (cursor === index) return false
     const gap = Math.hypot(
-      hit.position[0] - sibling.position[0],
-      hit.position[1] - sibling.position[1],
-      hit.position[2] - sibling.position[2],
+      hit.position[0] - record.position[0],
+      hit.position[1] - record.position[1],
+      hit.position[2] - record.position[2],
     )
-    if (gap < 0.01) return state
-  }
+    return gap < 0.01
+  })
+  if (tooClose) return state
   records[index] = {
     type: 'control',
     pointId: null,
     position: [...hit.position],
     normal: [...hit.normal],
-    style,
+    style: 'along',
   }
   return writePairHandles(routeId, fromPointId, toPointId, records)
 }
 
-function slideSegmentHandle(routeId, fromPointId, toPointId, probe, handleIndex = 0) {
-  const route = state.meridians.find((item) => item.id === routeId)
-  if (!route) return state
+function previewHandleDrag(drag, hit) {
+  const pairId = state.meridians.find((item) => item.id === drag.routeId)?.pairId || null
+  handleVisuals.forEach(({ mesh }) => {
+    const data = mesh.userData
+    if (data.handleIndex !== drag.handleIndex) return
+    const same = data.routeId === drag.routeId
+    const mirrored = Boolean(pairId)
+      && data.routeId !== drag.routeId
+      && state.meridians.find((item) => item.id === data.routeId)?.pairId === pairId
+    if (!same && !mirrored) return
+    const node = same
+      ? hit
+      : {
+        position: [-hit.position[0], hit.position[1], hit.position[2]],
+        normal: [-hit.normal[0], hit.normal[1], hit.normal[2]],
+      }
+    mesh.position.copy(offsetPosition(node, 0.014))
+  })
+}
+
+function redrawSelectedSegment({ announce = true } = {}) {
+  if (appMode !== 'edit') return toast('檢視模式為唯讀，請切換編輯後再重繪經脈', 'warn')
+  if (!selectedSegmentReady()) return toast('請先點選兩個穴位之間的經脈', 'warn')
+  const route = state.meridians.find((item) => item.id === selected.id)
+  if (!route || isRenDuMeridian(route.meridianId)) return toast('任督二脈沒有定位點可重繪', 'warn')
   const pair = acupointPairs(route).find((item) =>
-    item.fromPointId === fromPointId && item.toPointId === toPointId)
-  if (!pair) return state
+    item.fromPointId === selected.fromPointId && item.toPointId === selected.toPointId)
+  if (!pair) return toast('找不到這一段經脈', 'warn')
   const rest = restPathArrays(pair.fromNode, pair.toNode)
   const count = visibleHandleCount(
     polylineArcLength(rest),
     shortSegmentReferenceArc(route.side),
     pair.handles.length,
   )
-  const current = pairCurrentPolyline(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
-  const index = Math.min(Math.max(0, handleIndex), records.length - 1)
-  const slid = slideHandleOnPolyline(current, records, index, probe.position || probe)
-  const next = slid[index]
-  const placed = projectNearSurfaceOrFallback(next.position, next.normal, {
-    position: next.position,
-    normal: next.normal,
-  })
-  records[index] = {
-    type: 'control',
-    pointId: null,
-    position: [...placed.position],
-    normal: [...placed.normal],
-    style: next.style,
+  const next = writePairHandles(route.id, pair.fromPointId, pair.toPointId, records)
+  state = history.commit(next)
+  persistState()
+  rebuildAnnotations()
+  updateUI()
+  if (announce) {
+    setStatus('已依定位點沿皮膚重繪這段經脈（可按「回復上一步」還原）')
+    toast('已重繪這段經脈')
   }
-  return writePairHandles(routeId, fromPointId, toPointId, records)
 }
 
 function placeAt(event) {
@@ -3031,14 +2834,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       fromPointId: data.fromPointId,
       toPointId: data.toPointId,
     }
-    if (!handleTool) {
-      toast('請先選擇「移動定位點」「弧線經脈」或「直線經脈」', 'warn')
-      rebuildAnnotations()
-      updateUI()
-      return
-    }
     const start = handleDragAnchor(data)
-    const stretchStyle = handleTool === 'curve' || handleTool === 'linear' ? handleTool : null
     dragging = {
       type: 'route-handle',
       id: null,
@@ -3046,15 +2842,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       fromPointId: data.fromPointId,
       toPointId: data.toPointId,
       handleIndex: data.handleIndex ?? 0,
-      stretchStyle,
       rest: start?.rest || null,
-      current: start?.current || null,
       anchor: start?.anchor || null,
-      tangent3: start?.tangent3 || null,
-      tangentScreen: start?.tangentScreen || null,
+      pendingHit: null,
     }
-    // Keep the current camera. Switching to ortho here makes the two black
-    // handles jump on screen, so the pointer no longer sits on the handle.
     syncAppModeUI()
     syncControlsEnabled()
   }
@@ -3062,36 +2853,28 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!dragging) return
   if (!exceedsDragThreshold(pointerDown, { x: event.clientX, y: event.clientY })) return
-  const hit = dragging.type === 'route-handle'
-    ? handleDragHit(event, dragging)
-    : surfaceHit(event)
+  if (dragging.type === 'route-handle') {
+    const hit = handleDragHit(event, dragging)
+    if (!hit) return
+    dragMoved = true
+    dragging.pendingHit = hit
+    previewHandleDrag(dragging, hit)
+    return
+  }
+  const hit = surfaceHit(event)
   if (!hit) return
   dragMoved = true
-  const next = dragging.type === 'acupoint'
-    ? updatePairedPoint(dragging.id, hit)
-    : dragging.stretchStyle
-      ? setSegmentHandle(
-        dragging.routeId,
-        dragging.fromPointId,
-        dragging.toPointId,
-        hit,
-        dragging.stretchStyle,
-        dragging.handleIndex,
-      )
-      : slideSegmentHandle(
-        dragging.routeId,
-        dragging.fromPointId,
-        dragging.toPointId,
-        hit,
-        dragging.handleIndex,
-      )
-  replaceWithoutHistory(next)
+  replaceWithoutHistory(updatePairedPoint(dragging.id, hit))
 })
 renderer.domElement.addEventListener('pointerup', (event) => {
   if (dragging) {
     const wasHandle = dragging.type === 'route-handle'
     const wasAcupoint = dragging.type === 'acupoint'
-    const stretchStyle = dragging.stretchStyle
+    const pendingHit = dragging.pendingHit
+    const handleRouteId = dragging.routeId
+    const handleFrom = dragging.fromPointId
+    const handleTo = dragging.toPointId
+    const handleIndex = dragging.handleIndex
     const moved = dragMoved
     const draggedId = dragging.id
     dragging = null
@@ -3102,6 +2885,9 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     }
     syncControlsEnabled()
     if (moved) {
+      if (wasHandle && pendingHit) {
+        state = setSegmentHandle(handleRouteId, handleFrom, handleTo, pendingHit, handleIndex)
+      }
       if (wasAcupoint) {
         const point = getPoint(draggedId)
         if (point) {
@@ -3121,13 +2907,8 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     rebuildAnnotations()
     updateUI()
     if (moved) {
-      const handleMessage = stretchStyle === 'curve'
-        ? '已以圓弧調整經脈（可按「回復上一步」還原）'
-        : stretchStyle === 'linear'
-          ? '已以直線調整經脈（可按「回復上一步」還原）'
-          : '已沿目前經脈調整黑點位置'
       setStatus(wasHandle
-        ? handleMessage
+        ? '已依定位點沿皮膚重繪這段經脈（可按「回復上一步」還原）'
         : '穴位位置已更新並同步左右配對')
     }
     return
@@ -3139,9 +2920,7 @@ $('#lock-orbit').addEventListener('click', () => {
   setOrbitLocked(!orbitLocked, { sticky: true })
   syncAppModeUI()
 })
-$('#handle-slide').addEventListener('click', () => setHandleTool('slide'))
-$('#meridian-arc').addEventListener('click', () => setHandleTool('curve'))
-$('#meridian-linear').addEventListener('click', () => setHandleTool('linear'))
+$('#redraw-segment')?.addEventListener('click', () => redrawSelectedSegment())
 
 function undoLastStep() {
   applyHistory(history.undo(), '已回復上一步')
