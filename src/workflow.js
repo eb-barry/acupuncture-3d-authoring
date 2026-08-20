@@ -258,10 +258,33 @@ export function distanceToPolyline(points = [], probe = [0, 0, 0]) {
   return dist3(pointAtPolylineT(points, closestTOnPolyline(points, probe)), probe)
 }
 
+/** Unit tangent of a polyline at normalized arc-length t. */
+export function polylineTangent(points = [], t = 0.5) {
+  if (!points.length) return [0, 1, 0]
+  const a = pointAtPolylineT(points, Math.max(0, t - 0.04))
+  const b = pointAtPolylineT(points, Math.min(1, t + 0.04))
+  const delta = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+  const length = Math.hypot(...delta) || 1
+  return [delta[0] / length, delta[1] / length, delta[2] / length]
+}
+
+/** Split a 2D pointer delta into along-tangent and perpendicular (side) pixels. */
+export function splitAlongAndSide(delta, tangent) {
+  const length = Math.hypot(Number(tangent?.x) || 0, Number(tangent?.y) || 0) || 1
+  const tx = (Number(tangent?.x) || 0) / length
+  const ty = (Number(tangent?.y) || 0) / length
+  const dx = Number(delta?.x) || 0
+  const dy = Number(delta?.y) || 0
+  return {
+    along: dx * tx + dy * ty,
+    side: dx * -ty + dy * tx,
+  }
+}
+
 export const HANDLE_SLIDE_MAX_OFF_PATH = 0.08
-export const HANDLE_STRETCH_MAX_OFF_PATH = 0.36
+export const HANDLE_STRETCH_MAX_OFF_PATH = 0.5
 export const HANDLE_SLIDE_PROJECT_RADIUS = 0.07
-export const HANDLE_STRETCH_PROJECT_RADIUS = 0.22
+export const HANDLE_STRETCH_PROJECT_RADIUS = 0.28
 /** @deprecated use HANDLE_STRETCH_MAX_OFF_PATH */
 export const HANDLE_DRAG_MAX_OFF_PATH = HANDLE_STRETCH_MAX_OFF_PATH
 export const HANDLE_PROJECT_RADIUS = HANDLE_STRETCH_PROJECT_RADIUS

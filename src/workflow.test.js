@@ -19,7 +19,9 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  polylineTangent,
   primaryBendStyle,
+  splitAlongAndSide,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
@@ -244,5 +246,12 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(left, [-0.28, 0.9, 0.08], 0.36)).toBe(true)
     expect(isProbeOnSameLimbSegment(left, [0.22, 0.9, 0.05], 0.36)).toBe(false)
     expect(isProbeOnSameLimbSegment(left, [-0.22, 0.2, 0.05], 0.36)).toBe(false)
+  })
+
+  it('splits pointer motion into along-the-line and sideways stretch', () => {
+    expect(polylineTangent([[0, 0, 0], [0, 10, 0]], 0.5)).toEqual([0, 1, 0])
+    const split = splitAlongAndSide({ x: 6, y: 10 }, { x: 0, y: 1 })
+    expect(split.along).toBe(10)
+    expect(split.side).toBe(-6)
   })
 })
