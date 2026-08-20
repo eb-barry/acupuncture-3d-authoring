@@ -258,6 +258,132 @@ export function distanceToPolyline(points = [], probe = [0, 0, 0]) {
   return dist3(pointAtPolylineT(points, closestTOnPolyline(points, probe)), probe)
 }
 
+/** Unit tangent of a polyline at normalized arc-length t. */
+export function polylineTangent(points = [], t = 0.5) {
+  if (!points.length) return [0, 1, 0]
+  const a = pointAtPolylineT(points, Math.max(0, t - 0.04))
+  const b = pointAtPolylineT(points, Math.min(1, t + 0.04))
+  const delta = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+  const length = Math.hypot(...delta) || 1
+  return [delta[0] / length, delta[1] / length, delta[2] / length]
+}
+
+/** Split a 2D pointer delta into along-tangent and perpendicular (side) pixels. */
+export function splitAlongAndSide(delta, tangent) {
+  const length = Math.hypot(Number(tangent?.x) || 0, Number(tangent?.y) || 0) || 1
+  const tx = (Number(tangent?.x) || 0) / length
+  const ty = (Number(tangent?.y) || 0) / length
+  const dx = Number(delta?.x) || 0
+  const dy = Number(delta?.y) || 0
+  return {
+    along: dx * tx + dy * ty,
+    side: dx * -ty + dy * tx,
+  }
+}
+
+export function keepHandleStyleOnSlide(style) {
+  return style === 'curve' || style === 'linear' ? style : 'along'
+}
+
+/**
+ * Slide one handle along the currently drawn polyline (not the rest path).
+ * Sibling handle and endpoints stay put; stretch style is preserved.
+ */
+export function slideHandleOnPolyline(polyline, records = [], index = 0, probe = [0, 0, 0]) {
+  if (!records.length) return records
+  const i = Math.min(Math.max(0, index), records.length - 1)
+  const sibling = records.length >= 2 ? records[1 - i] : null
+  const siblingT = sibling ? closestTOnPolyline(polyline, sibling.position) : null
+  const t = clampPairedHandleT(
+    closestTOnPolyline(polyline, probe),
+    i,
+    siblingT,
+    records.length,
+  )
+  const position = pointAtPolylineT(polyline, t)
+  return records.map((record, cursor) => {
+    if (cursor !== i) {
+      return { ...record, position: [...record.position] }
+    }
+    return {
+      ...record,
+      position: [...position],
+      style: keepHandleStyleOnSlide(record.style),
+    }
+  })
+}
+
+/** Neighbors for a local 3-point stretch: previous handle or 穴, next handle or 穴. */
+export function stretchHandleNeighbors(from, to, records = [], index = 0) {
+  if (!records.length) return { start: from, end: to }
+  const i = Math.min(Math.max(0, index), records.length - 1)
+  const start = i <= 0 ? from : records[i - 1].position
+  const end = i >= records.length - 1 ? to : records[i + 1].position
+  return { start, end }
+}
+
+function concatPolylines(left = [], right = []) {
+  if (!left.length) return right.map((point) => [...point])
+  if (!right.length) return left.map((point) => [...point])
+  return [...left.map((point) => [...point]), ...right.slice(1).map((point) => [...point])]
+}
+
+function slicePolylineFromProbe(points, probe) {
+  if (!points.length) return []
+  const target = pointAtPolylineT(points, closestTOnPolyline(points, probe))
+  let best = 0
+  let bestDist = Infinity
+  points.forEach((point, index) => {
+    const distance = dist3(point, probe)
+    if (distance < bestDist) {
+      bestDist = distance
+      best = index
+    }
+  })
+  const sliced = points.slice(best)
+  if (sliced.length >= 2) return sliced.map((point) => [...point])
+  return [target, ...points.slice(-1).map((point) => [...point])]
+}
+
+function threePointPolyline(start, mid, end, style) {
+  if (style === 'curve') return circularArcPoints(start, mid, end, 16)
+  if (style === 'linear') {
+    const a = straightLinePoints(start, mid, 8)
+    const b = straightLinePoints(mid, end, 8)
+    return concatPolylines(a, b)
+  }
+  return null
+}
+
+/**
+ * Currently displayed pair polyline. Stretched handles use a local 3-point
+ * (穴/sibling — handle — 穴/sibling); the far span stays on the rest path.
+ */
+export function pairControlPolyline(from, to, records = [], restPts = []) {
+  const rest = restPts.length >= 2 ? restPts : [from, to]
+  if (!records.length) return rest.map((point) => [...point])
+  if (records.length === 1) {
+    return threePointPolyline(from, records[0].position, to, records[0].style)
+      || rest.map((point) => [...point])
+  }
+  const [first, second] = records
+  const p0 = first.position
+  const p1 = second.position
+  const leftBent = first.style === 'curve' || first.style === 'linear'
+  const rightBent = second.style === 'curve' || second.style === 'linear'
+  if (!leftBent && !rightBent) return rest.map((point) => [...point])
+  const left = leftBent
+    ? threePointPolyline(from, p0, p1, first.style)
+    : [from, p0]
+  const rightFull = rightBent
+    ? threePointPolyline(p0, p1, to, second.style)
+    : [p1, to]
+  const right = leftBent && rightBent
+    ? slicePolylineFromProbe(rightFull, p1)
+    : rightFull
+  return concatPolylines(left, right)
+}
+
 export const HANDLE_SLIDE_MAX_OFF_PATH = 0.08
 export const HANDLE_STRETCH_MAX_OFF_PATH = 0.36
 export const HANDLE_SLIDE_PROJECT_RADIUS = 0.07

@@ -16,16 +16,21 @@ import {
   nearestScreenIndex,
   nextExpectedPoint,
   orderedPlacedPointsForSide,
+  pairControlPolyline,
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  polylineTangent,
   primaryBendStyle,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
   segmentHandleCount,
+  slideHandleOnPolyline,
+  splitAlongAndSide,
   straightLinePoints,
+  stretchHandleNeighbors,
   stripControlNodes,
   visibleHandleCount,
 } from './workflow.js'
@@ -244,5 +249,55 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(left, [-0.28, 0.9, 0.08], 0.36)).toBe(true)
     expect(isProbeOnSameLimbSegment(left, [0.22, 0.9, 0.05], 0.36)).toBe(false)
     expect(isProbeOnSameLimbSegment(left, [-0.22, 0.2, 0.05], 0.36)).toBe(false)
+  })
+
+  it('splits screen motion into along-path and sideways components', () => {
+    expect(polylineTangent([[0, 0, 0], [10, 0, 0]], 0.5)).toEqual([1, 0, 0])
+    const split = splitAlongAndSide({ x: 10, y: 6 }, { x: 1, y: 0 })
+    expect(split.along).toBeCloseTo(10)
+    expect(split.side).toBeCloseTo(6)
+  })
+
+  it('slides one handle along the current polyline without snapping back or dropping stretch style', () => {
+    const rest = straightLinePoints([0, 0, 0], [10, 0, 0], 10)
+    const current = circularArcPoints([0, 0, 0], [5, 4, 0], [10, 0, 0], 16)
+    const records = [
+      { type: 'control', style: 'curve', position: [5, 4, 0], normal: [0, 0, 1] },
+    ]
+    const next = slideHandleOnPolyline(current, records, 0, [7, 3, 0])
+    expect(next[0].style).toBe('curve')
+    expect(distanceToPolyline(current, next[0].position)).toBeCloseTo(0, 5)
+    expect(distanceToPolyline(rest, next[0].position)).toBeGreaterThan(1)
+  })
+
+  it('keeps the sibling handle and uses 3-point neighbors while stretching', () => {
+    const records = [
+      { position: [4, 1, 0], style: 'curve' },
+      { position: [8, 0, 0], style: 'along' },
+    ]
+    expect(stretchHandleNeighbors([0, 0, 0], [12, 0, 0], records, 0))
+      .toEqual({ start: [0, 0, 0], end: [8, 0, 0] })
+    expect(stretchHandleNeighbors([0, 0, 0], [12, 0, 0], records, 1))
+      .toEqual({ start: [4, 1, 0], end: [12, 0, 0] })
+    expect(stretchHandleNeighbors([0, 0, 0], [12, 0, 0], records.slice(0, 1), 0))
+      .toEqual({ start: [0, 0, 0], end: [12, 0, 0] })
+
+    const rest = straightLinePoints([0, 0, 0], [12, 0, 0], 12)
+    const stretchedFirst = pairControlPolyline([0, 0, 0], [12, 0, 0], records, rest)
+    const afterSibling = stretchedFirst.filter((point) => point[0] >= 8.05)
+    afterSibling.forEach((point) => {
+      expect(point[1]).toBeCloseTo(0, 1)
+    })
+    const crest = stretchedFirst.reduce((best, point) => (point[1] > best[1] ? point : best))
+    expect(crest[1]).toBeGreaterThan(0.5)
+
+    const stretchedSecond = pairControlPolyline([0, 0, 0], [12, 0, 0], [
+      { position: [4, 0, 0], style: 'along' },
+      { position: [8, 3, 0], style: 'linear' },
+    ], rest)
+    const beforeFirst = stretchedSecond.filter((point) => point[0] <= 3.95)
+    beforeFirst.forEach((point) => {
+      expect(point[1]).toBeCloseTo(0, 1)
+    })
   })
 })
