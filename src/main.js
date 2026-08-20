@@ -33,12 +33,17 @@ import {
 } from './skinPath.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
+  HANDLE_DRAG_MAX_OFF_PATH,
+  HANDLE_DRAG_MAX_FROM_ANCHOR,
+  HANDLE_PICK_RADIUS_PX,
+  HANDLE_PROJECT_RADIUS,
   buildRouteNodesFromPlaced,
   circularArcPoints,
   clampHandleT,
   clampPairedHandleT,
   closestTOnPolyline,
   defaultHandleTs,
+  distanceToPolyline,
   exceedsDragThreshold,
   handlesBendPath,
   isOcclusionHitBlocking,
@@ -46,7 +51,6 @@ import {
   keepPairHandles,
   mergeControlsIntoRoute,
   nearestScreenIndex,
-  HANDLE_PICK_RADIUS_PX,
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
@@ -934,7 +938,95 @@ function nearestHandleHit(event) {
   return { object: meshes[index], point: meshes[index].position.clone() }
 }
 
-function projectNearSurface(position, normal) {
+function meshHitToSkin(hit) {
+  if (!hit?.face) return null
+  const normal = hit.face.normal.clone()
+    .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
+    .normalize()
+  const toCamera = camera.position.clone().sub(hit.point)
+  if (toCamera.lengthSq() > 1e-10 && normal.dot(toCamera) < 0) normal.negate()
+  return { position: toArray(hit.point), normal: toArray(normal) }
+}
+
+function cameraPlanePoint(event, anchor) {
+  screenPointer(event)
+  const towardCamera = camera.position.clone().sub(anchor)
+  if (towardCamera.lengthSq() < 1e-10) return null
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(towardCamera.normalize(), anchor)
+  const target = new THREE.Vector3()
+  return raycaster.ray.intersectPlane(plane, target) ? target : null
+}
+
+function isHandleHitOnSegment(rest, hit, anchor) {
+  if (!hit?.position) return false
+  if (distanceToPolyline(rest, hit.position) > HANDLE_DRAG_MAX_OFF_PATH) return false
+  const fromAnchor = Math.hypot(
+    hit.position[0] - anchor[0],
+    hit.position[1] - anchor[1],
+    hit.position[2] - anchor[2],
+  )
+  return fromAnchor <= HANDLE_DRAG_MAX_FROM_ANCHOR
+}
+
+/** Drag on a camera plane, then snap only to skin that still belongs to this segment. */
+function handleDragHit(event, drag) {
+  const rest = drag.rest
+  const anchor = drag.anchor
+  if (!rest?.length || !anchor) return null
+  const anchorPos = new THREE.Vector3(...anchor.position)
+  const planePoint = cameraPlanePoint(event, anchorPos)
+  if (planePoint) {
+    const projected = projectNearSurface(
+      toArray(planePoint),
+      anchor.normal,
+      HANDLE_PROJECT_RADIUS,
+    )
+    if (isHandleHitOnSegment(rest, projected, anchor.position)) return projected
+  }
+
+  screenPointer(event)
+  const hits = raycaster.intersectObjects(modelMeshes, false)
+  let best = null
+  let bestScore = Infinity
+  hits.forEach((hit) => {
+    const skin = meshHitToSkin(hit)
+    if (!isHandleHitOnSegment(rest, skin, anchor.position)) return
+    const fromAnchor = hit.point.distanceTo(anchorPos)
+    const offPath = distanceToPolyline(rest, skin.position)
+    const score = offPath * 4 + fromAnchor
+    if (score < bestScore) {
+      bestScore = score
+      best = skin
+    }
+  })
+  return best
+}
+
+function handleDragAnchor(data) {
+  const route = state.meridians.find((item) => item.id === data.routeId)
+  if (!route) return null
+  const pair = acupointPairs(route).find((item) =>
+    item.fromPointId === data.fromPointId && item.toPointId === data.toPointId)
+  if (!pair) return null
+  const rest = restPathArrays(pair.fromNode, pair.toNode)
+  const count = visibleHandleCount(
+    polylineArcLength(rest),
+    shortSegmentReferenceArc(route.side),
+    pair.handles.length,
+  )
+  const waypoints = pairWaypoints(pair.fromNode, pair.toNode, pair.handles, count, rest)
+  const placed = waypoints[data.handleIndex ?? 0]
+  if (!placed) return null
+  return {
+    rest,
+    anchor: {
+      position: [...placed.position],
+      normal: [...placed.normal],
+    },
+  }
+}
+
+function projectNearSurface(position, normal, maxDistance = Infinity) {
   const target = new THREE.Vector3(...position)
   const primary = new THREE.Vector3(...normal)
   if (primary.lengthSq() < 1e-10) primary.set(0, 0, 1)
@@ -982,12 +1074,16 @@ function projectNearSurface(position, normal) {
   }
 
   if (!candidates.length) return null
-  candidates.sort((a, b) => (
+  const nearby = Number.isFinite(maxDistance)
+    ? candidates.filter((item) => item.distance <= maxDistance)
+    : candidates
+  if (!nearby.length) return null
+  nearby.sort((a, b) => (
     Math.abs(b.alignment - a.alignment) > 0.12
       ? b.alignment - a.alignment
       : a.distance - b.distance
   ))
-  return { position: candidates[0].position, normal: candidates[0].normal }
+  return { position: nearby[0].position, normal: nearby[0].normal }
 }
 
 function projectNearSurfaceOrFallback(position, normal, fallback) {
@@ -2064,6 +2160,7 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, style, handleInd
   )
   const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const index = Math.min(Math.max(0, handleIndex), records.length - 1)
+  if (distanceToPolyline(rest, hit.position) > HANDLE_DRAG_MAX_OFF_PATH) return state
   const sibling = records.length === 2 ? records[1 - index] : null
   if (sibling) {
     const gap = Math.hypot(
@@ -2805,6 +2902,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   const handleHit = nearestHandleHit(event)
   if (handleHit) {
     const data = handleHit.object.userData
+    const start = handleDragAnchor(data)
     const stretchStyle = meridianDragStyle
     dragging = {
       type: 'route-handle',
@@ -2814,6 +2912,8 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       toPointId: data.toPointId,
       handleIndex: data.handleIndex ?? 0,
       stretchStyle,
+      rest: start?.rest || null,
+      anchor: start?.anchor || null,
     }
     selected = {
       type: 'meridian',
@@ -2831,7 +2931,9 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!dragging) return
   if (!exceedsDragThreshold(pointerDown, { x: event.clientX, y: event.clientY })) return
-  const hit = surfaceHit(event)
+  const hit = dragging.type === 'route-handle'
+    ? handleDragHit(event, dragging)
+    : surfaceHit(event)
   if (!hit) return
   dragMoved = true
   const next = dragging.type === 'acupoint'

@@ -6,6 +6,7 @@ import {
   clampPairedHandleT,
   closestTOnPolyline,
   defaultHandleTs,
+  distanceToPolyline,
   exceedsDragThreshold,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
@@ -228,5 +229,12 @@ describe('meridian authoring workflow', () => {
       16,
     )).toBe(1)
     expect(nearestScreenIndex([{ x: 0, y: 0 }], { x: 40, y: 0 }, 16)).toBe(-1)
+  })
+
+  it('measures how far a probe sits from a rest-path polyline', () => {
+    const line = [[0, 0, 0], [10, 0, 0]]
+    expect(distanceToPolyline(line, [5, 0, 0])).toBeCloseTo(0)
+    expect(distanceToPolyline(line, [5, 2, 0])).toBeCloseTo(2)
+    expect(distanceToPolyline(line, [50, 0, 0])).toBeCloseTo(40)
   })
 })
