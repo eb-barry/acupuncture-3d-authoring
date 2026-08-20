@@ -44,6 +44,7 @@ import {
   closestTOnPolyline,
   defaultHandleTs,
   exceedsDragThreshold,
+  isDisorderedPolyline,
   isOcclusionHitBlocking,
   isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
@@ -1326,7 +1327,25 @@ function joinOnSkin(anchors) {
 
 const SKIN_SAMPLE_MAX_JUMP = 0.036
 
-function projectSamplesOnSkin(samples, startNode, endNode) {
+function arraysFromSkin(points = []) {
+  return points.map((point) => (point?.isVector3 ? toArray(point) : [...point]))
+}
+
+function vectorsFromArrays(points = []) {
+  return points.map((point) => (point?.isVector3 ? point : new THREE.Vector3(...point)))
+}
+
+function preferCleanSkinPath(candidate, fallback, guide = []) {
+  if (!candidate || candidate.length < 2) return fallback
+  const arrays = arraysFromSkin(candidate)
+  const pruned = pruneBacktracking(arrays, arrays[arrays.length - 1])
+  if (isDisorderedPolyline(pruned, guide)) {
+    return fallback
+  }
+  return vectorsFromArrays(pruned)
+}
+
+function projectSamplesOnSkin(samples, startNode, endNode, rest = null) {
   if (!samples?.length) return null
   const start = resolvedNode(startNode)
   const end = resolvedNode(endNode)
@@ -1340,6 +1359,9 @@ function projectSamplesOnSkin(samples, startNode, endNode) {
     if (!projected) {
       if (index === 0 || index === samples.length - 1) return null
       continue
+    }
+    if (rest?.length && !isProbeOnSameLimbSegment(rest, projected.position, HANDLE_STRETCH_MAX_OFF_PATH)) {
+      return null
     }
     const lifted = offsetPosition(projected, SKIN_LIFT)
     if (previousRef.current && lifted.distanceTo(previousRef.current) > SKIN_SAMPLE_MAX_JUMP) {
@@ -1378,13 +1400,13 @@ function concatSkinPieces(pieces) {
 }
 
 /** Straight chords 穴→點一→點二→穴, projected onto skin. */
-function skinStraightSegments(anchors) {
+function skinStraightSegments(anchors, rest = null) {
   const nodes = anchors.map((node) => resolvedNode(node))
   if (nodes.length < 2) return joinOnSkin(anchors)
   const pieces = []
   for (let index = 0; index < nodes.length - 1; index += 1) {
     const samples = straightLinePoints(nodes[index].position, nodes[index + 1].position, 16)
-    const piece = projectSamplesOnSkin(samples, nodes[index], nodes[index + 1])
+    const piece = projectSamplesOnSkin(samples, nodes[index], nodes[index + 1], rest)
       || skinSegmentPoints(nodes[index], nodes[index + 1])
     if (!piece || piece.length < 2) return joinOnSkin(anchors)
     pieces.push(piece)
@@ -1393,12 +1415,12 @@ function skinStraightSegments(anchors) {
 }
 
 /** Circular arcs through consecutive triples, projected onto skin. */
-function skinCircularArcs(anchors) {
+function skinCircularArcs(anchors, rest = null) {
   const nodes = anchors.map((node) => resolvedNode(node))
   if (nodes.length < 3) return joinOnSkin(anchors)
   if (nodes.length === 3) {
     const samples = circularArcPoints(nodes[0].position, nodes[1].position, nodes[2].position, 24)
-    return projectSamplesOnSkin(samples, nodes[0], nodes[2]) || joinOnSkin(anchors)
+    return projectSamplesOnSkin(samples, nodes[0], nodes[2], rest) || joinOnSkin(anchors)
   }
   const pieces = []
   for (let index = 0; index <= nodes.length - 3; index += 1) {
@@ -1406,7 +1428,7 @@ function skinCircularArcs(anchors) {
     const mid = nodes[index + 1]
     const b = nodes[index + 2]
     const samples = circularArcPoints(a.position, mid.position, b.position, 24)
-    const projected = projectSamplesOnSkin(samples, a, b)
+    const projected = projectSamplesOnSkin(samples, a, b, rest)
     if (!projected) return joinOnSkin(anchors)
     const isLast = index === nodes.length - 3
     if (!isLast) {
@@ -1422,14 +1444,16 @@ function skinCircularArcs(anchors) {
   return concatSkinPieces(pieces) || joinOnSkin(anchors)
 }
 
-function bentSegmentPoints(anchors, handles) {
+function bentSegmentPoints(anchors, handles, rest = null) {
   const style = primaryBendStyle(handles)
+  const fallback = joinOnSkin(anchors)
   const bent = style === 'curve'
-    ? skinCircularArcs(anchors)
+    ? skinCircularArcs(anchors, rest)
     : style === 'linear'
-      ? skinStraightSegments(anchors)
+      ? skinStraightSegments(anchors, rest)
       : null
-  return (bent && bent.length >= 2) ? bent : joinOnSkin(anchors)
+  const guide = rest?.length >= 2 ? rest : arraysFromSkin(fallback || [])
+  return preferCleanSkinPath(bent, fallback, guide) || fallback
 }
 
 function sliceSkinFromNode(points, node) {
@@ -1440,32 +1464,38 @@ function sliceSkinFromNode(points, node) {
 }
 
 /** Local 3-point stretch: only the dragged handle's two neighbors change. */
-function pairDrawnSkinPoints(fromResolved, toResolved, records) {
-  if (!records.length) return skinSegmentPoints(fromResolved, toResolved)
+function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
+  const original = rest?.length >= 2
+    ? vectorsFromArrays(rest)
+    : skinSegmentPoints(fromResolved, toResolved)
+  if (!records.length) return original
   const waypoints = records.map((record) => ({
     position: record.position,
     normal: record.normal,
   }))
+  let candidate = original
   if (records.length === 1) {
     if (records[0].style === 'curve' || records[0].style === 'linear') {
-      return bentSegmentPoints([fromResolved, waypoints[0], toResolved], records)
+      candidate = bentSegmentPoints([fromResolved, waypoints[0], toResolved], records, rest)
     }
-    return skinSegmentPoints(fromResolved, toResolved)
+  } else {
+    const [first, second] = records
+    const p0 = waypoints[0]
+    const p1 = waypoints[1]
+    const leftBent = first.style === 'curve' || first.style === 'linear'
+    const rightBent = second.style === 'curve' || second.style === 'linear'
+    if (leftBent || rightBent) {
+      const left = leftBent
+        ? bentSegmentPoints([fromResolved, p0, p1], [first], rest)
+        : skinSegmentPoints(fromResolved, p0)
+      const rightFull = rightBent
+        ? bentSegmentPoints([p0, p1, toResolved], [second], rest)
+        : skinSegmentPoints(p1, toResolved)
+      const right = leftBent && rightBent ? sliceSkinFromNode(rightFull, p1) : rightFull
+      candidate = concatSkinPieces([left, right]) || original
+    }
   }
-  const [first, second] = records
-  const p0 = waypoints[0]
-  const p1 = waypoints[1]
-  const leftBent = first.style === 'curve' || first.style === 'linear'
-  const rightBent = second.style === 'curve' || second.style === 'linear'
-  if (!leftBent && !rightBent) return skinSegmentPoints(fromResolved, toResolved)
-  const left = leftBent
-    ? bentSegmentPoints([fromResolved, p0, p1], [first])
-    : skinSegmentPoints(fromResolved, p0)
-  const rightFull = rightBent
-    ? bentSegmentPoints([p0, p1, toResolved], [second])
-    : skinSegmentPoints(p1, toResolved)
-  const right = leftBent && rightBent ? sliceSkinFromNode(rightFull, p1) : rightFull
-  return concatSkinPieces([left, right]) || skinSegmentPoints(fromResolved, toResolved)
+  return preferCleanSkinPath(candidate, original, rest || arraysFromSkin(original)) || original
 }
 
 /** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
@@ -1492,7 +1522,7 @@ function skinCurvePoints(route) {
     const rest = restPathArrays(fromNode, toNode)
     const count = visibleHandleCount(polylineArcLength(rest), referenceArc, handles.length)
     const records = pairHandleRecords(fromNode, toNode, handles, count, rest)
-    const segment = pairDrawnSkinPoints(a, b, records)
+    const segment = pairDrawnSkinPoints(a, b, records, rest)
     const start = points.length === 0 ? 0 : 1
     for (let i = start; i < segment.length; i += 1) {
       appendSkinPoint(points, segment[i], previousRef)
@@ -1581,7 +1611,7 @@ function pairHandleRecords(fromNode, toNode, handles, count, rest) {
 
 function pairCurrentPolyline(fromNode, toNode, handles, count, rest) {
   const records = pairHandleRecords(fromNode, toNode, handles, count, rest)
-  const drawn = pairDrawnSkinPoints(resolvedNode(fromNode), resolvedNode(toNode), records)
+  const drawn = pairDrawnSkinPoints(resolvedNode(fromNode), resolvedNode(toNode), records, rest)
   return drawn?.length >= 2 ? drawn.map(toArray) : rest
 }
 

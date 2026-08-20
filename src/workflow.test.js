@@ -8,6 +8,7 @@ import {
   defaultHandleTs,
   distanceToPolyline,
   exceedsDragThreshold,
+  isDisorderedPolyline,
   isOcclusionHitBlocking,
   isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
@@ -249,6 +250,19 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(left, [-0.28, 0.9, 0.08], 0.36)).toBe(true)
     expect(isProbeOnSameLimbSegment(left, [0.22, 0.9, 0.05], 0.36)).toBe(false)
     expect(isProbeOnSameLimbSegment(left, [-0.22, 0.2, 0.05], 0.36)).toBe(false)
+    expect(isProbeOnSameLimbSegment(left, [0, 0.9, 0.05], 0.36)).toBe(false)
+  })
+
+  it('flags a saw-tooth polyline that crosses the midline or backtracks', () => {
+    const guide = straightLinePoints([-0.2, 1, 0.05], [-0.18, 0.7, 0.04], 8)
+    const zigzag = []
+    for (let index = 0; index <= 20; index += 1) {
+      zigzag.push([index % 2 === 0 ? -0.06 : 0.06, 1 - index * 0.015, 0.02])
+    }
+    expect(isDisorderedPolyline(zigzag, guide)).toBe(true)
+    expect(isDisorderedPolyline(guide, guide)).toBe(false)
+    const arc = circularArcPoints([-0.2, 1, 0], [-0.1, 1.08, 0.04], [0, 1, 0], 16)
+    expect(isDisorderedPolyline(arc, straightLinePoints([-0.2, 1, 0], [0, 1, 0], 8))).toBe(false)
   })
 
   it('splits screen motion into along-path and sideways components', () => {

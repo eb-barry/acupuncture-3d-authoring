@@ -408,7 +408,54 @@ export function isProbeOnSameLimbSegment(rest = [], probe = [0, 0, 0], maxOffPat
   const yMax = Math.max(...ys) + 0.22
   if (probe[1] < yMin || probe[1] > yMax) return false
   if (isCloserToMirroredPolyline(rest, probe)) return false
-  return distanceToPolyline(rest, probe) <= maxOffPath
+  const closest = pointAtPolylineT(rest, closestTOnPolyline(rest, probe))
+  const off = dist3(probe, closest)
+  if (off > maxOffPath) return false
+  const restX = closest[0]
+  const probeX = probe[0]
+  if (Math.abs(restX) > 0.035 && restX * probeX < 0) return false
+  // Near the groin the other thigh is close; don't collapse into the inter-leg gap.
+  const sep = Math.abs(restX) * 2
+  const localMax = Math.min(maxOffPath, Math.max(0.05, sep * 0.42))
+  return off <= localMax
+}
+
+/** True when a polyline zig-zags, crosses the midline, or is far longer than the guide. */
+export function isDisorderedPolyline(points = [], guide = []) {
+  if (points.length < 4) return false
+  const pathLen = polylineArcLength(points)
+  const guideLen = polylineArcLength(guide)
+  const chord = dist3(points[0], points[points.length - 1])
+  if (guideLen > 1e-4) {
+    if (pathLen > guideLen * 2.15) return true
+  } else if (chord > 1e-4 && pathLen > chord * 4.2) {
+    return true
+  }
+
+  let crossings = 0
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index - 1][0] * points[index][0] < 0) crossings += 1
+  }
+  let guideCrossings = 0
+  for (let index = 1; index < guide.length; index += 1) {
+    if (guide[index - 1][0] * guide[index][0] < 0) guideCrossings += 1
+  }
+  if (crossings > guideCrossings + 2) return true
+
+  let reversals = 0
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const prev = points[index - 1]
+    const curr = points[index]
+    const next = points[index + 1]
+    const a = [curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2]]
+    const b = [next[0] - curr[0], next[1] - curr[1], next[2] - curr[2]]
+    const lenA = Math.hypot(...a)
+    const lenB = Math.hypot(...b)
+    if (lenA < 1e-6 || lenB < 1e-6) continue
+    const dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (lenA * lenB)
+    if (dot < -0.2) reversals += 1
+  }
+  return reversals > Math.max(3, points.length * 0.12)
 }
 
 /** True when a route still has enough acupoint anchors to draw a segment. */
