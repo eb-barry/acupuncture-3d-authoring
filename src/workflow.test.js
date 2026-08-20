@@ -6,10 +6,12 @@ import {
   clampPairedHandleT,
   closestTOnPolyline,
   defaultHandleTs,
+  exceedsDragThreshold,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
   keepPairHandles,
   mergeControlsIntoRoute,
+  nearestScreenIndex,
   nextExpectedPoint,
   orderedPlacedPointsForSide,
   placementProgress,
@@ -214,5 +216,17 @@ describe('meridian authoring workflow', () => {
     expect(primaryBendStyle([{ style: 'linear' }, { style: 'curve' }])).toBe('curve')
     expect(primaryBendStyle([{ style: 'linear' }])).toBe('linear')
     expect(primaryBendStyle([{ style: 'along' }])).toBeNull()
+  })
+
+  it('does not treat a still click as a handle drag', () => {
+    const start = { x: 100, y: 80 }
+    expect(exceedsDragThreshold(start, { x: 101, y: 81 })).toBe(false)
+    expect(exceedsDragThreshold(start, { x: 108, y: 80 })).toBe(true)
+    expect(nearestScreenIndex(
+      [{ x: 10, y: 10 }, { x: 40, y: 12 }, { x: 90, y: 90 }],
+      { x: 42, y: 10 },
+      16,
+    )).toBe(1)
+    expect(nearestScreenIndex([{ x: 0, y: 0 }], { x: 40, y: 0 }, 16)).toBe(-1)
   })
 })

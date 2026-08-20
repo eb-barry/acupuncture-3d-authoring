@@ -39,11 +39,14 @@ import {
   clampPairedHandleT,
   closestTOnPolyline,
   defaultHandleTs,
+  exceedsDragThreshold,
   handlesBendPath,
   isOcclusionHitBlocking,
   isSurfaceFacingCamera,
   keepPairHandles,
   mergeControlsIntoRoute,
+  nearestScreenIndex,
+  HANDLE_PICK_RADIUS_PX,
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
@@ -899,6 +902,38 @@ function annotationHit(event, types) {
     .find((hit) => types.includes(hit.object.userData.type))
 }
 
+function projectHandleToScreen(mesh) {
+  const ndc = mesh.position.clone().project(camera)
+  if (!Number.isFinite(ndc.x) || ndc.z < -1 || ndc.z > 1) return null
+  const rect = renderer.domElement.getBoundingClientRect()
+  return {
+    x: rect.left + (ndc.x + 1) * 0.5 * rect.width,
+    y: rect.top + (-ndc.y + 1) * 0.5 * rect.height,
+  }
+}
+
+/** Prefer the visible black handle, even when the meridian line is closer in 3D. */
+function nearestHandleHit(event) {
+  const exact = annotationHit(event, ['route-handle'])
+  if (exact) return exact
+  const screens = []
+  const meshes = []
+  handleVisuals.forEach(({ mesh }) => {
+    if (!mesh.visible) return
+    const screen = projectHandleToScreen(mesh)
+    if (!screen) return
+    screens.push(screen)
+    meshes.push(mesh)
+  })
+  const index = nearestScreenIndex(
+    screens,
+    { x: event.clientX, y: event.clientY },
+    HANDLE_PICK_RADIUS_PX,
+  )
+  if (index < 0) return null
+  return { object: meshes[index], point: meshes[index].position.clone() }
+}
+
 function projectNearSurface(position, normal) {
   const target = new THREE.Vector3(...position)
   const primary = new THREE.Vector3(...normal)
@@ -1481,8 +1516,9 @@ function addRouteEditHandles(route) {
             createFlatMarkerMaterial(0x111111, { selected: true }),
           )
           handle.position.copy(offsetPosition(placed, 0.014))
-          handle.scale.setScalar(0.008)
-          handle.renderOrder = 6
+          handle.scale.setScalar(0.012)
+          handle.renderOrder = 12
+          handle.material.depthTest = false
           handle.userData = {
             type: 'route-handle',
             routeId: route.id,
@@ -1566,7 +1602,7 @@ function updateMarkerScales() {
   const handleSize = (position, pixels = 14) =>
     pixelSizeToWorld(pixels, camera.position.distanceTo(position))
   handleVisuals.forEach(({ mesh }) => {
-    mesh.scale.setScalar(handleSize(mesh.position, 5))
+    mesh.scale.setScalar(handleSize(mesh.position, 10))
   })
   midpointVisuals.forEach(({ mesh }) => {
     mesh.scale.setScalar(handleSize(mesh.position, 12))
@@ -2730,12 +2766,14 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   if (orbitLocked) {
     controls.enableRotate = false
   }
-  const hit = annotationHit(event, ['acupoint', 'route-handle', 'meridian'])
-  if (!hit) return
-  if (hit.object.userData.type === 'meridian') {
-    const route = state.meridians.find((item) => item.id === hit.object.userData.id)
-    if (isRenDuMeridian(route?.meridianId)) return
+  if (nearestHandleHit(event) || annotationHit(event, ['acupoint'])) {
+    controls.enabled = false
+    return
   }
+  const hit = annotationHit(event, ['meridian'])
+  if (!hit) return
+  const route = state.meridians.find((item) => item.id === hit.object.userData.id)
+  if (isRenDuMeridian(route?.meridianId)) return
   controls.enabled = false
 }, true)
 
@@ -2764,7 +2802,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return
   }
 
-  const handleHit = annotationHit(event, ['route-handle'])
+  const handleHit = nearestHandleHit(event)
   if (handleHit) {
     const data = handleHit.object.userData
     const stretchStyle = meridianDragStyle
@@ -2784,13 +2822,15 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       fromPointId: data.fromPointId,
       toPointId: data.toPointId,
     }
-    setOrbitLocked(true)
+    // Keep the current camera. Switching to ortho here makes the two black
+    // handles jump on screen, so the pointer no longer sits on the handle.
     syncAppModeUI()
     syncControlsEnabled()
   }
 })
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!dragging) return
+  if (!exceedsDragThreshold(pointerDown, { x: event.clientX, y: event.clientY })) return
   const hit = surfaceHit(event)
   if (!hit) return
   dragMoved = true
