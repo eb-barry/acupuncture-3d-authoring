@@ -33,20 +33,21 @@ import {
 } from './skinPath.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
-  HANDLE_DRAG_MAX_OFF_PATH,
-  HANDLE_DRAG_MAX_FROM_ANCHOR,
+  HANDLE_SLIDE_MAX_OFF_PATH,
+  HANDLE_SLIDE_PROJECT_RADIUS,
+  HANDLE_STRETCH_MAX_OFF_PATH,
+  HANDLE_STRETCH_PROJECT_RADIUS,
   HANDLE_PICK_RADIUS_PX,
-  HANDLE_PROJECT_RADIUS,
   buildRouteNodesFromPlaced,
   circularArcPoints,
   clampHandleT,
   clampPairedHandleT,
   closestTOnPolyline,
   defaultHandleTs,
-  distanceToPolyline,
   exceedsDragThreshold,
   handlesBendPath,
   isOcclusionHitBlocking,
+  isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
   keepPairHandles,
   mergeControlsIntoRoute,
@@ -957,43 +958,37 @@ function cameraPlanePoint(event, anchor) {
   return raycaster.ray.intersectPlane(plane, target) ? target : null
 }
 
-function isHandleHitOnSegment(rest, hit, anchor) {
-  if (!hit?.position) return false
-  if (distanceToPolyline(rest, hit.position) > HANDLE_DRAG_MAX_OFF_PATH) return false
-  const fromAnchor = Math.hypot(
-    hit.position[0] - anchor[0],
-    hit.position[1] - anchor[1],
-    hit.position[2] - anchor[2],
-  )
-  return fromAnchor <= HANDLE_DRAG_MAX_FROM_ANCHOR
+function projectHandleOnSkin(planePoint, guideNormal, radius) {
+  return projectNearSurface(toArray(planePoint), guideNormal, radius)
+    || projectNearSurface(toArray(planePoint), guideNormal, radius * 1.6)
 }
 
-/** Drag on a camera plane, then snap only to skin that still belongs to this segment. */
+/** Drag sideways on a camera plane, snap to the same limb, never the opposite leg. */
 function handleDragHit(event, drag) {
   const rest = drag.rest
   const anchor = drag.anchor
   if (!rest?.length || !anchor) return null
+  const stretch = Boolean(drag.stretchStyle)
+  const maxOffPath = stretch ? HANDLE_STRETCH_MAX_OFF_PATH : HANDLE_SLIDE_MAX_OFF_PATH
+  const projectRadius = stretch ? HANDLE_STRETCH_PROJECT_RADIUS : HANDLE_SLIDE_PROJECT_RADIUS
   const anchorPos = new THREE.Vector3(...anchor.position)
   const planePoint = cameraPlanePoint(event, anchorPos)
+  const accept = (hit) => hit && isProbeOnSameLimbSegment(rest, hit.position, maxOffPath)
+
   if (planePoint) {
-    const projected = projectNearSurface(
-      toArray(planePoint),
-      anchor.normal,
-      HANDLE_PROJECT_RADIUS,
-    )
-    if (isHandleHitOnSegment(rest, projected, anchor.position)) return projected
+    const projected = projectHandleOnSkin(planePoint, anchor.normal, projectRadius)
+    if (accept(projected)) return projected
   }
 
   screenPointer(event)
   const hits = raycaster.intersectObjects(modelMeshes, false)
+  const target = planePoint || anchorPos
   let best = null
   let bestScore = Infinity
   hits.forEach((hit) => {
     const skin = meshHitToSkin(hit)
-    if (!isHandleHitOnSegment(rest, skin, anchor.position)) return
-    const fromAnchor = hit.point.distanceTo(anchorPos)
-    const offPath = distanceToPolyline(rest, skin.position)
-    const score = offPath * 4 + fromAnchor
+    if (!accept(skin)) return
+    const score = hit.point.distanceTo(target)
     if (score < bestScore) {
       bestScore = score
       best = skin
@@ -2160,7 +2155,7 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, style, handleInd
   )
   const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const index = Math.min(Math.max(0, handleIndex), records.length - 1)
-  if (distanceToPolyline(rest, hit.position) > HANDLE_DRAG_MAX_OFF_PATH) return state
+  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)) return state
   const sibling = records.length === 2 ? records[1 - index] : null
   if (sibling) {
     const gap = Math.hypot(

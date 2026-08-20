@@ -258,9 +258,32 @@ export function distanceToPolyline(points = [], probe = [0, 0, 0]) {
   return dist3(pointAtPolylineT(points, closestTOnPolyline(points, probe)), probe)
 }
 
-export const HANDLE_DRAG_MAX_OFF_PATH = 0.12
-export const HANDLE_DRAG_MAX_FROM_ANCHOR = 0.16
-export const HANDLE_PROJECT_RADIUS = 0.055
+export const HANDLE_SLIDE_MAX_OFF_PATH = 0.08
+export const HANDLE_STRETCH_MAX_OFF_PATH = 0.36
+export const HANDLE_SLIDE_PROJECT_RADIUS = 0.07
+export const HANDLE_STRETCH_PROJECT_RADIUS = 0.22
+/** @deprecated use HANDLE_STRETCH_MAX_OFF_PATH */
+export const HANDLE_DRAG_MAX_OFF_PATH = HANDLE_STRETCH_MAX_OFF_PATH
+export const HANDLE_PROJECT_RADIUS = HANDLE_STRETCH_PROJECT_RADIUS
+
+export function isCloserToMirroredPolyline(points = [], probe = [0, 0, 0]) {
+  if (!points.length) return false
+  const mirrored = points.map((point) => [-point[0], point[1], point[2]])
+  const offThis = distanceToPolyline(points, probe)
+  const offMirror = distanceToPolyline(mirrored, probe)
+  return offMirror + 0.03 < offThis
+}
+
+/** Allow sideways stretch on the same limb; reject the opposite leg/torso. */
+export function isProbeOnSameLimbSegment(rest = [], probe = [0, 0, 0], maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH) {
+  if (!rest.length || !probe) return false
+  const ys = rest.map((point) => point[1])
+  const yMin = Math.min(...ys) - 0.22
+  const yMax = Math.max(...ys) + 0.22
+  if (probe[1] < yMin || probe[1] > yMax) return false
+  if (isCloserToMirroredPolyline(rest, probe)) return false
+  return distanceToPolyline(rest, probe) <= maxOffPath
+}
 
 /** True when a route still has enough acupoint anchors to draw a segment. */
 export function routeHasDrawableAcupoints(nodes) {
