@@ -253,6 +253,15 @@ export function closestTOnPolyline(points = [], probe = [0, 0, 0]) {
   return bestAt
 }
 
+export function distanceToPolyline(points = [], probe = [0, 0, 0]) {
+  if (!points.length) return Infinity
+  return dist3(pointAtPolylineT(points, closestTOnPolyline(points, probe)), probe)
+}
+
+export const HANDLE_DRAG_MAX_OFF_PATH = 0.12
+export const HANDLE_DRAG_MAX_FROM_ANCHOR = 0.16
+export const HANDLE_PROJECT_RADIUS = 0.055
+
 /** True when a route still has enough acupoint anchors to draw a segment. */
 export function routeHasDrawableAcupoints(nodes) {
   return nodes.filter((node) => node.type === 'acupoint').length >= 2
