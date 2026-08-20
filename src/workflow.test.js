@@ -9,6 +9,7 @@ import {
   distanceToPolyline,
   exceedsDragThreshold,
   isOcclusionHitBlocking,
+  isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
   keepPairHandles,
   mergeControlsIntoRoute,
@@ -236,5 +237,12 @@ describe('meridian authoring workflow', () => {
     expect(distanceToPolyline(line, [5, 0, 0])).toBeCloseTo(0)
     expect(distanceToPolyline(line, [5, 2, 0])).toBeCloseTo(2)
     expect(distanceToPolyline(line, [50, 0, 0])).toBeCloseTo(40)
+  })
+
+  it('lets a stretch probe leave the rest path but not jump to the other limb', () => {
+    const left = [[-0.22, 1.0, 0.05], [-0.20, 0.8, 0.04]]
+    expect(isProbeOnSameLimbSegment(left, [-0.28, 0.9, 0.08], 0.36)).toBe(true)
+    expect(isProbeOnSameLimbSegment(left, [0.22, 0.9, 0.05], 0.36)).toBe(false)
+    expect(isProbeOnSameLimbSegment(left, [-0.22, 0.2, 0.05], 0.36)).toBe(false)
   })
 })
