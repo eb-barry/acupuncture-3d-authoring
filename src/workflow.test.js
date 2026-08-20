@@ -21,6 +21,7 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  polylineSlice,
   polylineTangent,
   primaryBendStyle,
   removePointIdsFromRouteNodes,
@@ -172,6 +173,8 @@ describe('meridian authoring workflow', () => {
     expect(polylineArcLength(line)).toBe(10)
     expect(pointAtPolylineT(line, 0.5)).toEqual([5, 0, 0])
     expect(closestTOnPolyline(line, [7, 1, 0])).toBeCloseTo(0.7)
+    expect(polylineSlice(line, 0.2, 0.5, 4)[0]).toEqual([2, 0, 0])
+    expect(polylineSlice(line, 0.2, 0.5, 4).at(-1)).toEqual([5, 0, 0])
   })
 
   it('gives long rest-path segments three locators against the LU3–LU4 reference', () => {

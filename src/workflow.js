@@ -399,14 +399,29 @@ export function isProbeOnSameLimbSegment(rest = [], probe = [0, 0, 0], maxOffPat
   return off <= localMax
 }
 
-/** True when a polyline zig-zags, crosses the midline, or is far longer than the guide. */
-export function isDisorderedPolyline(points = [], guide = []) {
+/** Slice a polyline between two normalized arc-length values. */
+export function polylineSlice(points = [], t0 = 0, t1 = 1, samples = 16) {
+  if (!points.length) return []
+  const startT = Math.min(1, Math.max(0, Number.isFinite(Number(t0)) ? Number(t0) : 0))
+  const endT = Math.min(1, Math.max(0, Number.isFinite(Number(t1)) ? Number(t1) : 1))
+  const lo = Math.min(startT, endT)
+  const hi = Math.max(startT, endT)
+  if (hi - lo < 1e-6) return [pointAtPolylineT(points, lo)]
+  const count = Math.max(2, Math.floor(samples))
+  const out = []
+  for (let index = 0; index < count; index += 1) {
+    out.push(pointAtPolylineT(points, lo + (hi - lo) * (index / (count - 1))))
+  }
+  return startT <= endT ? out : out.reverse()
+} 
+
+export function isDisorderedPolyline(points = [], guide = [], { maxLengthRatio = 1.85 } = {}) {
   if (points.length < 4) return false
   const pathLen = polylineArcLength(points)
   const guideLen = polylineArcLength(guide)
   const chord = dist3(points[0], points[points.length - 1])
   if (guideLen > 1e-4) {
-    if (pathLen > guideLen * 2.15) return true
+    if (pathLen > guideLen * maxLengthRatio) return true
   } else if (chord > 1e-4 && pathLen > chord * 4.2) {
     return true
   }

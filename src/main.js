@@ -52,6 +52,7 @@ import {
   pointAtPolylineT,
   polylineArcLength,
   distanceToPolyline,
+  polylineSlice,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
@@ -89,7 +90,7 @@ $('#app').innerHTML = `
       <button id="face-front" class="tool" type="button" title="自動將身體正面朝向螢幕，方便定位任脈">▣ <span>正面朝向</span></button>
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定旋轉：可上下左右平移，視角朝向不變，仍可編輯">🔒 <span>鎖定旋轉</span></button>
-      <button id="redraw-segment" class="tool" type="button" disabled title="依目前黑點，沿皮膚重繪這兩個穴位之間的經脈">⟳ <span>重繪經脈</span></button>
+      <button id="redraw-segment" class="tool finish" type="button" disabled title="依目前黑點，沿皮膚重繪這兩個穴位之間的經脈">⟳ <span>重繪經脈</span></button>
       <button id="undo-step" class="tool" type="button" title="回復上一步（Ctrl／⌘+Z）">↩ <span>回復上一步</span></button>
       <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
     </nav>
@@ -1205,14 +1206,33 @@ function vectorsFromArrays(points = []) {
   return points.map((point) => (point?.isVector3 ? point : new THREE.Vector3(...point)))
 }
 
-function preferCleanSkinPath(candidate, fallback, guide = []) {
+function preferCleanSkinPath(candidate, fallback, guide = [], maxLengthRatio = 1.85) {
   if (!candidate || candidate.length < 2) return fallback
   const arrays = arraysFromSkin(candidate)
   const pruned = pruneBacktracking(arrays, arrays[arrays.length - 1])
-  if (isDisorderedPolyline(pruned, guide)) {
+  if (isDisorderedPolyline(pruned, guide, { maxLengthRatio })) {
     return fallback
   }
   return vectorsFromArrays(pruned)
+}
+
+function concatSkinPieces(pieces) {
+  const points = []
+  const previousRef = { current: null }
+  for (const piece of pieces) {
+    if (!piece || piece.length < 2) return null
+    const start = points.length === 0 ? 0 : 1
+    for (let index = start; index < piece.length; index += 1) {
+      appendSkinPoint(points, piece[index], previousRef)
+    }
+  }
+  return points.length >= 2 ? points : null
+}
+
+function restSliceBetween(rest, fromPos, toPos) {
+  const t0 = closestTOnPolyline(rest, fromPos)
+  const t1 = closestTOnPolyline(rest, toPos)
+  return polylineSlice(rest, t0, t1, 20)
 }
 
 /** Localizers are extra on-skin points: 穴1 → 點… → 穴2, marched like acupoints. */
@@ -1232,8 +1252,17 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
     })),
     toResolved,
   ]
-  const joined = joinOnSkin(anchors)
-  return preferCleanSkinPath(joined, original, guide) || original
+  const pieces = []
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const a = resolvedNode(anchors[index])
+    const b = resolvedNode(anchors[index + 1])
+    const marched = skinSegmentPoints(a, b)
+    const slice = restSliceBetween(guide, a.position, b.position)
+    const clean = preferCleanSkinPath(marched, null, slice, 1.7)
+    if (!clean || clean.length < 2) return original
+    pieces.push(clean)
+  }
+  return concatSkinPieces(pieces) || original
 }
 
 /** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
