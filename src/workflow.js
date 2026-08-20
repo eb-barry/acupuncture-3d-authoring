@@ -396,3 +396,31 @@ export function circularArcPoints(start, mid, end, steps = 24) {
   }
   return samples
 }
+
+export const DRAG_THRESHOLD_PX = 4
+export const HANDLE_PICK_RADIUS_PX = 16
+
+export function pointerDeltaPx(start, point) {
+  if (!start || !point) return 0
+  return Math.hypot(Number(point.x) - Number(start.x), Number(point.y) - Number(start.y))
+}
+
+export function exceedsDragThreshold(start, point, threshold = DRAG_THRESHOLD_PX) {
+  return pointerDeltaPx(start, point) > threshold
+}
+
+/** Index of the nearest {x,y} within maxDistance, or -1. */
+export function nearestScreenIndex(points = [], probe, maxDistance) {
+  const limit = Number(maxDistance)
+  if (!(limit > 0) || !probe) return -1
+  let best = -1
+  let bestDist = limit
+  points.forEach((point, index) => {
+    const dist = Math.hypot(point.x - probe.x, point.y - probe.y)
+    if (dist <= bestDist) {
+      bestDist = dist
+      best = index
+    }
+  })
+  return best
+}
