@@ -67,6 +67,8 @@ export const HANDLE_STYLES = ['along', 'linear', 'curve']
 export const FALLBACK_SHORT_SEGMENT_ARC = 0.034
 export const DEFAULT_SINGLE_HANDLE_T = 0.5
 export const DEFAULT_PAIR_HANDLE_TS = [1 / 3, 2 / 3]
+export const DEFAULT_TRIPLE_HANDLE_TS = [0.25, 0.5, 0.75]
+export const MAX_PAIR_HANDLES = 3
 export const MIN_HANDLE_GAP = 0.12
 export const HANDLE_END_MARGIN = 0.1
 
@@ -74,59 +76,72 @@ export function isStyledHandle(node) {
   return node?.type === 'control' && HANDLE_STYLES.includes(node.style)
 }
 
-/** Keep 1–2 styled handles; drop unstyled legacy piles. At most two. */
+/** Keep 1–3 styled handles; drop unstyled legacy piles. */
 export function keepPairHandles(controls = []) {
-  return (controls || []).filter(isStyledHandle).slice(0, 2)
+  return (controls || []).filter(isStyledHandle).slice(0, MAX_PAIR_HANDLES)
 }
 
 export function defaultHandleTs(count) {
-  return count >= 2 ? [...DEFAULT_PAIR_HANDLE_TS] : [DEFAULT_SINGLE_HANDLE_T]
+  if (count >= 3) return [...DEFAULT_TRIPLE_HANDLE_TS]
+  if (count === 2) return [...DEFAULT_PAIR_HANDLE_TS]
+  return [DEFAULT_SINGLE_HANDLE_T]
 }
 
-/** Long rest paths get two black handles; short ones get one. */
+/** Long rest paths get three black locators; short ones get one. */
 export function segmentHandleCount(restArcLength, referenceArcLength) {
   const rest = Number(restArcLength)
   if (!Number.isFinite(rest) || rest <= 0) return 1
   const reference = Number.isFinite(referenceArcLength) && referenceArcLength > 1e-4
     ? referenceArcLength
     : FALLBACK_SHORT_SEGMENT_ARC
-  return rest > reference ? 2 : 1
+  return rest > reference ? MAX_PAIR_HANDLES : 1
 }
 
 /** Rest-path length wins; already-saved handles are never hidden. */
 export function visibleHandleCount(restArcLength, referenceArcLength, storedCount = 0) {
   const byLength = segmentHandleCount(restArcLength, referenceArcLength)
-  const stored = Math.min(2, Math.max(0, Number(storedCount) || 0))
-  return Math.min(2, Math.max(byLength, stored))
+  const stored = Math.min(MAX_PAIR_HANDLES, Math.max(0, Number(storedCount) || 0))
+  return Math.min(MAX_PAIR_HANDLES, Math.max(byLength, stored))
 }
 
 /**
  * Clamp one handle's rest-path t: 10% from acupoints, and not overlapping
- * the sibling handle.
+ * sibling handles. `siblingT` may be one t or all other handles' t values.
  */
 export function clampPairedHandleT(t, handleIndex, siblingT, count, {
   margin = HANDLE_END_MARGIN,
   gap = MIN_HANDLE_GAP,
 } = {}) {
-  if (count < 2 || !Number.isFinite(siblingT)) return clampHandleT(t, margin)
+  const others = (Array.isArray(siblingT) ? siblingT : [siblingT])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+  if (count < 2 || !others.length) return clampHandleT(t, margin)
   let minT = margin
   let maxT = 1 - margin
-  if (handleIndex <= 0) maxT = Math.min(maxT, siblingT - gap)
-  else minT = Math.max(minT, siblingT + gap)
+  if (handleIndex <= 0) {
+    maxT = Math.min(maxT, Math.min(...others) - gap)
+  } else if (handleIndex >= count - 1) {
+    minT = Math.max(minT, Math.max(...others) + gap)
+  } else {
+    const sorted = [...others].sort((a, b) => a - b)
+    minT = Math.max(minT, sorted[0] + gap)
+    maxT = Math.min(maxT, sorted[sorted.length - 1] - gap)
+  }
   if (minT > maxT) {
     return handleIndex <= 0
-      ? Math.max(margin, siblingT - gap)
-      : Math.min(1 - margin, siblingT + gap)
+      ? Math.max(margin, Math.min(...others) - gap)
+      : Math.min(1 - margin, Math.max(...others) + gap)
   }
   const value = Number.isFinite(Number(t)) ? Number(t) : (minT + maxT) / 2
   return Math.min(maxT, Math.max(minT, value))
 }
 
 /**
- * Fill 1 or 2 visual slots. Stored handles keep identity; empty slots are
- * null so the caller can sit them at 33%/67% (or 50%) on the rest path.
+ * Fill 1–3 visual slots. Stored handles keep identity; empty slots are
+ * null so the caller can sit them on the rest path.
  */
 export function resolveHandleSlots(storedHandles, count, restPath = []) {
+  const slots = Math.min(MAX_PAIR_HANDLES, Math.max(0, Number(count) || 0))
   const stored = keepPairHandles(storedHandles)
   const ordered = stored
     .map((handle, index) => ({
@@ -135,17 +150,30 @@ export function resolveHandleSlots(storedHandles, count, restPath = []) {
       t: closestTOnPolyline(restPath, handle.position),
     }))
     .sort((a, b) => a.t - b.t || a.index - b.index)
-    .map((item) => item.handle)
 
-  if (count <= 1) return [ordered[0] || null]
-  if (ordered.length >= 2) return [ordered[0], ordered[1]]
-  if (ordered.length === 1) {
-    const t = closestTOnPolyline(restPath, ordered[0].position)
-    const defaults = defaultHandleTs(2)
-    const useFirstSlot = Math.abs(t - defaults[0]) <= Math.abs(t - defaults[1])
-    return useFirstSlot ? [ordered[0], null] : [null, ordered[0]]
-  }
-  return [null, null]
+  if (slots <= 0) return []
+  if (slots === 1) return [ordered[0]?.handle || null]
+
+  const filled = Array.from({ length: slots }, () => null)
+  const defaults = defaultHandleTs(slots)
+  const used = new Set()
+  ordered.forEach((item) => {
+    let best = -1
+    let bestDist = Infinity
+    defaults.forEach((slotT, slot) => {
+      if (used.has(slot)) return
+      const dist = Math.abs(item.t - slotT)
+      if (dist < bestDist) {
+        bestDist = dist
+        best = slot
+      }
+    })
+    if (best >= 0) {
+      filled[best] = item.handle
+      used.add(best)
+    }
+  })
+  return filled
 }
 
 export function handlesBendPath(handles = []) {
@@ -159,7 +187,7 @@ export function primaryBendStyle(handles = []) {
   return null
 }
 
-/** Reinsert up to two styled controls between surviving acupoint pairs. */
+/** Reinsert up to three styled controls between surviving acupoint pairs. */
 export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
   if (!nextAcupointNodes.length) return []
   if (!previousNodes?.length) return [...nextAcupointNodes]
@@ -292,12 +320,15 @@ export function keepHandleStyleOnSlide(style) {
 export function slideHandleOnPolyline(polyline, records = [], index = 0, probe = [0, 0, 0]) {
   if (!records.length) return records
   const i = Math.min(Math.max(0, index), records.length - 1)
-  const sibling = records.length >= 2 ? records[1 - i] : null
-  const siblingT = sibling ? closestTOnPolyline(polyline, sibling.position) : null
+  const others = records
+    .map((record, cursor) => (
+      cursor === i ? null : closestTOnPolyline(polyline, record.position)
+    ))
+    .filter((value) => value != null)
   const t = clampPairedHandleT(
     closestTOnPolyline(polyline, probe),
     i,
-    siblingT,
+    others,
     records.length,
   )
   const position = pointAtPolylineT(polyline, t)
@@ -322,66 +353,14 @@ export function stretchHandleNeighbors(from, to, records = [], index = 0) {
   return { start, end }
 }
 
-function concatPolylines(left = [], right = []) {
-  if (!left.length) return right.map((point) => [...point])
-  if (!right.length) return left.map((point) => [...point])
-  return [...left.map((point) => [...point]), ...right.slice(1).map((point) => [...point])]
-}
-
-function slicePolylineFromProbe(points, probe) {
-  if (!points.length) return []
-  const target = pointAtPolylineT(points, closestTOnPolyline(points, probe))
-  let best = 0
-  let bestDist = Infinity
-  points.forEach((point, index) => {
-    const distance = dist3(point, probe)
-    if (distance < bestDist) {
-      bestDist = distance
-      best = index
-    }
-  })
-  const sliced = points.slice(best)
-  if (sliced.length >= 2) return sliced.map((point) => [...point])
-  return [target, ...points.slice(-1).map((point) => [...point])]
-}
-
-function threePointPolyline(start, mid, end, style) {
-  if (style === 'curve') return circularArcPoints(start, mid, end, 16)
-  if (style === 'linear') {
-    const a = straightLinePoints(start, mid, 8)
-    const b = straightLinePoints(mid, end, 8)
-    return concatPolylines(a, b)
-  }
-  return null
-}
-
 /**
- * Currently displayed pair polyline. Stretched handles use a local 3-point
- * (穴/sibling — handle — 穴/sibling); the far span stays on the rest path.
+ * Logical pair polyline through locators: 穴 → 點… → 穴.
+ * Actual on-skin marching happens in the editor.
  */
 export function pairControlPolyline(from, to, records = [], restPts = []) {
   const rest = restPts.length >= 2 ? restPts : [from, to]
   if (!records.length) return rest.map((point) => [...point])
-  if (records.length === 1) {
-    return threePointPolyline(from, records[0].position, to, records[0].style)
-      || rest.map((point) => [...point])
-  }
-  const [first, second] = records
-  const p0 = first.position
-  const p1 = second.position
-  const leftBent = first.style === 'curve' || first.style === 'linear'
-  const rightBent = second.style === 'curve' || second.style === 'linear'
-  if (!leftBent && !rightBent) return rest.map((point) => [...point])
-  const left = leftBent
-    ? threePointPolyline(from, p0, p1, first.style)
-    : [from, p0]
-  const rightFull = rightBent
-    ? threePointPolyline(p0, p1, to, second.style)
-    : [p1, to]
-  const right = leftBent && rightBent
-    ? slicePolylineFromProbe(rightFull, p1)
-    : rightFull
-  return concatPolylines(left, right)
+  return [from, ...records.map((record) => [...record.position]), to]
 }
 
 export const HANDLE_SLIDE_MAX_OFF_PATH = 0.08

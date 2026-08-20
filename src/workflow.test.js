@@ -174,33 +174,40 @@ describe('meridian authoring workflow', () => {
     expect(closestTOnPolyline(line, [7, 1, 0])).toBeCloseTo(0.7)
   })
 
-  it('gives long rest-path segments two handles against the LU3–LU4 reference', () => {
+  it('gives long rest-path segments three locators against the LU3–LU4 reference', () => {
     expect(segmentHandleCount(0.032, 0.033)).toBe(1)
-    expect(segmentHandleCount(0.178, 0.033)).toBe(2)
-    expect(segmentHandleCount(0.178, null)).toBe(2)
+    expect(segmentHandleCount(0.178, 0.033)).toBe(3)
+    expect(segmentHandleCount(0.178, null)).toBe(3)
     expect(segmentHandleCount(0.03, null)).toBe(1)
     expect(visibleHandleCount(0.03, 0.033, 0)).toBe(1)
-    expect(visibleHandleCount(0.18, 0.033, 0)).toBe(2)
+    expect(visibleHandleCount(0.18, 0.033, 0)).toBe(3)
     expect(visibleHandleCount(0.03, 0.033, 2)).toBe(2)
+    expect(visibleHandleCount(0.18, 0.033, 2)).toBe(3)
   })
 
-  it('keeps one or two styled handles and fills default slots', () => {
+  it('keeps up to three styled locators and fills default slots', () => {
     const along = { type: 'control', style: 'along', position: [3, 0, 0] }
     const curve = { type: 'control', style: 'curve', position: [7, 0, 0] }
+    const third = { type: 'control', style: 'along', position: [9, 0, 0] }
     const line = [[0, 0, 0], [10, 0, 0]]
     expect(keepPairHandles([{ type: 'control', position: [1, 0, 0] }, { type: 'control', position: [2, 0, 0] }]))
       .toEqual([])
-    expect(keepPairHandles([along, curve]).map((node) => node.style)).toEqual(['along', 'curve'])
+    expect(keepPairHandles([along, curve, third]).map((node) => node.position[0])).toEqual([3, 7, 9])
     expect(defaultHandleTs(1)).toEqual([0.5])
     expect(defaultHandleTs(2)).toEqual([1 / 3, 2 / 3])
+    expect(defaultHandleTs(3)).toEqual([0.25, 0.5, 0.75])
     expect(resolveHandleSlots([], 2, line)).toEqual([null, null])
     expect(resolveHandleSlots([along], 2, line)[0]).toBe(along)
     expect(resolveHandleSlots([along], 2, line)[1]).toBeNull()
     expect(resolveHandleSlots([curve], 2, line)[0]).toBeNull()
     expect(resolveHandleSlots([curve], 2, line)[1]).toBe(curve)
+    expect(resolveHandleSlots([], 3, line)).toEqual([null, null, null])
+    expect(resolveHandleSlots([along], 3, line)[0]).toBe(along)
+    expect(resolveHandleSlots([curve], 3, line)[2]).toBe(curve)
     expect(clampPairedHandleT(0.5, 0, 0.67, 2)).toBeCloseTo(0.5)
     expect(clampPairedHandleT(0.8, 0, 0.67, 2)).toBeCloseTo(0.55)
     expect(clampPairedHandleT(0.1, 1, 0.33, 2)).toBeCloseTo(0.45)
+    expect(clampPairedHandleT(0.9, 1, [0.25, 0.75], 3)).toBeCloseTo(0.63)
   })
 
   it('samples a circular arc through three points and a straight chord', () => {
@@ -284,34 +291,26 @@ describe('meridian authoring workflow', () => {
     expect(distanceToPolyline(rest, next[0].position)).toBeGreaterThan(1)
   })
 
-  it('keeps the sibling handle and uses 3-point neighbors while stretching', () => {
+  it('chains locators as 穴 → 點… → 穴 without changing the far span', () => {
     const records = [
-      { position: [4, 1, 0], style: 'curve' },
+      { position: [4, 1, 0], style: 'along' },
       { position: [8, 0, 0], style: 'along' },
     ]
     expect(stretchHandleNeighbors([0, 0, 0], [12, 0, 0], records, 0))
       .toEqual({ start: [0, 0, 0], end: [8, 0, 0] })
     expect(stretchHandleNeighbors([0, 0, 0], [12, 0, 0], records, 1))
       .toEqual({ start: [4, 1, 0], end: [12, 0, 0] })
-    expect(stretchHandleNeighbors([0, 0, 0], [12, 0, 0], records.slice(0, 1), 0))
-      .toEqual({ start: [0, 0, 0], end: [12, 0, 0] })
 
     const rest = straightLinePoints([0, 0, 0], [12, 0, 0], 12)
-    const stretchedFirst = pairControlPolyline([0, 0, 0], [12, 0, 0], records, rest)
-    const afterSibling = stretchedFirst.filter((point) => point[0] >= 8.05)
-    afterSibling.forEach((point) => {
-      expect(point[1]).toBeCloseTo(0, 1)
-    })
-    const crest = stretchedFirst.reduce((best, point) => (point[1] > best[1] ? point : best))
-    expect(crest[1]).toBeGreaterThan(0.5)
-
-    const stretchedSecond = pairControlPolyline([0, 0, 0], [12, 0, 0], [
-      { position: [4, 0, 0], style: 'along' },
-      { position: [8, 3, 0], style: 'linear' },
+    const movedFirst = pairControlPolyline([0, 0, 0], [12, 0, 0], records, rest)
+    expect(movedFirst).toEqual([[0, 0, 0], [4, 1, 0], [8, 0, 0], [12, 0, 0]])
+    const triple = pairControlPolyline([0, 0, 0], [12, 0, 0], [
+      { position: [3, 0, 0] },
+      { position: [6, 2, 0] },
+      { position: [9, 0, 0] },
     ], rest)
-    const beforeFirst = stretchedSecond.filter((point) => point[0] <= 3.95)
-    beforeFirst.forEach((point) => {
-      expect(point[1]).toBeCloseTo(0, 1)
-    })
+    expect(triple).toHaveLength(5)
+    expect(triple[2]).toEqual([6, 2, 0])
+    expect(triple[4]).toEqual([12, 0, 0])
   })
 })
