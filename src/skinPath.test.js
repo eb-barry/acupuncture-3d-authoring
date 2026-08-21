@@ -57,14 +57,17 @@ describe('skin path wrapping', () => {
     expect(useConvexChordWrap(-0.8)).toBe(false)
   })
 
-  it('biases a 肩井→淵腋 chord behind the shoulder instead of through the axilla', () => {
+  it('biases a 肩井→淵腋 chord in front of the chest, not behind the scapula', () => {
     const lateral = outwardWrapGuide([0.1, 1.28, 0.01], 0.12, { dropY: 0 })
     expect(lateral[0]).toBeGreaterThan(0.7)
     expect(Math.abs(lateral[2])).toBeLessThan(0.35)
 
     const shoulder = outwardWrapGuide([0.1, 1.28, 0.01], 0.12, { dropY: 0.24 })
     expect(shoulder[0]).toBeGreaterThan(0)
-    expect(shoulder[2]).toBeLessThan(-0.7)
+    expect(shoulder[2]).toBeGreaterThan(0.7)
+
+    const neck = outwardWrapGuide([0.08, 1.45, -0.05], 0.09, { dropY: 0.16 })
+    expect(neck[2]).toBeLessThan(0)
   })
 
   it('detects probes that sit behind an outward surface hit', () => {

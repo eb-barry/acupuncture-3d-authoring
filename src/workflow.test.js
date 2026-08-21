@@ -274,6 +274,13 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(gbHead, [-0.12, 1.57, 0.02], 0.36)).toBe(false)
   })
 
+  it('lets 肩井–淵腋 locators move onto the front of the chest', () => {
+    const shoulder = [[0.12, 1.42, -0.02], [0.15, 1.18, 0.01]]
+    const frontChest = [0.11, 1.28, 0.08]
+    expect(limbGapMaxOffPath(0.13, 0.36)).toBeCloseTo(0.36)
+    expect(isProbeOnSameLimbSegment(shoulder, frontChest, 0.36)).toBe(true)
+  })
+
   it('flags a saw-tooth polyline that crosses the midline or backtracks', () => {
     const guide = straightLinePoints([-0.2, 1, 0.05], [-0.18, 0.7, 0.04], 8)
     const zigzag = []

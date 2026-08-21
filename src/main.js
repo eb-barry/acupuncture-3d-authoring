@@ -56,7 +56,6 @@ import {
   pointAtPolylineT,
   polylineArcLength,
   distanceToPolyline,
-  polylineSlice,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
@@ -1439,20 +1438,14 @@ function concatSkinPieces(pieces) {
   return points.length >= 2 ? points : null
 }
 
-function restSliceBetween(rest, fromPos, toPos) {
-  const t0 = closestTOnPolyline(rest, fromPos)
-  const t1 = closestTOnPolyline(rest, toPos)
-  return polylineSlice(rest, t0, t1, 20)
-}
-
 /** Localizers are extra on-skin points: 穴1 → 點… → 穴2, marched like acupoints. */
 function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
   const original = rest?.length >= 2
     ? vectorsFromArrays(rest)
     : skinSegmentPoints(fromResolved, toResolved)
   if (!records.length) return original
-  const guide = rest?.length >= 2 ? rest : arraysFromSkin(original)
-  const movedOffPath = records.some((record) => distanceToPolyline(guide, record.position) > 0.012)
+  const restGuide = rest?.length >= 2 ? rest : arraysFromSkin(original)
+  const movedOffPath = records.some((record) => distanceToPolyline(restGuide, record.position) > 0.012)
   if (!movedOffPath) return original
   const anchors = [
     fromResolved,
@@ -1467,10 +1460,24 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
     const a = resolvedNode(anchors[index])
     const b = resolvedNode(anchors[index + 1])
     const marched = skinSegmentPoints(a, b)
-    const slice = restSliceBetween(guide, a.position, b.position)
-    const clean = preferCleanSkinPath(marched, null, slice, 1.7)
-    if (!clean || clean.length < 2) return original
-    pieces.push(clean)
+    // Judge each span against its own chord. A front wrap through locators
+    // must not be discarded as "disordered" against a leftover back rest.
+    const spanGuide = [a.position, b.position]
+    const clean = preferCleanSkinPath(marched, null, spanGuide, 1.7)
+    if (clean?.length >= 2) {
+      pieces.push(clean)
+      continue
+    }
+    const wrapped = snapChordSamplesToSkin(a, b)
+    if (wrapped?.length >= 2) {
+      pieces.push(wrapped)
+      continue
+    }
+    if (marched?.length >= 2) {
+      pieces.push(marched)
+      continue
+    }
+    return original
   }
   return concatSkinPieces(pieces) || original
 }
