@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   astarPath,
   buildAdjacency,
+  buildCombinedSurfaceGraph,
   densifyPolyline,
   dist3,
   shortestSurfacePath,
@@ -125,6 +126,65 @@ describe('surface geodesic', () => {
       startSeeds: [{ id: 0, cost: 0 }],
       goalIds: [2],
       goalPoint: positions[2],
+    })).toBeNull()
+  })
+
+  it('walks across welded 16-bit mesh chunks that share a seam', () => {
+    const left = {
+      positions: [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 1, 0],
+      ],
+      triangles: [0, 1, 2, 1, 3, 2],
+    }
+    const right = {
+      positions: [
+        [1, 0, 0],
+        [2, 0, 0],
+        [1, 1, 0],
+        [2, 1, 0],
+      ],
+      triangles: [0, 1, 2, 1, 3, 2],
+    }
+    const combined = buildCombinedSurfaceGraph([left, right])
+    const start = combined.remap[0]
+    const goal = combined.remap[combined.offsets[1] + 3]
+    const path = shortestSurfacePath({
+      adjacency: combined.adjacency,
+      positions: combined.positions,
+      startSeeds: [{ id: start, cost: 0 }],
+      goalIds: [goal],
+      goalPoint: combined.positions[goal],
+    })
+    expect(path).toBeTruthy()
+    expect(path.points[0]).toEqual([0, 0, 0])
+    expect(path.points[path.points.length - 1]).toEqual([2, 1, 0])
+    const length = path.points.reduce((total, point, index) => (
+      index === 0 ? 0 : total + dist3(path.points[index - 1], point)
+    ), 0)
+    expect(length).toBeGreaterThan(2)
+    expect(length).toBeLessThan(3.5)
+  })
+
+  it('does not invent a path between mesh chunks that do not touch', () => {
+    const left = {
+      positions: [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+      triangles: [0, 1, 2],
+    }
+    const right = {
+      positions: [[5, 0, 0], [6, 0, 0], [5, 1, 0]],
+      triangles: [0, 1, 2],
+    }
+    const combined = buildCombinedSurfaceGraph([left, right])
+    const goal = combined.remap[combined.offsets[1]]
+    expect(shortestSurfacePath({
+      adjacency: combined.adjacency,
+      positions: combined.positions,
+      startSeeds: [{ id: combined.remap[0], cost: 0 }],
+      goalIds: [goal],
+      goalPoint: combined.positions[goal],
     })).toBeNull()
   })
 })
