@@ -26,10 +26,13 @@ import {
 } from './frontLevel.js'
 import {
   SKIN_LIFT,
+  isPointBehindSurface,
   marchStandoff,
+  outwardWrapGuide,
   pruneBacktracking,
   slerpUnitVectors,
   surfaceStepLength,
+  useConvexChordWrap,
 } from './skinPath.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
@@ -1199,33 +1202,94 @@ function chordDivesThroughSkin(a, b) {
     sideX,
   })
   if (!snap) return false
-  return mid.distanceTo(new THREE.Vector3(...snap.position)) > 0.016
+  return isPointBehindSurface(toArray(mid), snap.position, snap.normal, 0.016)
+    || mid.distanceTo(new THREE.Vector3(...snap.position)) > 0.016
 }
 
-/** Project a convex interior chord (完骨→本神) onto the same-side skin. */
+function sampleWrapGuide(a, b, chord, t) {
+  const slerp = slerpUnitVectors(a.normal, b.normal, t)
+  const dropY = Math.abs(a.position[1] - b.position[1])
+  const wrap = outwardWrapGuide(toArray(chord), (a.position[0] + b.position[0]) / 2, { dropY })
+  if (dropY <= 0.1) return slerp
+  const mixed = [
+    slerp[0] * 0.4 + wrap[0] * 0.6,
+    slerp[1] * 0.4 + wrap[1] * 0.6,
+    slerp[2] * 0.4 + wrap[2] * 0.6,
+  ]
+  const length = Math.hypot(...mixed) || 1
+  return mixed.map((value) => value / length)
+}
+
+function hitFromWrapProbe(chord, guide, sideX) {
+  const standoff = 0.14
+  const pushed = chord.clone().addScaledVector(new THREE.Vector3(...guide), standoff)
+  return projectFromOutside(pushed, guide, standoff * 1.7)
+    || closestSkinHit(toArray(pushed), { maxDistance: 0.32, sideX, guideNormal: guide })
+    || closestSkinHit(toArray(chord), { maxDistance: 0.34, sideX, guideNormal: guide })
+}
+
+/** Project a convex interior chord onto the outer same-side skin. */
 function snapChordSamplesToSkin(a, b) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   const sideX = (a.position[0] + b.position[0]) / 2
   const dist = Math.max(start.distanceTo(end), 1e-6)
-  const count = Math.max(16, Math.ceil(dist / 0.01) + 10)
+  const count = Math.max(18, Math.ceil(dist / 0.008) + 12)
   const points = []
   const previousRef = { current: null }
   for (let index = 0; index < count; index += 1) {
     const t = index / (count - 1)
     const chord = start.clone().lerp(end, t)
-    const guide = slerpUnitVectors(a.normal, b.normal, t)
-    const standoff = 0.09
-    const pushed = chord.clone().addScaledVector(new THREE.Vector3(...guide), standoff)
-    const hit = projectFromOutside(pushed, guide, standoff * 1.6)
-      || closestSkinHit(toArray(pushed), { maxDistance: 0.3, sideX, guideNormal: guide })
-      || closestSkinHit(toArray(chord), { maxDistance: 0.34, sideX, guideNormal: guide })
+    const guide = sampleWrapGuide(a, b, chord, t)
+    const hit = hitFromWrapProbe(chord, guide, sideX)
     if (!hit) continue
     const lifted = new THREE.Vector3(...hit.position)
       .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
     appendSkinPoint(points, lifted, previousRef)
   }
-  return points.length >= 2 ? points : null
+  return points.length >= 2 ? fillClippedSpans(points, sideX) : null
+}
+
+function wrapWaypointBetween(a, b, sideX) {
+  const mid = a.clone().lerp(b, 0.5)
+  const dropY = Math.abs(a.y - b.y)
+  const guide = outwardWrapGuide(toArray(mid), sideX, { dropY })
+  const hit = hitFromWrapProbe(mid, guide, sideX)
+  if (!hit) return null
+  return new THREE.Vector3(...hit.position)
+    .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+}
+
+/** Insert outer-skin waypoints wherever a span still tunnels through the mesh. */
+function fillClippedSpans(points, sideX, depth = 0) {
+  if (!points || points.length < 2 || depth > 7) return points
+  const out = [points[0]]
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1]
+    const b = points[index]
+    const mid = a.clone().lerp(b, 0.5)
+    const span = a.distanceTo(b)
+    const snap = span > 0.016
+      ? closestSkinHit(toArray(mid), { maxDistance: 0.36, sideX })
+      : null
+    const clipped = snap && isPointBehindSurface(toArray(mid), snap.position, snap.normal)
+    if (clipped) {
+      const waypoint = wrapWaypointBetween(a, b, sideX)
+      if (
+        waypoint
+        && waypoint.distanceTo(a) > 0.008
+        && waypoint.distanceTo(b) > 0.008
+      ) {
+        const left = fillClippedSpans([a, waypoint], sideX, depth + 1)
+        const right = fillClippedSpans([waypoint, b], sideX, depth + 1)
+        for (let cursor = 1; cursor < left.length; cursor += 1) out.push(left[cursor])
+        for (let cursor = 1; cursor < right.length; cursor += 1) out.push(right[cursor])
+        continue
+      }
+    }
+    out.push(b)
+  }
+  return out
 }
 
 /**
@@ -1241,9 +1305,10 @@ function skinSegmentPoints(a, b) {
   const endNormal = new THREE.Vector3(...b.normal).normalize()
   const totalDist = Math.max(pos.distanceTo(end), 1e-6)
   const normalDot = normal.dot(endNormal)
-  // Convex wrap: endpoint normals still agree, but the 3D chord is inside
-  // the head. Snap chord samples to the same-side skin so locators stay put.
-  if (normalDot > 0.18 && chordDivesThroughSkin(a, b)) {
+  const sideX = (a.position[0] + b.position[0]) / 2
+  // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
+  // onto the outer skin so the line does not vanish into the mesh.
+  if (useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -1316,14 +1381,14 @@ function skinSegmentPoints(a, b) {
   }
 
   raw.push(end.clone().addScaledVector(endNormal, SKIN_LIFT))
-  const sideX = (a.position[0] + b.position[0]) / 2
   const pruned = pruneBacktracking(raw.map(toArray), toArray(end))
-  return pruned.map((point) => {
-    const snapped = closestSkinHit(point, { maxDistance: 0.12, sideX, guideNormal: toArray(normal) })
-    if (!snapped) return new THREE.Vector3(...point)
-    return new THREE.Vector3(...snapped.position)
-      .addScaledVector(new THREE.Vector3(...snapped.normal), SKIN_LIFT)
+  const snapped = pruned.map((point) => {
+    const hit = closestSkinHit(point, { maxDistance: 0.12, sideX, guideNormal: toArray(normal) })
+    if (!hit) return new THREE.Vector3(...point)
+    return new THREE.Vector3(...hit.position)
+      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
   })
+  return fillClippedSpans(snapped, sideX)
 }
 
 /** Concatenate on-skin marches; never leave floating air samples. */

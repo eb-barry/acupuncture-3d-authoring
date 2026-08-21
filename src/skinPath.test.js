@@ -6,6 +6,9 @@ import {
   pruneBacktracking,
   slerpUnitVectors,
   surfaceStepLength,
+  useConvexChordWrap,
+  outwardWrapGuide,
+  isPointBehindSurface,
 } from './skinPath.js'
 
 describe('skin path wrapping', () => {
@@ -46,5 +49,27 @@ describe('skin path wrapping', () => {
     expect(cleaned.length).toBeLessThan(points.length)
     expect(cleaned[0]).toEqual(points[0])
     expect(cleaned[cleaned.length - 1]).toEqual(points[points.length - 1])
+  })
+
+  it('wraps perpendicular shoulder chords on the outer skin, not the palm way', () => {
+    expect(useConvexChordWrap(0.5)).toBe(true)
+    expect(useConvexChordWrap(0)).toBe(true)
+    expect(useConvexChordWrap(-0.8)).toBe(false)
+  })
+
+  it('biases a 肩井→淵腋 chord behind the shoulder instead of through the axilla', () => {
+    const lateral = outwardWrapGuide([0.1, 1.28, 0.01], 0.12, { dropY: 0 })
+    expect(lateral[0]).toBeGreaterThan(0.7)
+    expect(Math.abs(lateral[2])).toBeLessThan(0.35)
+
+    const shoulder = outwardWrapGuide([0.1, 1.28, 0.01], 0.12, { dropY: 0.24 })
+    expect(shoulder[0]).toBeGreaterThan(0)
+    expect(shoulder[2]).toBeLessThan(-0.7)
+  })
+
+  it('detects probes that sit behind an outward surface hit', () => {
+    expect(isPointBehindSurface([0, 0, 0], [0.05, 0, 0], [1, 0, 0])).toBe(true)
+    expect(isPointBehindSurface([0.08, 0, 0], [0.05, 0, 0], [1, 0, 0])).toBe(false)
+    expect(isPointBehindSurface([0.051, 0, 0], [0.05, 0, 0], [1, 0, 0])).toBe(false)
   })
 })
