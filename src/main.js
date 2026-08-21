@@ -41,6 +41,9 @@ import {
   densifyPolylineWithNormals,
   dist3,
   shortestSurfacePath,
+  simplifyPolylineWithNormals,
+  snapPolylineToSurface,
+  tautOnSurfacePolyline,
 } from './geodesic.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
@@ -1237,11 +1240,30 @@ function collapseNearPoints(points, normals) {
   return { points: outPoints, normals: outNormals }
 }
 
+function projectGeodesicSample(point, guideNormal) {
+  const hit = closestSkinHit(point, {
+    maxDistance: 0.03,
+    guideNormal,
+  })
+  if (!hit) return null
+  return { position: hit.position, normal: hit.normal }
+}
+
 function liftGeodesicPolyline(points, normals) {
-  const dense = densifyPolylineWithNormals(points, normals, 0.008)
-  return dense.points.map((point, index) => (
+  const simplified = simplifyPolylineWithNormals(points, normals, 0.004)
+  const taut = tautOnSurfacePolyline(simplified.points, simplified.normals, {
+    iterations: 20,
+    strength: 0.7,
+    maxStep: 0.01,
+    corridor: points,
+    corridorRadius: 0.02,
+    project: projectGeodesicSample,
+  })
+  const dense = densifyPolylineWithNormals(taut.points, taut.normals, 0.01)
+  const snapped = snapPolylineToSurface(dense.points, dense.normals, projectGeodesicSample)
+  return snapped.points.map((point, index) => (
     new THREE.Vector3(...point).addScaledVector(
-      new THREE.Vector3(...(dense.normals[index] || [0, 1, 0])),
+      new THREE.Vector3(...(snapped.normals[index] || [0, 1, 0])),
       SKIN_LIFT,
     )
   ))

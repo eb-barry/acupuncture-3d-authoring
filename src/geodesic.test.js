@@ -5,7 +5,11 @@ import {
   buildCombinedSurfaceGraph,
   densifyPolyline,
   dist3,
+  distanceToSegment3,
+  polylineTurningEnergy,
   shortestSurfacePath,
+  simplifyPolylineWithNormals,
+  tautOnSurfacePolyline,
   weldVertices,
 } from './geodesic.js'
 
@@ -186,5 +190,102 @@ describe('surface geodesic', () => {
       goalIds: [goal],
       goalPoint: combined.positions[goal],
     })).toBeNull()
+  })
+})
+
+describe('taut on-surface polyline', () => {
+  const planeProject = (point) => ({ position: [point[0], point[1], 0], normal: [0, 0, 1] })
+
+  it('keeps endpoints and flattens a vertex staircase on a plane', () => {
+    const zigzag = []
+    for (let index = 0; index <= 24; index += 1) {
+      zigzag.push([index * 0.04, index % 2 === 0 ? 0 : 0.035, 0])
+    }
+    const before = polylineTurningEnergy(zigzag)
+    const taut = tautOnSurfacePolyline(zigzag, zigzag.map(() => [0, 0, 1]), {
+      iterations: 18,
+      strength: 0.7,
+      maxStep: 0.02,
+      corridor: zigzag,
+      corridorRadius: 0.04,
+      project: planeProject,
+    })
+    expect(taut.points[0]).toEqual(zigzag[0])
+    expect(taut.points[taut.points.length - 1]).toEqual(zigzag[zigzag.length - 1])
+    expect(polylineTurningEnergy(taut.points)).toBeLessThan(before * 0.05)
+    expect(taut.points.every((point, index) => (
+      index === 0 || index === taut.points.length - 1 || Math.abs(point[2]) < 1e-9
+    ))).toBe(true)
+  })
+
+  it('drops mesh staircases but keeps a cylindrical wrap', () => {
+    const stairs = []
+    for (let index = 0; index <= 20; index += 1) {
+      stairs.push([index * 0.01, index % 2 === 0 ? 0 : 0.006, 0])
+    }
+    const flat = simplifyPolylineWithNormals(stairs, stairs.map(() => [0, 0, 1]), 0.0075)
+    expect(flat.points).toHaveLength(2)
+
+    const wrap = []
+    const wrapNormals = []
+    for (let index = 0; index <= 16; index += 1) {
+      const angle = (index / 16) * (Math.PI / 2)
+      wrap.push([Math.cos(angle), 0, Math.sin(angle)])
+      wrapNormals.push([Math.cos(angle), 0, Math.sin(angle)])
+    }
+    const kept = simplifyPolylineWithNormals(wrap, wrapNormals, 0.0075)
+    expect(kept.points.length).toBeGreaterThan(4)
+    expect(kept.points[0]).toEqual(wrap[0])
+    expect(kept.points[kept.points.length - 1]).toEqual(wrap[wrap.length - 1])
+  })
+
+  it('turns a mesh-scale staircase into a near-straight line', () => {
+    const stairs = []
+    for (let index = 0; index <= 30; index += 1) {
+      stairs.push([index * 0.008, index % 2 === 0 ? 0 : 0.005, 0])
+    }
+    const simplified = simplifyPolylineWithNormals(stairs, stairs.map(() => [0, 0, 1]), 0.004)
+    const taut = tautOnSurfacePolyline(simplified.points, simplified.normals, {
+      iterations: 20,
+      strength: 0.7,
+      maxStep: 0.01,
+      corridor: stairs,
+      corridorRadius: 0.02,
+      project: planeProject,
+    })
+    expect(polylineTurningEnergy(taut.points)).toBeLessThan(0.2)
+    taut.points.forEach((point) => {
+      expect(distanceToSegment3(point, taut.points[0], taut.points[taut.points.length - 1])).toBeLessThan(0.008)
+    })
+  })
+
+  it('stays on a cylinder wrap instead of collapsing through the interior', () => {
+    const path = []
+    for (let index = 0; index <= 20; index += 1) {
+      const angle = (index / 20) * (Math.PI / 2)
+      path.push([Math.cos(angle), index % 2 === 0 ? 0 : 0.04, Math.sin(angle)])
+    }
+    const cylinderProject = (point) => {
+      const radius = Math.hypot(point[0], point[2]) || 1
+      const position = [point[0] / radius, point[1], point[2] / radius]
+      return { position, normal: [position[0], 0, position[2]] }
+    }
+    const taut = tautOnSurfacePolyline(path, path.map((point) => [point[0], 0, point[2]]), {
+      iterations: 16,
+      strength: 0.65,
+      maxStep: 0.04,
+      corridor: path,
+      corridorRadius: 0.06,
+      project: cylinderProject,
+    })
+    taut.points.forEach((point) => {
+      expect(Math.hypot(point[0], point[2])).toBeCloseTo(1, 5)
+    })
+    expect(taut.points[0][0]).toBeCloseTo(1, 5)
+    expect(taut.points[taut.points.length - 1][2]).toBeCloseTo(1, 5)
+    const maxY = Math.max(...taut.points.map((point) => Math.abs(point[1])))
+    expect(maxY).toBeLessThan(0.02)
+    const minRadius = Math.min(...taut.points.map((point) => Math.hypot(point[0], point[2])))
+    expect(minRadius).toBeGreaterThan(0.98)
   })
 })

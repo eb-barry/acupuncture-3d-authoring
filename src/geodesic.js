@@ -263,3 +263,161 @@ export function densifyPolylineWithNormals(points = [], normals = [], maxSeg = 0
   }
   return { points: outPoints, normals: outNormals }
 }
+
+export function distanceToSegment3(point, a, b) {
+  const span = dist3(a, b)
+  if (span < 1e-12) return dist3(point, a)
+  const t = Math.min(1, Math.max(0, (
+    (point[0] - a[0]) * (b[0] - a[0])
+    + (point[1] - a[1]) * (b[1] - a[1])
+    + (point[2] - a[2]) * (b[2] - a[2])
+  ) / (span * span)))
+  return dist3(point, lerp3(a, b, t))
+}
+
+export function distanceToPolyline3(points = [], probe = [0, 0, 0]) {
+  if (!points.length) return Infinity
+  if (points.length === 1) return dist3(probe, points[0])
+  let best = Infinity
+  for (let index = 1; index < points.length; index += 1) {
+    const distance = distanceToSegment3(probe, points[index - 1], points[index])
+    if (distance < best) best = distance
+  }
+  return best
+}
+
+/** Sum of turning (1 − cos θ). A vertex A* staircase scores high; a taut curve scores low. */
+export function polylineTurningEnergy(points = []) {
+  let energy = 0
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const ax = points[index][0] - points[index - 1][0]
+    const ay = points[index][1] - points[index - 1][1]
+    const az = points[index][2] - points[index - 1][2]
+    const bx = points[index + 1][0] - points[index][0]
+    const by = points[index + 1][1] - points[index][1]
+    const bz = points[index + 1][2] - points[index][2]
+    const la = Math.hypot(ax, ay, az)
+    const lb = Math.hypot(bx, by, bz)
+    if (la < 1e-12 || lb < 1e-12) continue
+    const dot = (ax * bx + ay * by + az * bz) / (la * lb)
+    energy += 1 - Math.min(1, Math.max(-1, dot))
+  }
+  return energy
+}
+
+/**
+ * Drop mesh-edge staircases while keeping real wraps (arm, thigh, head).
+ * `epsilon` is the max deviation from a chord, in world units.
+ */
+export function simplifyPolylineWithNormals(points = [], normals = [], epsilon = 0.008) {
+  const fallback = [0, 1, 0]
+  if (points.length <= 2) {
+    return {
+      points: points.map((point) => [...point]),
+      normals: points.map((_, index) => [...(normals[index] || fallback)]),
+    }
+  }
+  const eps = Math.max(Number(epsilon) || 0, 0)
+  const keep = new Uint8Array(points.length)
+  keep[0] = 1
+  keep[points.length - 1] = 1
+  const stack = [[0, points.length - 1]]
+  while (stack.length) {
+    const pair = stack.pop()
+    const lo = pair[0]
+    const hi = pair[1]
+    let worst = -1
+    let worstD = 0
+    for (let index = lo + 1; index < hi; index += 1) {
+      const distance = distanceToSegment3(points[index], points[lo], points[hi])
+      if (distance > worstD) {
+        worstD = distance
+        worst = index
+      }
+    }
+    if (worst >= 0 && worstD > eps) {
+      keep[worst] = 1
+      stack.push([lo, worst], [worst, hi])
+    }
+  }
+  const outPoints = []
+  const outNormals = []
+  for (let index = 0; index < points.length; index += 1) {
+    if (!keep[index]) continue
+    outPoints.push([...points[index]])
+    outNormals.push([...(normals[index] || fallback)])
+  }
+  return { points: outPoints, normals: outNormals }
+}
+export function tautOnSurfacePolyline(points = [], normals = [], {
+  iterations = 16,
+  strength = 0.65,
+  maxStep = 0.01,
+  corridor = null,
+  corridorRadius = 0.02,
+  project = null,
+} = {}) {
+  if (points.length < 3) {
+    return {
+      points: points.map((point) => [...point]),
+      normals: (normals || []).map((normal) => [...(normal || [0, 1, 0])]),
+    }
+  }
+  const fallback = [0, 1, 0]
+  let currentPoints = points.map((point) => [...point])
+  let currentNormals = points.map((_, index) => [...(normals[index] || fallback)])
+  const guide = (corridor && corridor.length >= 2) ? corridor : points
+  const radius = Math.max(Number(corridorRadius) || 0, 0)
+  const stepLimit = Math.max(Number(maxStep) || 0, 1e-5)
+  const blend = Math.min(1, Math.max(0, Number(strength) || 0))
+  const count = Math.max(0, Math.floor(Number(iterations) || 0))
+
+  for (let iter = 0; iter < count; iter += 1) {
+    const forward = iter % 2 === 0
+    const start = forward ? 1 : currentPoints.length - 2
+    const end = forward ? currentPoints.length - 1 : 0
+    const step = forward ? 1 : -1
+    for (let index = start; index !== end; index += step) {
+      const mid = lerp3(currentPoints[index - 1], currentPoints[index + 1], 0.5)
+      let candidate = lerp3(currentPoints[index], mid, blend)
+      const moved = dist3(currentPoints[index], candidate)
+      if (moved > stepLimit) candidate = lerp3(currentPoints[index], candidate, stepLimit / moved)
+      let nextNormal = normalize3(lerp3(currentNormals[index - 1], currentNormals[index + 1], 0.5))
+      if (project) {
+        const hit = project(candidate, currentNormals[index])
+        if (!hit?.position) continue
+        candidate = hit.position
+        if (hit.normal) nextNormal = normalize3(hit.normal)
+      }
+      if (dist3(currentPoints[index], candidate) > stepLimit * 2.4) continue
+      if (radius > 0 && distanceToPolyline3(guide, candidate) > radius) continue
+      currentPoints[index] = candidate
+      currentNormals[index] = nextNormal
+    }
+  }
+
+  return { points: currentPoints, normals: currentNormals }
+}
+
+export function snapPolylineToSurface(points = [], normals = [], project = null) {
+  const fallback = [0, 1, 0]
+  if (!project) {
+    return {
+      points: points.map((point) => [...point]),
+      normals: points.map((_, index) => [...(normals[index] || fallback)]),
+    }
+  }
+  const outPoints = []
+  const outNormals = []
+  for (let index = 0; index < points.length; index += 1) {
+    const hit = project(points[index], normals[index] || fallback)
+    if (hit?.position) {
+      outPoints.push([...hit.position])
+      outNormals.push(normalize3(hit.normal || normals[index] || fallback))
+    } else {
+      outPoints.push([...points[index]])
+      outNormals.push([...(normals[index] || fallback)])
+    }
+  }
+  return { points: outPoints, normals: outNormals }
+}
