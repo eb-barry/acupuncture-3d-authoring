@@ -22,7 +22,7 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
-  pullPolylineThroughLocators,
+  locatorSpans,
   polylineSlice,
   polylineTangent,
   primaryBendStyle,
@@ -352,12 +352,28 @@ describe('meridian authoring workflow', () => {
     expect(triple[4]).toEqual([12, 0, 0])
   })
 
-  it('pulls a rest path through a locator so the line follows the black handle', () => {
-    const rest = straightLinePoints([0, 0, 0], [10, 0, 0], 10)
-    const pulled = pullPolylineThroughLocators(rest, [{ position: [5, 2, 0] }], 0.12)
-    expect(distanceToPolyline(pulled, [5, 2, 0])).toBeLessThan(0.05)
-    expect(pulled[0]).toEqual([0, 0, 0])
-    expect(pulled[pulled.length - 1]).toEqual([10, 0, 0])
-    expect(Math.max(...pulled.map((point) => point[1]))).toBeGreaterThan(1.2)
+  it('keeps unmoved locator spans on the rest path instead of starring extra segments', () => {
+    const rest = straightLinePoints([0, 0, 0], [12, 0, 0], 12)
+    const from = { position: [0, 0, 0], normal: [0, 0, 1] }
+    const to = { position: [12, 0, 0], normal: [0, 0, 1] }
+    const onPath = locatorSpans(rest, from, to, [
+      { position: [3, 0, 0], normal: [0, 0, 1] },
+      { position: [6, 0, 0], normal: [0, 0, 1] },
+      { position: [9, 0, 0], normal: [0, 0, 1] },
+    ])
+    expect(onPath).toHaveLength(4)
+    expect(onPath.every((span) => span.restSlice?.length >= 2)).toBe(true)
+
+    const stretched = locatorSpans(rest, from, to, [
+      { position: [3, 0, 0], normal: [0, 0, 1] },
+      { position: [6, 2, 0], normal: [0, 0, 1] },
+      { position: [9, 0, 0], normal: [0, 0, 1] },
+    ])
+    expect(stretched[0].restSlice).toBeTruthy()
+    expect(stretched[1].restSlice).toBeNull()
+    expect(stretched[2].restSlice).toBeNull()
+    expect(stretched[3].restSlice).toBeTruthy()
+    const kept = [...stretched[0].restSlice, ...stretched[3].restSlice]
+    expect(Math.max(...kept.map((point) => Math.abs(point[1])))).toBeLessThan(0.05)
   })
 })

@@ -223,51 +223,6 @@ function dist3(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
 }
 
-/**
- * Bend a rest-path polyline toward locators so the visible meridian
- * follows dragged black handles without a full geodesic rebuild.
- */
-export function pullPolylineThroughLocators(rest = [], records = [], radius = 0.08) {
-  if (!Array.isArray(rest) || rest.length < 2) {
-    return (records || []).map((record) => [...(record?.position || [0, 0, 0])])
-  }
-  if (!records?.length) return rest.map((point) => [...point])
-  const points = rest.map((point) => [...point])
-  const arc = polylineArcLength(points) || 1
-  const sigma = Math.max(0.025, Number(radius) || 0.08)
-  records.forEach((record) => {
-    const targetPos = record?.position
-    if (!targetPos) return
-    const target = closestTOnPolyline(points, targetPos) * arc
-    let walked = 0
-    for (let index = 0; index < points.length; index += 1) {
-      if (index > 0) walked += dist3(points[index - 1], points[index])
-      const weight = Math.exp(-((walked - target) ** 2) / (2 * sigma * sigma))
-      if (weight < 0.03) continue
-      points[index] = [
-        points[index][0] + (targetPos[0] - points[index][0]) * weight,
-        points[index][1] + (targetPos[1] - points[index][1]) * weight,
-        points[index][2] + (targetPos[2] - points[index][2]) * weight,
-      ]
-    }
-  })
-  records.forEach((record) => {
-    const targetPos = record?.position
-    if (!targetPos) return
-    let best = 0
-    let bestDistance = Infinity
-    points.forEach((point, index) => {
-      const distance = dist3(point, targetPos)
-      if (distance < bestDistance) {
-        bestDistance = distance
-        best = index
-      }
-    })
-    if (best > 0 && best < points.length - 1) points[best] = [...targetPos]
-  })
-  return points
-}
-
 export function polylineArcLength(points = []) {
   let total = 0
   for (let index = 1; index < points.length; index += 1) {
@@ -473,7 +428,58 @@ export function polylineSlice(points = [], t0 = 0, t1 = 1, samples = 16) {
     out.push(pointAtPolylineT(points, lo + (hi - lo) * (index / (count - 1))))
   }
   return startT <= endT ? out : out.reverse()
-} 
+}
+
+/** How far a locator may sit from the rest path and still reuse that slice. */
+export const LOCATOR_ON_REST = 0.012
+
+/**
+ * Split 穴→點…→穴 into spans. Locators still on the rest path keep that
+ * slice; a dragged locator only replaces the two neighbouring spans.
+ * That avoids star-shaped spikes from pulling the whole rest path at once.
+ */
+export function locatorSpans(rest = [], from, to, records = [], onRest = LOCATOR_ON_REST) {
+  const start = {
+    position: [...(from?.position || from || [0, 0, 0])],
+    normal: from?.normal,
+    t: 0,
+    onRest: true,
+  }
+  const end = {
+    position: [...(to?.position || to || [0, 0, 0])],
+    normal: to?.normal,
+    t: 1,
+    onRest: true,
+  }
+  const inner = (records || []).map((record) => {
+    const position = [...(record?.position || [0, 0, 0])]
+    const t = rest.length >= 2 ? closestTOnPolyline(rest, position) : 0.5
+    return {
+      position,
+      normal: record?.normal,
+      t,
+      onRest: rest.length >= 2 && distanceToPolyline(rest, position) <= onRest,
+    }
+  })
+  const chain = [start, ...inner, end]
+  const spans = []
+  for (let index = 0; index < chain.length - 1; index += 1) {
+    const a = chain[index]
+    const b = chain[index + 1]
+    let restSlice = null
+    if (a.onRest && b.onRest && rest.length >= 2) {
+      const slice = polylineSlice(
+        rest,
+        a.t,
+        b.t,
+        Math.max(6, Math.ceil(Math.abs(b.t - a.t) * 32)),
+      )
+      restSlice = slice.length >= 2 ? slice : [a.position, b.position]
+    }
+    spans.push({ from: a, to: b, restSlice })
+  }
+  return spans
+}
 
 export function isDisorderedPolyline(points = [], guide = [], { maxLengthRatio = 1.85 } = {}) {
   if (points.length < 4) return false
