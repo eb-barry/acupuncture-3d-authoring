@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   SKIN_LIFT,
+  isHitOnWrapSide,
+  isPointBehindSurface,
   marchStandoff,
+  outwardWrapGuide,
   pixelWidthToWorldRadius,
   pruneBacktracking,
+  shouldFrontWrap,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
-  outwardWrapGuide,
-  isPointBehindSurface,
 } from './skinPath.js'
 
 describe('skin path wrapping', () => {
@@ -74,5 +76,15 @@ describe('skin path wrapping', () => {
     expect(isPointBehindSurface([0, 0, 0], [0.05, 0, 0], [1, 0, 0])).toBe(true)
     expect(isPointBehindSurface([0.08, 0, 0], [0.05, 0, 0], [1, 0, 0])).toBe(false)
     expect(isPointBehindSurface([0.051, 0, 0], [0.05, 0, 0], [1, 0, 0])).toBe(false)
+  })
+
+  it('keeps 肩井→淵腋 wrap samples on the front, not the scapula', () => {
+    const jianjing = [0.12, 1.42, -0.02]
+    const yuanye = [0.15, 1.18, 0.03]
+    expect(shouldFrontWrap(jianjing, yuanye)).toBe(true)
+    expect(shouldFrontWrap(jianjing, [0.11, 1.28, 0.08])).toBe(true)
+    expect(isHitOnWrapSide([0.13, 1.30, 0.07], jianjing, yuanye)).toBe(true)
+    expect(isHitOnWrapSide([0.13, 1.30, -0.09], jianjing, yuanye)).toBe(false)
+    expect(isHitOnWrapSide([-0.13, 1.30, 0.07], jianjing, yuanye)).toBe(false)
   })
 })

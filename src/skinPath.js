@@ -1,7 +1,7 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
 /** Tiny lift so tubes clear the mesh without looking floaty. */
-export const SKIN_LIFT = 0.0035
+export const SKIN_LIFT = 0.0055
 
 /**
  * Unit-vector slerp. When a and b are nearly opposite (palm ↔ dorsum),
@@ -126,6 +126,33 @@ export function outwardWrapGuide(chordPoint = [0, 0, 0], sideX = 0, { dropY = 0 
   const throughShoulder = Number(dropY) > 0.1 && Math.abs(gx) > 0.09 && gz > -0.035
   if (throughShoulder) gz += 0.55
   return normalize([gx, 0, gz])
+}
+
+/** 肩井→淵腋 and front-chest locators should wrap on the anterior skin. */
+export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
+  const dropY = Math.abs((Number(from[1]) || 0) - (Number(to[1]) || 0))
+  const meanX = ((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2
+  const meanZ = ((Number(from[2]) || 0) + (Number(to[2]) || 0)) / 2
+  const maxZ = Math.max(Number(from[2]) || 0, Number(to[2]) || 0)
+  if (maxZ > 0.04 || meanZ > 0.015) return true
+  return dropY > 0.1 && Math.abs(meanX) > 0.09 && meanZ > -0.035
+}
+
+/**
+ * Reject a wrap sample that jumped onto the scapula / opposite laterality
+ * and would tunnel through the shoulder.
+ */
+export function isHitOnWrapSide(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const hitX = Number(hit[0])
+  const hitZ = Number(hit[2])
+  if (!Number.isFinite(hitX) || !Number.isFinite(hitZ)) return false
+  const side = Math.sign(((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2) || Math.sign(hitX) || 1
+  if (side * hitX < 0 && Math.abs(hitX) > 0.04) return false
+  if (!shouldFrontWrap(from, to)) return true
+  const minZ = Math.min(Number(from[2]) || 0, Number(to[2]) || 0)
+  const meanZ = ((Number(from[2]) || 0) + (Number(to[2]) || 0)) / 2
+  const floor = Math.min(minZ, meanZ) - 0.025
+  return hitZ >= floor
 }
 
 /** True when `probe` sits inside the mesh relative to a surface hit. */
