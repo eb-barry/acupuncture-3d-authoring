@@ -3,12 +3,14 @@ import {
   astarPath,
   buildAdjacency,
   buildCombinedSurfaceGraph,
+  collapseOppositeWallSpikes,
   densifyPolyline,
   dist3,
   distanceToSegment3,
   polylineTurningEnergy,
   shortestSurfacePath,
   simplifyPolylineWithNormals,
+  snapPolylineToSurface,
   tautOnSurfacePolyline,
   weldVertices,
 } from './geodesic.js'
@@ -287,5 +289,54 @@ describe('taut on-surface polyline', () => {
     expect(maxY).toBeLessThan(0.02)
     const minRadius = Math.min(...taut.points.map((point) => Math.hypot(point[0], point[2])))
     expect(minRadius).toBeGreaterThan(0.98)
+  })
+
+  it('drops armpit-wall spikes that flip onto the opposite crease side', () => {
+    const points = [
+      [0.03, 0, 0],
+      [0.03, 0.02, 0],
+      [0, 0.03, 0],
+      [0.03, 0.04, 0],
+      [0.03, 0.06, 0],
+    ]
+    const normals = [
+      [1, 0, 0],
+      [1, 0, 0],
+      [-1, 0, 0],
+      [1, 0, 0],
+      [1, 0, 0],
+    ]
+    const cleaned = collapseOppositeWallSpikes(points, normals)
+    expect(cleaned.points).toHaveLength(4)
+    expect(cleaned.points.some((point) => point[0] === 0)).toBe(false)
+    expect(cleaned.points[0]).toEqual(points[0])
+    expect(cleaned.points[cleaned.points.length - 1]).toEqual(points[points.length - 1])
+  })
+
+  it('does not snap a crease chord onto the opposite wall', () => {
+    const points = [
+      [0.03, 0, 0],
+      [0.008, 0.02, 0],
+      [0.03, 0.04, 0],
+    ]
+    const normals = [
+      [1, 0, 0],
+      [1, 0, 0],
+      [1, 0, 0],
+    ]
+    const twoWalls = (point) => {
+      const wallChest = { position: [0.03, point[1], point[2]], normal: [1, 0, 0] }
+      const wallArm = { position: [0, point[1], point[2]], normal: [-1, 0, 0] }
+      const chestDist = Math.abs(point[0] - 0.03)
+      const armDist = Math.abs(point[0])
+      return armDist < chestDist ? wallArm : wallChest
+    }
+    const snapped = snapPolylineToSurface(points, normals, twoWalls, { minNormalDot: 0.25 })
+    snapped.points.forEach((point) => {
+      expect(point[0]).toBeCloseTo(0.03, 5)
+    })
+    snapped.normals.forEach((normal) => {
+      expect(normal[0]).toBeGreaterThan(0.5)
+    })
   })
 })

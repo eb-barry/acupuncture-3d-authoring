@@ -17,6 +17,16 @@ export function normalize3(v) {
   return [v[0] / length, v[1] / length, v[2] / length]
 }
 
+export function dot3(a, b) {
+  return (a?.[0] || 0) * (b?.[0] || 0)
+    + (a?.[1] || 0) * (b?.[1] || 0)
+    + (a?.[2] || 0) * (b?.[2] || 0)
+}
+
+export function normalsAgree(a = [0, 1, 0], b = [0, 1, 0], minDot = 0.25) {
+  return dot3(normalize3(a), normalize3(b)) >= minDot
+}
+
 /** Map coincident vertices to the first index at that position. */
 export function weldVertices(positions, scale = 1e5) {
   const remap = new Array(positions.length)
@@ -356,6 +366,7 @@ export function tautOnSurfacePolyline(points = [], normals = [], {
   corridor = null,
   corridorRadius = 0.02,
   project = null,
+  minNormalDot = 0.25,
 } = {}) {
   if (points.length < 3) {
     return {
@@ -388,6 +399,7 @@ export function tautOnSurfacePolyline(points = [], normals = [], {
         if (!hit?.position) continue
         candidate = hit.position
         if (hit.normal) nextNormal = normalize3(hit.normal)
+        if (!normalsAgree(currentNormals[index], nextNormal, minNormalDot)) continue
       }
       if (dist3(currentPoints[index], candidate) > stepLimit * 2.4) continue
       if (radius > 0 && distanceToPolyline3(guide, candidate) > radius) continue
@@ -399,7 +411,40 @@ export function tautOnSurfacePolyline(points = [], normals = [], {
   return { points: currentPoints, normals: currentNormals }
 }
 
-export function snapPolylineToSurface(points = [], normals = [], project = null) {
+/**
+ * Drop samples that jumped onto the opposite wall of a crease (armpit, groin).
+ * Endpoints stay put so 肩井 / 輒筋 keep their authored skin.
+ */
+export function collapseOppositeWallSpikes(points = [], normals = [], minDot = 0.2) {
+  const fallback = [0, 1, 0]
+  if (points.length < 4) {
+    return {
+      points: points.map((point) => [...point]),
+      normals: points.map((_, index) => [...(normals[index] || fallback)]),
+    }
+  }
+  const outPoints = [[...points[0]]]
+  const outNormals = [[...(normals[0] || fallback)]]
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const prev = outNormals[outNormals.length - 1]
+    const current = normals[index] || fallback
+    const next = normals[index + 1] || fallback
+    const flipped = !normalsAgree(current, prev, minDot)
+    const nextAgrees = normalsAgree(next, prev, minDot)
+    if (flipped && nextAgrees) continue
+    outPoints.push([...points[index]])
+    outNormals.push([...current])
+  }
+  outPoints.push([...points[points.length - 1]])
+  outNormals.push([...(normals[points.length - 1] || fallback)])
+  return { points: outPoints, normals: outNormals }
+}
+
+export function snapPolylineToSurface(points = [], normals = [], project = null, {
+  corridor = null,
+  corridorRadius = 0,
+  minNormalDot = 0.25,
+} = {}) {
   const fallback = [0, 1, 0]
   if (!project) {
     return {
@@ -407,17 +452,42 @@ export function snapPolylineToSurface(points = [], normals = [], project = null)
       normals: points.map((_, index) => [...(normals[index] || fallback)]),
     }
   }
+  const guide = (corridor && corridor.length >= 2) ? corridor : null
+  const radius = Math.max(Number(corridorRadius) || 0, 0)
   const outPoints = []
   const outNormals = []
   for (let index = 0; index < points.length; index += 1) {
-    const hit = project(points[index], normals[index] || fallback)
-    if (hit?.position) {
+    const guideNormal = normals[index] || outNormals[outNormals.length - 1] || fallback
+    const hit = project(points[index], guideNormal)
+    const agreed = hit?.position && normalsAgree(guideNormal, hit.normal || guideNormal, minNormalDot)
+    const inCorridor = !guide || !agreed || radius <= 0
+      || distanceToPolyline3(guide, hit.position) <= radius
+    if (agreed && inCorridor) {
       outPoints.push([...hit.position])
-      outNormals.push(normalize3(hit.normal || normals[index] || fallback))
+      outNormals.push(normalize3(hit.normal || guideNormal))
+    } else if (outPoints.length) {
+      outPoints.push([...outPoints[outPoints.length - 1]])
+      outNormals.push([...outNormals[outNormals.length - 1]])
     } else {
       outPoints.push([...points[index]])
-      outNormals.push([...(normals[index] || fallback)])
+      outNormals.push([...guideNormal])
     }
+  }
+  return collapseNearDuplicates(outPoints, outNormals)
+}
+
+function collapseNearDuplicates(points, normals) {
+  if (points.length < 2) return { points, normals }
+  const outPoints = [points[0]]
+  const outNormals = [normals[0]]
+  for (let index = 1; index < points.length; index += 1) {
+    if (dist3(points[index], outPoints[outPoints.length - 1]) < 1e-6) continue
+    outPoints.push(points[index])
+    outNormals.push(normals[index])
+  }
+  if (dist3(outPoints[outPoints.length - 1], points[points.length - 1]) > 1e-6) {
+    outPoints.push(points[points.length - 1])
+    outNormals.push(normals[normals.length - 1])
   }
   return { points: outPoints, normals: outNormals }
 }
