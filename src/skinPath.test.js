@@ -96,6 +96,7 @@ describe('skin path wrapping', () => {
     const ki10 = [-0.08, 0.49, -0.08]
     const ki11 = [-0.03, 0.90, 0.08]
     expect(isShoulderAxillaWrap(jianjing, yuanye)).toBe(true)
+    expect(isShoulderAxillaWrap(jianjing, [0.13, 1.10, 0.04])).toBe(true)
     expect(isShoulderAxillaWrap(ki10, ki11)).toBe(false)
   })
 

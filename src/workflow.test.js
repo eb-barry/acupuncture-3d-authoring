@@ -22,6 +22,7 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  pullPolylineThroughLocators,
   polylineSlice,
   polylineTangent,
   primaryBendStyle,
@@ -349,5 +350,14 @@ describe('meridian authoring workflow', () => {
     expect(triple).toHaveLength(5)
     expect(triple[2]).toEqual([6, 2, 0])
     expect(triple[4]).toEqual([12, 0, 0])
+  })
+
+  it('pulls a rest path through a locator so the line follows the black handle', () => {
+    const rest = straightLinePoints([0, 0, 0], [10, 0, 0], 10)
+    const pulled = pullPolylineThroughLocators(rest, [{ position: [5, 2, 0] }], 0.12)
+    expect(distanceToPolyline(pulled, [5, 2, 0])).toBeLessThan(0.05)
+    expect(pulled[0]).toEqual([0, 0, 0])
+    expect(pulled[pulled.length - 1]).toEqual([10, 0, 0])
+    expect(Math.max(...pulled.map((point) => point[1]))).toBeGreaterThan(1.2)
   })
 })
