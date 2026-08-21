@@ -71,8 +71,7 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
-  pullPolylineThroughLocators,
-  distanceToPolyline,
+  locatorSpans,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
@@ -1489,8 +1488,27 @@ function snapChordSamplesToSkin(a, b) {
   }
   appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), SKIN_LIFT), previousRef)
   if (points.length < 2) return null
-  if (isShoulderAxillaWrap(from, to)) return simplifyLiftedPolyline(points)
-  return fillClippedSpans(points, sideX, from, to)
+  const filled = fillClippedSpans(points, sideX, from, to)
+  const outer = keepOuterSkinPolyline(filled, sideX, from, to)
+  if (!outer || outer.length < 2) return filled
+  return isShoulderAxillaWrap(from, to) ? simplifyLiftedPolyline(outer) : outer
+}
+
+function keepOuterSkinPolyline(points, sideX, from, to) {
+  if (!points || points.length < 2) return points
+  const out = [points[0]]
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const point = points[index]
+    const hit = closestSkinHit(toArray(point), { maxDistance: 0.14, sideX })
+    if (!hit || !isHitOnWrapSide(hit.position, from, to)) continue
+    const lifted = new THREE.Vector3(...hit.position)
+      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+    if (out[out.length - 1].distanceToSquared(lifted) > 1e-8) out.push(lifted)
+  }
+  const last = points[points.length - 1]
+  if (out[out.length - 1].distanceToSquared(last) > 1e-8) out.push(last)
+  else out[out.length - 1] = last
+  return out.length >= 2 ? out : points
 }
 
 function wrapWaypointBetween(a, b, sideX, wrapFrom, wrapTo) {
@@ -1566,7 +1584,7 @@ function simplifyLiftedPolyline(points) {
  * Opposite-normal segments (太淵→魚際→少商) orbit the limb instead of
  * cutting through / spawning multiple floating chords.
  */
-function skinSegmentPoints(a, b, { allowGeodesic = true } = {}) {
+function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   let normal = new THREE.Vector3(...a.normal).normalize()
@@ -1574,13 +1592,14 @@ function skinSegmentPoints(a, b, { allowGeodesic = true } = {}) {
   const normalDot = normal.dot(endNormal)
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
-  const wrapFirst = isShoulderAxillaWrap(a.position, b.position)
+  const wrapFirst = preferWrap
+    || isShoulderAxillaWrap(a.position, b.position)
     || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
   if (wrapFirst) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !isShoulderAxillaWrap(a.position, b.position)) {
+  if (allowGeodesic && !preferWrap && !isShoulderAxillaWrap(a.position, b.position)) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesicIsStable(geodesic)) return geodesic
   }
@@ -1727,46 +1746,36 @@ function concatSkinPieces(pieces) {
 }
 
 /** Localizers are extra on-skin points: 穴1 → 點… → 穴2, marched like acupoints. */
-function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, { preview = false } = {}) {
+function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
+  preview = false,
+  preferWrap = false,
+} = {}) {
   const restGuide = rest?.length >= 2 ? rest : null
-  if (!records.length) {
-    return restGuide
-      ? vectorsFromArrays(restGuide)
-      : skinSegmentPoints(fromResolved, toResolved)
-  }
   const restArrays = restGuide ? arraysFromSkin(restGuide) : []
-  const movedOffPath = records.some((record) => (
-    !restArrays.length || distanceToPolyline(restArrays, record.position) > 0.004
-  ))
-  if (preview && restArrays.length >= 2) {
-    const lifted = records.map((record) => ({
-      position: toArray(offsetPosition(record, SKIN_LIFT)),
-    }))
-    return vectorsFromArrays(pullPolylineThroughLocators(restArrays, lifted, 0.09))
+  const drawSpan = (fromNode, toNode) => skinSegmentPoints(fromNode, toNode, {
+    allowGeodesic: !preview && !preferWrap,
+    preferWrap,
+  })
+  if (!records.length) {
+    return restArrays.length >= 2
+      ? vectorsFromArrays(restArrays)
+      : drawSpan(fromResolved, toResolved)
   }
-  const restLooksClean = restArrays.length >= 2
-    && !isDisorderedPolyline(restArrays, [fromResolved.position, toResolved.position])
-  if (!movedOffPath && restLooksClean) return vectorsFromArrays(restGuide)
-  const anchors = [
-    fromResolved,
-    ...records.map((record) => ({
-      position: record.position,
-      normal: record.normal,
-    })),
-    toResolved,
-  ]
-  const joined = joinOnSkin(anchors)
-  const joinedArrays = joined ? arraysFromSkin(joined) : []
-  if (joinedArrays.length >= 2 && !isDisorderedPolyline(joinedArrays, restArrays.length ? restArrays : [fromResolved.position, toResolved.position])) {
-    return joined
-  }
-  if (restArrays.length >= 2) {
-    const lifted = records.map((record) => ({
-      position: toArray(offsetPosition(record, SKIN_LIFT)),
-    }))
-    return vectorsFromArrays(pullPolylineThroughLocators(restArrays, lifted, 0.09))
-  }
-  return joined || skinSegmentPoints(fromResolved, toResolved)
+  const spans = locatorSpans(restArrays, fromResolved, toResolved, records)
+  const pieces = spans.map((span) => {
+    if (span.restSlice?.length >= 2) return vectorsFromArrays(span.restSlice)
+    return drawSpan(
+      {
+        position: span.from.position,
+        normal: span.from.normal || fromResolved.normal,
+      },
+      {
+        position: span.to.position,
+        normal: span.to.normal || toResolved.normal,
+      },
+    )
+  })
+  return concatSkinPieces(pieces) || drawSpan(fromResolved, toResolved)
 }
 
 /** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
@@ -1800,7 +1809,10 @@ function skinCurvePoints(route, override = null) {
     const records = isOverride && override.records
       ? override.records
       : pairHandleRecords(fromNode, toNode, handles, count, rest)
-    const segment = pairDrawnSkinPoints(a, b, records, rest, { preview: Boolean(isOverride && override.preview) })
+    const segment = pairDrawnSkinPoints(a, b, records, rest, {
+      preview: Boolean(isOverride && override.preview),
+      preferWrap: isShoulderAxillaWrap(a.position, b.position),
+    })
     const start = points.length === 0 ? 0 : 1
     for (let i = start; i < segment.length; i += 1) {
       appendSkinPoint(points, segment[i], previousRef)
