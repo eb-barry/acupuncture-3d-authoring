@@ -371,10 +371,10 @@ export const HANDLE_STRETCH_PROJECT_RADIUS = 0.22
 export const HANDLE_SKIN_SNAP_RADIUS = 0.4
 /**
  * Groin/thigh gap cap only applies when the rest path is clearly a limb.
- * Head/torso paths (完骨→本神) sit closer to x=0, so a 5cm cap would block
- * dragging onto the actual temple skin from a through-skull chord.
+ * Head/torso/shoulder paths sit closer to x=0, so a 5cm cap would block
+ * dragging onto the chest (肩井→淵腋) or temple from a through-body chord.
  */
-export const LIMB_GAP_MIN_ABS_X = 0.12
+export const LIMB_GAP_MIN_ABS_X = 0.16
 /** @deprecated use HANDLE_STRETCH_MAX_OFF_PATH */
 export const HANDLE_DRAG_MAX_OFF_PATH = HANDLE_STRETCH_MAX_OFF_PATH
 export const HANDLE_PROJECT_RADIUS = HANDLE_STRETCH_PROJECT_RADIUS

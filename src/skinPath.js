@@ -110,8 +110,8 @@ export function useConvexChordWrap(normalDot) {
 
 /**
  * Push an interior chord sample toward the outer silhouette.
- * Shoulder drops also bias posterior so the line rides the trapezius
- * instead of diving through the axilla.
+ * 肩井→淵腋 drops through the shoulder mass; bias anterior (+Z) so the
+ * line rides the front of the chest instead of the back of the scapula.
  */
 export function outwardWrapGuide(chordPoint = [0, 0, 0], sideX = 0, { dropY = 0 } = {}) {
   const x = Number(chordPoint[0])
@@ -122,7 +122,9 @@ export function outwardWrapGuide(chordPoint = [0, 0, 0], sideX = 0, { dropY = 0 
   let gx = Number.isFinite(x) ? x : lateral * 0.08
   let gz = Number.isFinite(z) ? z : 0
   if (Math.hypot(gx, gz) < 1e-5) gx = lateral
-  if (Number(dropY) > 0.1) gz -= 0.55
+  // Through-shoulder (lateral, not already behind the neck): go in front.
+  const throughShoulder = Number(dropY) > 0.1 && Math.abs(gx) > 0.09 && gz > -0.035
+  if (throughShoulder) gz += 0.55
   return normalize([gx, 0, gz])
 }
 
