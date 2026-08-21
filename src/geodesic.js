@@ -54,6 +54,40 @@ export function buildAdjacency(positions, triangles, remap) {
   return adj
 }
 
+/**
+ * Concatenate triangle soups and weld coincident vertices.
+ * Male GLBs are split at the 16-bit index limit (~65k verts per mesh);
+ * welding the shared seams makes a single walkable skin graph.
+ */
+export function buildCombinedSurfaceGraph(chunks = []) {
+  const positions = []
+  const normals = []
+  const triangles = []
+  const offsets = []
+  for (const chunk of chunks) {
+    offsets.push(positions.length)
+    const base = positions.length
+    const chunkPositions = chunk.positions || []
+    const chunkNormals = chunk.normals || []
+    for (let index = 0; index < chunkPositions.length; index += 1) {
+      positions.push(chunkPositions[index])
+      normals.push(chunkNormals[index] || [0, 1, 0])
+    }
+    const chunkTriangles = chunk.triangles || []
+    for (let index = 0; index < chunkTriangles.length; index += 1) {
+      triangles.push(base + chunkTriangles[index])
+    }
+  }
+  const remap = weldVertices(positions)
+  return {
+    positions,
+    normals,
+    remap,
+    offsets,
+    adjacency: buildAdjacency(positions, triangles, remap),
+  }
+}
+
 class MinHeap {
   constructor() {
     this.items = []

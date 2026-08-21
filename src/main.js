@@ -37,11 +37,10 @@ import {
   useConvexChordWrap,
 } from './skinPath.js'
 import {
-  buildAdjacency,
+  buildCombinedSurfaceGraph,
   densifyPolylineWithNormals,
   dist3,
   shortestSurfacePath,
-  weldVertices,
 } from './geodesic.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
@@ -290,7 +289,7 @@ let initialCamPos = perspectiveCamera.position.clone()
 let initialTarget = controls.target.clone()
 
 let modelMeshes = []
-let surfaceGraph = []
+let surfaceGraph = null
 const geodesicCache = new Map()
 let markerVisuals = []
 let routeVisuals = []
@@ -1015,7 +1014,7 @@ function closestSkinHit(position, {
   const pool = sameSide.length ? sameSide : any
   if (!pool.length) return null
   pool.sort((a, b) => a.distance - b.distance)
-  return { position: pool[0].position, normal: pool[0].normal }
+  return pool[0]
 }
 
 function projectHandleOnSkin(planePoint, guideNormal, radius, sideX = null) {
@@ -1250,10 +1249,12 @@ function liftGeodesicPolyline(points, normals) {
 
 function rebuildSurfaceGraph() {
   geodesicCache.clear()
-  surfaceGraph = modelMeshes.map((mesh) => {
+  const chunks = []
+  const meshOffsets = new Map()
+  for (const mesh of modelMeshes) {
     const geometry = mesh.geometry
     const positionAttr = geometry?.getAttribute('position')
-    if (!positionAttr) return null
+    if (!positionAttr) continue
     mesh.updateMatrixWorld(true)
     const normalAttr = geometry.getAttribute('normal')
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)
@@ -1280,20 +1281,27 @@ function rebuildSurfaceGraph() {
     } else {
       for (let index = 0; index < positionAttr.count; index += 1) triangles.push(index)
     }
-    const remap = weldVertices(positions)
-    return {
-      mesh,
-      positions,
-      normals,
-      remap,
-      adjacency: buildAdjacency(positions, triangles, remap),
-    }
-  }).filter(Boolean)
+    meshOffsets.set(mesh, chunks.reduce((sum, chunk) => sum + chunk.positions.length, 0))
+    chunks.push({ positions, normals, triangles })
+  }
+  if (!chunks.length) {
+    surfaceGraph = null
+    return
+  }
+  surfaceGraph = { ...buildCombinedSurfaceGraph(chunks), meshOffsets }
+}
+
+function globalTriangleCorners(mesh, faceIndex) {
+  const offset = surfaceGraph?.meshOffsets?.get(mesh)
+  if (offset == null) return null
+  const local = triangleCornerIds(mesh.geometry, faceIndex)
+  if (!local) return null
+  return local.map((id) => offset + id)
 }
 
 /** Shortest path on the loaded mesh; every sample lies on a triangle or edge. */
 function geodesicOnSkin(a, b) {
-  if (!surfaceGraph.length) return null
+  if (!surfaceGraph?.adjacency) return null
   const start = a?.position
   const end = b?.position
   if (!start || !end) return null
@@ -1306,14 +1314,12 @@ function geodesicOnSkin(a, b) {
 
   const hitA = closestSkinHit(start, { maxDistance: 0.12, guideNormal: a.normal })
   const hitB = closestSkinHit(end, { maxDistance: 0.12, guideNormal: b.normal })
-  if (!hitA?.mesh || hitA.mesh !== hitB?.mesh) return null
-  const graph = surfaceGraph.find((item) => item.mesh === hitA.mesh)
-  if (!graph) return null
-  const cornersA = triangleCornerIds(hitA.mesh.geometry, hitA.faceIndex)
-  const cornersB = triangleCornerIds(hitB.mesh.geometry, hitB.faceIndex)
+  if (!hitA?.mesh || !hitB?.mesh) return null
+  const cornersA = globalTriangleCorners(hitA.mesh, hitA.faceIndex)
+  const cornersB = globalTriangleCorners(hitB.mesh, hitB.faceIndex)
   if (!cornersA || !cornersB) return null
 
-  const sameFace = hitA.faceIndex === hitB.faceIndex
+  const sameFace = hitA.mesh === hitB.mesh && hitA.faceIndex === hitB.faceIndex
   let points
   let normals
   if (sameFace) {
@@ -1321,20 +1327,21 @@ function geodesicOnSkin(a, b) {
     normals = [hitA.normal, hitB.normal]
   } else {
     const startSeeds = cornersA.map((id) => {
-      const canonical = graph.remap[id]
-      return { id: canonical, cost: dist3(graph.positions[canonical], hitA.position) }
+      const canonical = surfaceGraph.remap[id]
+      return { id: canonical, cost: dist3(surfaceGraph.positions[canonical], hitA.position) }
     })
-    const goalIds = [...new Set(cornersB.map((id) => graph.remap[id]))]
+    const goalIds = [...new Set(cornersB.map((id) => surfaceGraph.remap[id]))]
     const found = shortestSurfacePath({
-      adjacency: graph.adjacency,
-      positions: graph.positions,
+      adjacency: surfaceGraph.adjacency,
+      positions: surfaceGraph.positions,
       startSeeds,
       goalIds,
       goalPoint: hitB.position,
+      maxExplored: 300000,
     })
     if (!found?.ids?.length) return null
-    points = [hitA.position, ...found.ids.map((id) => graph.positions[id]), hitB.position]
-    normals = [hitA.normal, ...found.ids.map((id) => graph.normals[id] || hitA.normal), hitB.normal]
+    points = [hitA.position, ...found.ids.map((id) => surfaceGraph.positions[id]), hitB.position]
+    normals = [hitA.normal, ...found.ids.map((id) => surfaceGraph.normals[id] || hitA.normal), hitB.normal]
   }
 
   const collapsed = collapseNearPoints(points, normals)
@@ -2705,7 +2712,7 @@ function applyModel(gltf, name, hash = null) {
 
   modelGroup.clear()
   modelMeshes = []
-  surfaceGraph = []
+  surfaceGraph = null
   geodesicCache.clear()
   modelGroup.add(root)
 
