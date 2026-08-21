@@ -1,5 +1,5 @@
 import Ajv from 'ajv'
-import { keepPairHandles } from './workflow.js'
+import { keepPairHandles, HANDLE_STYLES } from './workflow.js'
 
 export const BODY_MODELS = {
   male: {
@@ -172,17 +172,38 @@ function migrateRouteNodes(nodes = []) {
   const acupointIndexes = list
     .map((node, index) => (node.type === 'acupoint' ? index : -1))
     .filter((index) => index >= 0)
-  if (acupointIndexes.length < 2) return list.filter((node) => node.type === 'acupoint')
+  if (acupointIndexes.length < 2) return list.filter((node) => node.type === 'acupoint').map(sanitizeRouteNode)
   const result = []
   for (let pair = 0; pair < acupointIndexes.length; pair += 1) {
-    result.push({ ...list[acupointIndexes[pair]] })
+    result.push(sanitizeRouteNode(list[acupointIndexes[pair]]))
     if (pair >= acupointIndexes.length - 1) break
     const fromIndex = acupointIndexes[pair]
     const toIndex = acupointIndexes[pair + 1]
     const controls = list.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')
-    result.push(...keepPairHandles(controls))
+    result.push(...keepPairHandles(controls).map(sanitizeRouteNode))
   }
   return result
+}
+
+/** Drop hit metadata (mesh, distance, faceIndex) that the schema forbids. */
+export function sanitizeRouteNode(node = {}) {
+  const type = node?.type === 'acupoint' ? 'acupoint' : 'control'
+  const sanitized = {
+    type,
+    pointId: type === 'acupoint' && node.pointId ? String(node.pointId) : null,
+    position: [
+      Number(node.position?.[0]) || 0,
+      Number(node.position?.[1]) || 0,
+      Number(node.position?.[2]) || 0,
+    ],
+    normal: [
+      Number(node.normal?.[0]) || 0,
+      Number(node.normal?.[1]) || 0,
+      Number(node.normal?.[2]) || 0,
+    ],
+  }
+  if (HANDLE_STYLES.includes(node.style)) sanitized.style = node.style
+  return sanitized
 }
 
 export function migrateDocument(value) {

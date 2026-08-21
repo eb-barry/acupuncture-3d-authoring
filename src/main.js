@@ -16,6 +16,7 @@ import {
   exportFileName,
   inferBodyModel,
   parseDocument,
+  sanitizeRouteNode,
   validateDocument,
 } from './document.js'
 import { History } from './history.js'
@@ -1240,10 +1241,23 @@ function makeMirroredRouteNode(node) {
   if (node.type === 'acupoint' && node.pointId) {
     const mirrorId = pairedPointId(node.pointId)
     const point = mirrorId && getPoint(mirrorId)
-    if (point) return { type: 'acupoint', pointId: mirrorId, position: point.position, normal: point.normal }
+    if (point) {
+      return sanitizeRouteNode({
+        type: 'acupoint',
+        pointId: mirrorId,
+        position: point.position,
+        normal: point.normal,
+      })
+    }
   }
   const mirrored = mirroredNode(node)
-  return { type: 'control', pointId: null, ...mirrored }
+  return sanitizeRouteNode({
+    type: 'control',
+    pointId: null,
+    position: mirrored.position,
+    normal: mirrored.normal,
+    style: node.style,
+  })
 }
 
 function appendSkinPoint(points, point, previousRef) {
@@ -2630,6 +2644,7 @@ function normalizeFixedStyles(documentState) {
       ...route,
       width: FIXED_LINE_WIDTH,
       color: meridianLineColor(route.meridianId),
+      nodes: (route.nodes || []).map(sanitizeRouteNode),
     })),
     acupoints: (documentState.acupoints || []).map((point) => ({
       ...point,
@@ -2720,10 +2735,10 @@ function writePairHandles(routeId, fromPointId, toPointId, controls) {
   }))
   const meridians = state.meridians.map((item) => {
     if (item.id === route.id) {
-      return { ...item, nodes: replacePairHandles(item.nodes, fromPointId, toPointId, controls) }
+      return { ...item, nodes: replacePairHandles(item.nodes, fromPointId, toPointId, controls.map(sanitizeRouteNode)) }
     }
     if (pairRoute && item.id === pairRoute.id && mirrorFrom && mirrorTo) {
-      return { ...item, nodes: replacePairHandles(item.nodes, mirrorFrom, mirrorTo, mirrored) }
+      return { ...item, nodes: replacePairHandles(item.nodes, mirrorFrom, mirrorTo, mirrored.map(sanitizeRouteNode)) }
     }
     return item
   })
