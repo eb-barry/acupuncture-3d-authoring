@@ -8,7 +8,7 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
-import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh'
+import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, getTriangleHitPointInfo } from 'three-mesh-bvh'
 import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
 import {
   BODY_MODELS,
@@ -33,6 +33,7 @@ import {
 } from './skinPath.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
+  HANDLE_SKIN_SNAP_RADIUS,
   HANDLE_STRETCH_MAX_OFF_PATH,
   HANDLE_STRETCH_PROJECT_RADIUS,
   HANDLE_PICK_RADIUS_PX,
@@ -932,8 +933,79 @@ function cameraPlanePoint(event, anchor) {
   return raycaster.ray.intersectPlane(plane, target) ? target : null
 }
 
-function projectHandleOnSkin(planePoint, guideNormal, radius) {
-  return projectNearSurface(toArray(planePoint), guideNormal, radius)
+function pairSideX(fromNode, toNode) {
+  const a = resolvedNode(fromNode).position?.[0]
+  const b = resolvedNode(toNode).position?.[0]
+  if (!Number.isFinite(a) && !Number.isFinite(b)) return null
+  return ((Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0)) / 2
+}
+
+function restSideX(rest = []) {
+  if (!rest.length) return null
+  const sum = rest.reduce((total, point) => total + (Number(point?.[0]) || 0), 0)
+  return sum / rest.length
+}
+
+/**
+ * Snap a 3D probe onto the nearest mesh triangle, preferring the same
+ * sagittal side so head locators do not jump to the far skull.
+ */
+function closestSkinHit(position, {
+  maxDistance = HANDLE_SKIN_SNAP_RADIUS,
+  sideX = null,
+  guideNormal = null,
+} = {}) {
+  if (!modelMeshes.length || !position) return null
+  const target = new THREE.Vector3(...position)
+  const sameSide = []
+  const any = []
+  for (const mesh of modelMeshes) {
+    const bvh = mesh.geometry?.boundsTree
+    if (!bvh) continue
+    const local = mesh.worldToLocal(target.clone())
+    const info = bvh.closestPointToPoint(local, { point: new THREE.Vector3() }, 0, maxDistance)
+    if (!info?.point) continue
+    const worldPoint = mesh.localToWorld(info.point.clone())
+    const distance = worldPoint.distanceTo(target)
+    if (distance > maxDistance) continue
+    let hitNormal = new THREE.Vector3(0, 1, 0)
+    const fromQuery = worldPoint.clone().sub(target)
+    if (fromQuery.lengthSq() > 1e-10) hitNormal.copy(fromQuery).normalize()
+    if (Number.isInteger(info.faceIndex) && mesh.geometry?.getIndex()) {
+      try {
+        const tri = getTriangleHitPointInfo(info.point, mesh.geometry, info.faceIndex)
+        if (tri?.face?.normal) {
+          hitNormal.copy(tri.face.normal)
+            .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld))
+            .normalize()
+        }
+      } catch {
+        // Keep the query→surface estimate when the triangle lookup fails.
+      }
+    }
+    if (guideNormal) {
+      const guide = new THREE.Vector3(...guideNormal)
+      if (guide.lengthSq() > 1e-10 && hitNormal.dot(guide) < 0) hitNormal.negate()
+    }
+    const hit = { position: toArray(worldPoint), normal: toArray(hitNormal), distance }
+    any.push(hit)
+    if (sideX == null || Math.abs(sideX) <= 0.03 || hit.position[0] * sideX >= 0) {
+      sameSide.push(hit)
+    }
+  }
+  const pool = sameSide.length ? sameSide : any
+  if (!pool.length) return null
+  pool.sort((a, b) => a.distance - b.distance)
+  return { position: pool[0].position, normal: pool[0].normal }
+}
+
+function projectHandleOnSkin(planePoint, guideNormal, radius, sideX = null) {
+  return closestSkinHit(toArray(planePoint), {
+    maxDistance: radius,
+    sideX,
+    guideNormal,
+  })
+    || projectNearSurface(toArray(planePoint), guideNormal, radius)
     || projectNearSurface(toArray(planePoint), guideNormal, radius * 1.6)
 }
 
@@ -942,13 +1014,27 @@ function handleSkinHit(event, drag) {
   const rest = drag.rest
   const anchor = drag.anchor
   if (!rest?.length || !anchor) return null
+  const sideX = restSideX(rest)
   const accept = (hit) => hit && isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)
   const direct = surfaceHit(event)
   if (accept(direct)) return direct
   const planePoint = cameraPlanePoint(event, new THREE.Vector3(...anchor.position))
   if (planePoint) {
-    const projected = projectHandleOnSkin(planePoint, anchor.normal, HANDLE_STRETCH_PROJECT_RADIUS)
+    const projected = projectHandleOnSkin(
+      planePoint,
+      anchor.normal,
+      Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7),
+      sideX,
+    )
     if (accept(projected)) return projected
+  }
+  if (direct) {
+    const snapped = closestSkinHit(direct.position, {
+      maxDistance: HANDLE_SKIN_SNAP_RADIUS,
+      sideX,
+      guideNormal: direct.normal,
+    })
+    if (accept(snapped)) return snapped
   }
   return null
 }
@@ -983,6 +1069,14 @@ function handleDragAnchor(data) {
 }
 
 function projectNearSurface(position, normal, maxDistance = Infinity) {
+  const radius = Number.isFinite(maxDistance) ? maxDistance : HANDLE_SKIN_SNAP_RADIUS
+  const closest = closestSkinHit(position, {
+    maxDistance: radius,
+    sideX: position?.[0],
+    guideNormal: normal,
+  })
+  if (closest) return closest
+
   const target = new THREE.Vector3(...position)
   const primary = new THREE.Vector3(...normal)
   if (primary.lengthSq() < 1e-10) primary.set(0, 0, 1)
@@ -1095,6 +1189,45 @@ function projectFromOutside(chordPoint, guide, standoff) {
   return { position: toArray(hit.point), normal: toArray(hitNormal) }
 }
 
+function chordDivesThroughSkin(a, b) {
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  const mid = start.clone().lerp(end, 0.5)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const snap = closestSkinHit(toArray(mid), {
+    maxDistance: HANDLE_SKIN_SNAP_RADIUS,
+    sideX,
+  })
+  if (!snap) return false
+  return mid.distanceTo(new THREE.Vector3(...snap.position)) > 0.016
+}
+
+/** Project a convex interior chord (完骨→本神) onto the same-side skin. */
+function snapChordSamplesToSkin(a, b) {
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const dist = Math.max(start.distanceTo(end), 1e-6)
+  const count = Math.max(16, Math.ceil(dist / 0.01) + 10)
+  const points = []
+  const previousRef = { current: null }
+  for (let index = 0; index < count; index += 1) {
+    const t = index / (count - 1)
+    const chord = start.clone().lerp(end, t)
+    const guide = slerpUnitVectors(a.normal, b.normal, t)
+    const standoff = 0.09
+    const pushed = chord.clone().addScaledVector(new THREE.Vector3(...guide), standoff)
+    const hit = projectFromOutside(pushed, guide, standoff * 1.6)
+      || closestSkinHit(toArray(pushed), { maxDistance: 0.3, sideX, guideNormal: guide })
+      || closestSkinHit(toArray(chord), { maxDistance: 0.34, sideX, guideNormal: guide })
+    if (!hit) continue
+    const lifted = new THREE.Vector3(...hit.position)
+      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+    appendSkinPoint(points, lifted, previousRef)
+  }
+  return points.length >= 2 ? points : null
+}
+
 /**
  * March along the mesh from A to B as a single polyline.
  * Opposite-normal segments (太淵→魚際→少商) orbit the limb instead of
@@ -1108,6 +1241,12 @@ function skinSegmentPoints(a, b) {
   const endNormal = new THREE.Vector3(...b.normal).normalize()
   const totalDist = Math.max(pos.distanceTo(end), 1e-6)
   const normalDot = normal.dot(endNormal)
+  // Convex wrap: endpoint normals still agree, but the 3D chord is inside
+  // the head. Snap chord samples to the same-side skin so locators stay put.
+  if (normalDot > 0.18 && chordDivesThroughSkin(a, b)) {
+    const wrapped = snapChordSamplesToSkin(a, b)
+    if (wrapped?.length >= 2) return wrapped
+  }
   const stepLen = surfaceStepLength(totalDist, normalDot)
   const standoff = marchStandoff(normalDot)
   const maxSteps = Math.max(36, Math.ceil(totalDist / stepLen) * 6 + 48)
@@ -1177,8 +1316,14 @@ function skinSegmentPoints(a, b) {
   }
 
   raw.push(end.clone().addScaledVector(endNormal, SKIN_LIFT))
+  const sideX = (a.position[0] + b.position[0]) / 2
   const pruned = pruneBacktracking(raw.map(toArray), toArray(end))
-  return pruned.map((point) => new THREE.Vector3(...point))
+  return pruned.map((point) => {
+    const snapped = closestSkinHit(point, { maxDistance: 0.12, sideX, guideNormal: toArray(normal) })
+    if (!snapped) return new THREE.Vector3(...point)
+    return new THREE.Vector3(...snapped.position)
+      .addScaledVector(new THREE.Vector3(...snapped.normal), SKIN_LIFT)
+  })
 }
 
 /** Concatenate on-skin marches; never leave floating air samples. */
@@ -1331,6 +1476,16 @@ function shortSegmentReferenceArc(side) {
   return resolved
 }
 
+function snapHandleToSkin(placed, fromNode, toNode) {
+  if (!placed?.position) return placed
+  const sideX = pairSideX(fromNode, toNode)
+  return closestSkinHit(placed.position, {
+    maxDistance: HANDLE_SKIN_SNAP_RADIUS,
+    sideX,
+    guideNormal: placed.normal,
+  }) || projectNearSurface(placed.position, placed.normal) || placed
+}
+
 function restPathAnchor(fromNode, toNode, rest, t) {
   const clamped = clampHandleT(t)
   const position = pointAtPolylineT(rest, clamped)
@@ -1339,12 +1494,12 @@ function restPathAnchor(fromNode, toNode, rest, t) {
     resolvedNode(toNode).normal,
     clamped,
   )
-  return projectNearSurfaceOrFallback(position, normal, { position, normal })
+  return snapHandleToSkin({ position, normal }, fromNode, toNode)
 }
 
 function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(fromNode, toNode)) {
   if (handle?.position) {
-    return { position: handle.position, normal: handle.normal }
+    return snapHandleToSkin({ position: handle.position, normal: handle.normal }, fromNode, toNode)
   }
   const t = 0.5
   return restPathAnchor(fromNode, toNode, rest, t)
@@ -1525,10 +1680,10 @@ function addRouteEditHandles(route) {
             new THREE.SphereGeometry(0.5, 12, 10),
             createFlatMarkerMaterial(0x111111, { selected: true }),
           )
-          handle.position.copy(offsetPosition(placed, 0.014))
+          handle.position.copy(offsetPosition(placed, 0.006))
           handle.scale.setScalar(0.012)
           handle.renderOrder = 12
-          handle.material.depthTest = false
+          handle.material.depthTest = true
           handle.userData = {
             type: 'route-handle',
             routeId: route.id,
@@ -2109,7 +2264,7 @@ function previewHandleDrag(drag, hit) {
         position: [-hit.position[0], hit.position[1], hit.position[2]],
         normal: [-hit.normal[0], hit.normal[1], hit.normal[2]],
       }
-    mesh.position.copy(offsetPosition(node, 0.014))
+    mesh.position.copy(offsetPosition(node, 0.006))
   })
 }
 
