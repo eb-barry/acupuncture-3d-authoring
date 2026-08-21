@@ -46,6 +46,7 @@ import {
   distanceToSegment3,
   geodesicIsStable,
   shortestSurfacePath,
+  simplifyPolylineWithNormals,
   snapPolylineToSurface,
   tautOnSurfacePolyline,
 } from './geodesic.js'
@@ -70,6 +71,7 @@ import {
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
+  pullPolylineThroughLocators,
   distanceToPolyline,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
@@ -127,7 +129,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現黑點（短段一顆，長段三顆）。黑點可像穴位一樣在皮膚上拖；放開或按「重繪經脈」後，這一段會依穴1→點→穴2 沿皮膚重畫。任督二脈沒有黑點。拉錯可按「回復上一步」。</p>
+      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現黑點（短段一顆，長段三顆）。拖黑點時經脈會跟著走；也可按「重繪經脈」依目前黑點重畫這一段。任督二脈沒有黑點。拉錯可按「回復上一步」。</p>
     </div>
   </aside>
   <section class="stage">
@@ -1486,7 +1488,9 @@ function snapChordSamplesToSkin(a, b) {
     appendSkinPoint(points, lifted, previousRef)
   }
   appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), SKIN_LIFT), previousRef)
-  return points.length >= 2 ? fillClippedSpans(points, sideX, from, to) : null
+  if (points.length < 2) return null
+  if (isShoulderAxillaWrap(from, to)) return simplifyLiftedPolyline(points)
+  return fillClippedSpans(points, sideX, from, to)
 }
 
 function wrapWaypointBetween(a, b, sideX, wrapFrom, wrapTo) {
@@ -1536,12 +1540,33 @@ function fillClippedSpans(points, sideX, wrapFrom, wrapTo, depth = 0) {
   return out
 }
 
+function simplifyLiftedPolyline(points) {
+  const arrays = arraysFromSkin(points)
+  if (arrays.length < 4) return points
+  const normals = arrays.map((point, index) => {
+    const prev = arrays[Math.max(0, index - 1)]
+    const next = arrays[Math.min(arrays.length - 1, index + 1)]
+    const tangent = [next[0] - prev[0], next[1] - prev[1], next[2] - prev[2]]
+    const guide = Number.isFinite(point[0]) ? [point[0], 0.15, Math.max(0.2, point[2] + 0.35)] : [0, 0, 1]
+    const normal = [
+      tangent[1] * guide[2] - tangent[2] * guide[1],
+      tangent[2] * guide[0] - tangent[0] * guide[2],
+      tangent[0] * guide[1] - tangent[1] * guide[0],
+    ]
+    const length = Math.hypot(...normal) || 1
+    return [normal[0] / length, normal[1] / length, normal[2] / length]
+  })
+  const collapsed = collapseOppositeWallSpikes(arrays, normals)
+  const simplified = simplifyPolylineWithNormals(collapsed.points, collapsed.normals, 0.007)
+  return vectorsFromArrays(simplified.points)
+}
+
 /**
  * March along the mesh from A to B as a single polyline.
  * Opposite-normal segments (太淵→魚際→少商) orbit the limb instead of
  * cutting through / spawning multiple floating chords.
  */
-function skinSegmentPoints(a, b) {
+function skinSegmentPoints(a, b, { allowGeodesic = true } = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   let normal = new THREE.Vector3(...a.normal).normalize()
@@ -1549,12 +1574,13 @@ function skinSegmentPoints(a, b) {
   const normalDot = normal.dot(endNormal)
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
-  // 肩井–淵腋: wrapping the front chord is cheap and stays on skin.
-  // Mesh A* through the axilla crease can freeze the tab before handles appear.
-  if (isShoulderAxillaWrap(a.position, b.position)) {
+  const wrapFirst = isShoulderAxillaWrap(a.position, b.position)
+    || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
+  if (wrapFirst) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
-  } else {
+  }
+  if (allowGeodesic && !isShoulderAxillaWrap(a.position, b.position)) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesicIsStable(geodesic)) return geodesic
   }
@@ -1651,7 +1677,15 @@ function joinOnSkin(anchors) {
   const points = []
   const previousRef = { current: null }
   for (let index = 0; index < anchors.length - 1; index += 1) {
-    const piece = skinSegmentPoints(resolvedNode(anchors[index]), resolvedNode(anchors[index + 1]))
+    const skipGeodesic = isShoulderAxillaWrap(
+      resolvedNode(anchors[index]).position,
+      resolvedNode(anchors[index + 1]).position,
+    )
+    const piece = skinSegmentPoints(
+      resolvedNode(anchors[index]),
+      resolvedNode(anchors[index + 1]),
+      { allowGeodesic: !skipGeodesic },
+    )
     if (piece.length < 2) return null
     const start = points.length === 0 ? 0 : 1
     for (let i = start; i < piece.length; i += 1) {
@@ -1693,16 +1727,26 @@ function concatSkinPieces(pieces) {
 }
 
 /** Localizers are extra on-skin points: 穴1 → 點… → 穴2, marched like acupoints. */
-function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
+function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, { preview = false } = {}) {
+  const restGuide = rest?.length >= 2 ? rest : null
   if (!records.length) {
-    return rest?.length >= 2
-      ? vectorsFromArrays(rest)
+    return restGuide
+      ? vectorsFromArrays(restGuide)
       : skinSegmentPoints(fromResolved, toResolved)
   }
-  const restGuide = rest?.length >= 2 ? rest : null
-  const movedOffPath = restGuide
-    && records.some((record) => distanceToPolyline(restGuide, record.position) > 0.012)
-  if (restGuide && !movedOffPath) return vectorsFromArrays(restGuide)
+  const restArrays = restGuide ? arraysFromSkin(restGuide) : []
+  const movedOffPath = records.some((record) => (
+    !restArrays.length || distanceToPolyline(restArrays, record.position) > 0.004
+  ))
+  if (preview && restArrays.length >= 2) {
+    const lifted = records.map((record) => ({
+      position: toArray(offsetPosition(record, SKIN_LIFT)),
+    }))
+    return vectorsFromArrays(pullPolylineThroughLocators(restArrays, lifted, 0.09))
+  }
+  const restLooksClean = restArrays.length >= 2
+    && !isDisorderedPolyline(restArrays, [fromResolved.position, toResolved.position])
+  if (!movedOffPath && restLooksClean) return vectorsFromArrays(restGuide)
   const anchors = [
     fromResolved,
     ...records.map((record) => ({
@@ -1711,11 +1755,22 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
     })),
     toResolved,
   ]
-  return joinOnSkin(anchors) || skinSegmentPoints(fromResolved, toResolved)
+  const joined = joinOnSkin(anchors)
+  const joinedArrays = joined ? arraysFromSkin(joined) : []
+  if (joinedArrays.length >= 2 && !isDisorderedPolyline(joinedArrays, restArrays.length ? restArrays : [fromResolved.position, toResolved.position])) {
+    return joined
+  }
+  if (restArrays.length >= 2) {
+    const lifted = records.map((record) => ({
+      position: toArray(offsetPosition(record, SKIN_LIFT)),
+    }))
+    return vectorsFromArrays(pullPolylineThroughLocators(restArrays, lifted, 0.09))
+  }
+  return joined || skinSegmentPoints(fromResolved, toResolved)
 }
 
 /** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
-function skinCurvePoints(route) {
+function skinCurvePoints(route, override = null) {
   const nodes = route.nodes
   if (!nodes.length) return []
   const acupointIndexes = nodes
@@ -1734,11 +1789,18 @@ function skinCurvePoints(route) {
     const toNode = nodes[toIndex]
     const a = resolvedNode(fromNode)
     const b = resolvedNode(toNode)
+    const isOverride = override
+      && fromNode.pointId === override.fromPointId
+      && toNode.pointId === override.toPointId
     const handles = keepPairHandles(nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control'))
-    const rest = restPathArrays(fromNode, toNode)
+    const rest = isOverride && override.rest
+      ? override.rest
+      : restPathArrays(fromNode, toNode)
     const count = visibleHandleCount(polylineArcLength(rest), referenceArc, handles.length)
-    const records = pairHandleRecords(fromNode, toNode, handles, count, rest)
-    const segment = pairDrawnSkinPoints(a, b, records, rest)
+    const records = isOverride && override.records
+      ? override.records
+      : pairHandleRecords(fromNode, toNode, handles, count, rest)
+    const segment = pairDrawnSkinPoints(a, b, records, rest, { preview: Boolean(isOverride && override.preview) })
     const start = points.length === 0 ? 0 : 1
     for (let i = start; i < segment.length; i += 1) {
       appendSkinPoint(points, segment[i], previousRef)
@@ -1753,14 +1815,32 @@ function restPathArrays(fromNode, toNode) {
   const a = resolvedNode(fromNode)
   const b = resolvedNode(toNode)
   const key = geodesicCacheKey(a, b)
-  if (restPathCache.has(key)) return restPathCache.get(key).map((point) => [...point])
   const reverseKey = geodesicCacheKey(b, a)
-  if (restPathCache.has(reverseKey)) {
+  const usableCached = (cached) => {
+    if (!cached?.length) return false
+    if (!isShoulderAxillaWrap(a.position, b.position)) return true
+    return !isDisorderedPolyline(cached, [a.position, b.position])
+  }
+  if (restPathCache.has(key) && usableCached(restPathCache.get(key))) {
+    return restPathCache.get(key).map((point) => [...point])
+  }
+  if (restPathCache.has(reverseKey) && usableCached(restPathCache.get(reverseKey))) {
     return restPathCache.get(reverseKey).map((point) => [...point]).reverse()
   }
   const points = skinSegmentPoints(a, b).map(toArray)
   restPathCache.set(key, points)
   return points.map((point) => [...point])
+}
+
+function invalidatePairPathCache(fromNode, toNode) {
+  const a = resolvedNode(fromNode)
+  const b = resolvedNode(toNode)
+  const key = geodesicCacheKey(a, b)
+  const reverseKey = geodesicCacheKey(b, a)
+  restPathCache.delete(key)
+  restPathCache.delete(reverseKey)
+  geodesicCache.delete(key)
+  geodesicCache.delete(reverseKey)
 }
 
 function lu34Pair(side) {
@@ -1888,6 +1968,21 @@ function createMeridianLine(points, color) {
   line.userData.tubePoints = points.map((point) => point.clone())
   line.userData.lineWidth = FIXED_LINE_WIDTH
   return line
+}
+
+function replaceRouteLine(routeId, points) {
+  if (points?.length < 2) return
+  const index = routeVisuals.findIndex((entry) => entry.route.id === routeId)
+  if (index < 0) return
+  const previous = routeVisuals[index]
+  const next = createMeridianLine(points, meridianLineColor(previous.route.meridianId))
+  next.userData.type = 'meridian'
+  next.userData.id = routeId
+  annotationGroup.remove(previous.line)
+  previous.line.geometry?.dispose?.()
+  previous.line.material?.dispose?.()
+  annotationGroup.add(next)
+  routeVisuals[index] = { line: next, route: previous.route }
 }
 
 function markerFacingLift(point, pixelSize) {
@@ -2625,6 +2720,46 @@ function previewHandleDrag(drag, hit) {
       }
     mesh.position.copy(offsetPosition(node, 0.006))
   })
+  if (!drag.records?.length || drag.handleIndex == null) return
+  const route = state.meridians.find((item) => item.id === drag.routeId)
+  if (!route) return
+  const pair = acupointPairs(route).find((item) =>
+    item.fromPointId === drag.fromPointId && item.toPointId === drag.toPointId)
+  if (!pair) return
+  const records = drag.records.map((record, index) => (
+    index === drag.handleIndex
+      ? { ...record, position: [...hit.position], normal: [...hit.normal] }
+      : record
+  ))
+  replaceRouteLine(route.id, skinCurvePoints(route, {
+    fromPointId: pair.fromPointId,
+    toPointId: pair.toPointId,
+    records,
+    rest: drag.rest,
+    preview: true,
+  }))
+  if (pairId) {
+    const mirror = state.meridians.find((item) => item.pairId === pairId && item.id !== route.id)
+    const mirrorFrom = pairedPointId(pair.fromPointId)
+    const mirrorTo = pairedPointId(pair.toPointId)
+    const mirrorPair = mirror && acupointPairs(mirror).find((item) =>
+      item.fromPointId === mirrorFrom && item.toPointId === mirrorTo)
+    if (mirror && mirrorPair) {
+      const mirroredRecords = records.map((record) => ({
+        ...record,
+        position: [-record.position[0], record.position[1], record.position[2]],
+        normal: [-record.normal[0], record.normal[1], record.normal[2]],
+      }))
+      const mirroredRest = (drag.rest || []).map((point) => [-point[0], point[1], point[2]])
+      replaceRouteLine(mirror.id, skinCurvePoints(mirror, {
+        fromPointId: mirrorPair.fromPointId,
+        toPointId: mirrorPair.toPointId,
+        records: mirroredRecords,
+        rest: mirroredRest,
+        preview: true,
+      }))
+    }
+  }
 }
 
 function redrawSelectedSegment({ announce = true } = {}) {
@@ -2635,6 +2770,7 @@ function redrawSelectedSegment({ announce = true } = {}) {
   const pair = acupointPairs(route).find((item) =>
     item.fromPointId === selected.fromPointId && item.toPointId === selected.toPointId)
   if (!pair) return toast('找不到這一段經脈', 'warn')
+  invalidatePairPathCache(pair.fromNode, pair.toNode)
   const rest = restPathArrays(pair.fromNode, pair.toNode)
   const count = visibleHandleCount(
     polylineArcLength(rest),
@@ -2680,6 +2816,7 @@ function placeAt(event) {
       fromPointId: pair?.fromPointId || null,
       toPointId: pair?.toPointId || null,
     }
+    if (route) replaceRouteLine(route.id, skinCurvePoints(route))
     refreshRouteEditHandles()
     updateUI()
     return
@@ -3354,6 +3491,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       toPointId: data.toPointId,
       handleIndex: data.handleIndex ?? 0,
       rest: start?.rest || null,
+      records: start?.records || null,
       anchor: start?.anchor || null,
       pendingHit: null,
     }

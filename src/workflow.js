@@ -223,6 +223,51 @@ function dist3(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
 }
 
+/**
+ * Bend a rest-path polyline toward locators so the visible meridian
+ * follows dragged black handles without a full geodesic rebuild.
+ */
+export function pullPolylineThroughLocators(rest = [], records = [], radius = 0.08) {
+  if (!Array.isArray(rest) || rest.length < 2) {
+    return (records || []).map((record) => [...(record?.position || [0, 0, 0])])
+  }
+  if (!records?.length) return rest.map((point) => [...point])
+  const points = rest.map((point) => [...point])
+  const arc = polylineArcLength(points) || 1
+  const sigma = Math.max(0.025, Number(radius) || 0.08)
+  records.forEach((record) => {
+    const targetPos = record?.position
+    if (!targetPos) return
+    const target = closestTOnPolyline(points, targetPos) * arc
+    let walked = 0
+    for (let index = 0; index < points.length; index += 1) {
+      if (index > 0) walked += dist3(points[index - 1], points[index])
+      const weight = Math.exp(-((walked - target) ** 2) / (2 * sigma * sigma))
+      if (weight < 0.03) continue
+      points[index] = [
+        points[index][0] + (targetPos[0] - points[index][0]) * weight,
+        points[index][1] + (targetPos[1] - points[index][1]) * weight,
+        points[index][2] + (targetPos[2] - points[index][2]) * weight,
+      ]
+    }
+  })
+  records.forEach((record) => {
+    const targetPos = record?.position
+    if (!targetPos) return
+    let best = 0
+    let bestDistance = Infinity
+    points.forEach((point, index) => {
+      const distance = dist3(point, targetPos)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        best = index
+      }
+    })
+    if (best > 0 && best < points.length - 1) points[best] = [...targetPos]
+  })
+  return points
+}
+
 export function polylineArcLength(points = []) {
   let total = 0
   for (let index = 1; index < points.length; index += 1) {

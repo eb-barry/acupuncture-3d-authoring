@@ -146,9 +146,10 @@ export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
 export function isShoulderAxillaWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   if (!shouldFrontWrap(from, to)) return false
   const minY = Math.min(Number(from[1]) || 0, Number(to[1]) || 0)
+  const maxY = Math.max(Number(from[1]) || 0, Number(to[1]) || 0)
   const dropY = Math.abs((Number(from[1]) || 0) - (Number(to[1]) || 0))
   const meanX = ((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2
-  return minY > 1.05 && dropY > 0.06 && Math.abs(meanX) > 0.08
+  return minY > 0.88 && maxY > 1.08 && dropY > 0.04 && Math.abs(meanX) > 0.07
 }
 
 /**
