@@ -41,7 +41,7 @@ import {
   collapseOppositeWallSpikes,
   densifyPolylineWithNormals,
   dist3,
-  polylineTurningEnergy,
+  geodesicIsStable,
   shortestSurfacePath,
   snapPolylineToSurface,
   tautOnSurfacePolyline,
@@ -1242,33 +1242,30 @@ function collapseNearPoints(points, normals) {
 }
 
 function projectGeodesicSample(point, guideNormal) {
-  const guide = guideNormal || [0, 1, 0]
-  const fromOutside = projectFromOutside(new THREE.Vector3(...point), guide, 0.04)
-  if (fromOutside) return { position: fromOutside.position, normal: fromOutside.normal }
   const hit = closestSkinHit(point, {
     maxDistance: 0.012,
-    guideNormal: guide,
+    guideNormal,
   })
   if (!hit) return null
+  if (dist3(hit.position, point) > 0.014) return null
   return { position: hit.position, normal: hit.normal }
 }
 
 function liftGeodesicPolyline(points, normals) {
   const cleaned = collapseOppositeWallSpikes(points, normals)
   const taut = tautOnSurfacePolyline(cleaned.points, cleaned.normals, {
-    iterations: 20,
-    strength: 0.7,
-    maxStep: 0.008,
+    iterations: 12,
+    strength: 0.65,
+    maxStep: 0.006,
     corridor: cleaned.points,
-    corridorRadius: 0.016,
-    project: projectGeodesicSample,
-    minNormalDot: 0.25,
+    corridorRadius: 0.014,
   })
-  const dense = densifyPolylineWithNormals(taut.points, taut.normals, 0.008)
+  const dense = densifyPolylineWithNormals(taut.points, taut.normals, 0.01)
   const snapped = snapPolylineToSurface(dense.points, dense.normals, projectGeodesicSample, {
     corridor: cleaned.points,
     corridorRadius: 0.018,
     minNormalDot: 0.25,
+    maxJump: 0.014,
   })
   return snapped.points.map((point, index) => (
     new THREE.Vector3(...point).addScaledVector(
@@ -1368,7 +1365,7 @@ function geodesicOnSkin(a, b) {
       startSeeds,
       goalIds,
       goalPoint: hitB.position,
-      maxExplored: 300000,
+      maxExplored: 120000,
     })
     if (!found?.ids?.length) return null
     points = [hitA.position, ...found.ids.map((id) => surfaceGraph.positions[id]), hitB.position]
@@ -1535,7 +1532,7 @@ function fillClippedSpans(points, sideX, wrapFrom, wrapTo, depth = 0) {
  */
 function skinSegmentPoints(a, b) {
   const geodesic = geodesicOnSkin(a, b)
-  if (geodesic?.length >= 2) return geodesic
+  if (geodesicIsStable(geodesic)) return geodesic
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   let pos = start.clone()
@@ -1685,11 +1682,9 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
       : skinSegmentPoints(fromResolved, toResolved)
   }
   const restGuide = rest?.length >= 2 ? rest : null
-  const restJagged = restGuide && polylineTurningEnergy(restGuide) > Math.max(1.6, restGuide.length * 0.06)
-  const onPathSlop = restJagged ? 0.004 : 0.012
   const movedOffPath = restGuide
-    && records.some((record) => distanceToPolyline(restGuide, record.position) > onPathSlop)
-  if (restGuide && !movedOffPath && !restJagged) return vectorsFromArrays(restGuide)
+    && records.some((record) => distanceToPolyline(restGuide, record.position) > 0.012)
+  if (restGuide && !movedOffPath) return vectorsFromArrays(restGuide)
   const anchors = [
     fromResolved,
     ...records.map((record) => ({

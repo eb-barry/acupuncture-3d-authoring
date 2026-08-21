@@ -239,7 +239,7 @@ export function densifyPolyline(points = [], maxSeg = 0.01) {
     const a = points[index - 1]
     const b = points[index]
     const span = dist3(a, b)
-    const steps = Math.max(1, Math.ceil(span / limit))
+    const steps = densifyStepCount(span, limit)
     for (let step = 1; step <= steps; step += 1) {
       out.push(lerp3(a, b, step / steps))
     }
@@ -264,7 +264,7 @@ export function densifyPolylineWithNormals(points = [], normals = [], maxSeg = 0
     const na = normals[index - 1] || fallback
     const nb = normals[index] || fallback
     const span = dist3(a, b)
-    const steps = Math.max(1, Math.ceil(span / limit))
+    const steps = densifyStepCount(span, limit)
     for (let step = 1; step <= steps; step += 1) {
       const t = step / steps
       outPoints.push(lerp3(a, b, t))
@@ -272,6 +272,41 @@ export function densifyPolylineWithNormals(points = [], normals = [], maxSeg = 0
     }
   }
   return { points: outPoints, normals: outNormals }
+}
+
+const MAX_DENSIFY_STEPS = 40
+const MAX_DENSIFY_SPAN = 0.06
+
+function densifyStepCount(span, limit) {
+  if (!Number.isFinite(span) || span <= 1e-12 || span > MAX_DENSIFY_SPAN) return 1
+  return Math.min(MAX_DENSIFY_STEPS, Math.max(1, Math.ceil(span / limit)))
+}
+
+/** True when a discrete geodesic is safe to draw (no crease jumps / spaghetti). */
+export function geodesicIsStable(points = [], {
+  maxLengthRatio = 2.2,
+  maxEdge = 0.04,
+  maxTurningPerPoint = 0.12,
+} = {}) {
+  if (!points || points.length < 2) return false
+  const arrays = points.map((point) => (
+    point?.isVector3 ? [point.x, point.y, point.z] : point
+  ))
+  if (arrays.some((point) => (
+    !point || !Number.isFinite(point[0]) || !Number.isFinite(point[1]) || !Number.isFinite(point[2])
+  ))) return false
+  let length = 0
+  let maxSeg = 0
+  for (let index = 1; index < arrays.length; index += 1) {
+    const span = dist3(arrays[index - 1], arrays[index])
+    if (!Number.isFinite(span)) return false
+    length += span
+    if (span > maxSeg) maxSeg = span
+  }
+  const chord = dist3(arrays[0], arrays[arrays.length - 1])
+  if (!Number.isFinite(chord) || maxSeg > maxEdge) return false
+  if (length > Math.max(0.1, chord * maxLengthRatio)) return false
+  return polylineTurningEnergy(arrays) <= Math.max(2.8, arrays.length * maxTurningPerPoint)
 }
 
 export function distanceToSegment3(point, a, b) {
@@ -359,6 +394,7 @@ export function simplifyPolylineWithNormals(points = [], normals = [], epsilon =
   }
   return { points: outPoints, normals: outNormals }
 }
+
 export function tautOnSurfacePolyline(points = [], normals = [], {
   iterations = 16,
   strength = 0.65,
@@ -444,6 +480,7 @@ export function snapPolylineToSurface(points = [], normals = [], project = null,
   corridor = null,
   corridorRadius = 0,
   minNormalDot = 0.25,
+  maxJump = 0.014,
 } = {}) {
   const fallback = [0, 1, 0]
   if (!project) {
@@ -460,9 +497,10 @@ export function snapPolylineToSurface(points = [], normals = [], project = null,
     const guideNormal = normals[index] || outNormals[outNormals.length - 1] || fallback
     const hit = project(points[index], guideNormal)
     const agreed = hit?.position && normalsAgree(guideNormal, hit.normal || guideNormal, minNormalDot)
-    const inCorridor = !guide || !agreed || radius <= 0
+    const near = agreed && dist3(hit.position, points[index]) <= Math.max(Number(maxJump) || 0, 0)
+    const inCorridor = !guide || !near || radius <= 0
       || distanceToPolyline3(guide, hit.position) <= radius
-    if (agreed && inCorridor) {
+    if (agreed && near && inCorridor) {
       outPoints.push([...hit.position])
       outNormals.push(normalize3(hit.normal || guideNormal))
     } else if (outPoints.length) {

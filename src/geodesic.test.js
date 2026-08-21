@@ -7,6 +7,7 @@ import {
   densifyPolyline,
   dist3,
   distanceToSegment3,
+  geodesicIsStable,
   polylineTurningEnergy,
   shortestSurfacePath,
   simplifyPolylineWithNormals,
@@ -120,6 +121,20 @@ describe('surface geodesic', () => {
       expect(point[1]).toBeCloseTo(0)
       expect(point[2]).toBeCloseTo(0)
     })
+  })
+
+  it('does not explode or hang when densifying a huge or non-finite span', () => {
+    const huge = densifyPolyline([[0, 0, 0], [8, 0, 0]], 0.01)
+    expect(huge.length).toBe(2)
+    const nanPath = densifyPolyline([[0, 0, 0], [Number.NaN, 0, 0]], 0.01)
+    expect(nanPath.length).toBe(2)
+  })
+
+  it('rejects a crease-jump geodesic as unstable', () => {
+    const smooth = [[0, 0, 0], [0.02, 0, 0], [0.04, 0, 0], [0.06, 0, 0]]
+    expect(geodesicIsStable(smooth)).toBe(true)
+    const jumped = [[0.16, 1.4, 0], [0.02, 1.3, 0.2], [0.16, 1.2, 0]]
+    expect(geodesicIsStable(jumped)).toBe(false)
   })
 
   it('returns null when A* cannot reach the goal', () => {
