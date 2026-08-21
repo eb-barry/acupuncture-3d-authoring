@@ -100,6 +100,46 @@ export function pruneBacktracking(points, end) {
   return cleaned
 }
 
+/**
+ * Opposite-normal palm wraps still march. Perpendicular convex wraps
+ * (肩井→淵腋) snap the interior chord onto the outer skin.
+ */
+export function useConvexChordWrap(normalDot) {
+  return Number(normalDot) > -0.05
+}
+
+/**
+ * Push an interior chord sample toward the outer silhouette.
+ * Shoulder drops also bias posterior so the line rides the trapezius
+ * instead of diving through the axilla.
+ */
+export function outwardWrapGuide(chordPoint = [0, 0, 0], sideX = 0, { dropY = 0 } = {}) {
+  const x = Number(chordPoint[0])
+  const z = Number(chordPoint[2])
+  const lateral = Number.isFinite(sideX) && Math.abs(sideX) > 1e-6
+    ? Math.sign(sideX)
+    : (Number.isFinite(x) && Math.abs(x) > 1e-6 ? Math.sign(x) : 1)
+  let gx = Number.isFinite(x) ? x : lateral * 0.08
+  let gz = Number.isFinite(z) ? z : 0
+  if (Math.hypot(gx, gz) < 1e-5) gx = lateral
+  if (Number(dropY) > 0.1) gz -= 0.55
+  return normalize([gx, 0, gz])
+}
+
+/** True when `probe` sits inside the mesh relative to a surface hit. */
+export function isPointBehindSurface(probe, surfacePoint, surfaceNormal, minDepth = 0.007) {
+  if (!probe || !surfacePoint || !surfaceNormal) return false
+  const delta = [
+    surfacePoint[0] - probe[0],
+    surfacePoint[1] - probe[1],
+    surfacePoint[2] - probe[2],
+  ]
+  const dist = length3(delta)
+  if (dist < minDepth) return false
+  const aligned = dot3(normalize(delta), normalize(surfaceNormal))
+  return aligned > 0.15
+}
+
 export function length3(v) {
   return Math.hypot(v[0], v[1], v[2])
 }
