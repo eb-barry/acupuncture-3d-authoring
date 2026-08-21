@@ -710,6 +710,35 @@ function replaceWithoutHistory(nextState) {
   updateUI()
 }
 
+function previewAcupointDrag(pointId, hit) {
+  state = updatePairedPoint(pointId, hit)
+  const point = getPoint(pointId)
+  const ids = new Set([pointId])
+  if (point?.pairId) {
+    state.acupoints.forEach((item) => {
+      if (item.pairId === point.pairId) ids.add(item.id)
+    })
+  }
+  markerVisuals.forEach((entry) => {
+    if (!ids.has(entry.point.id)) return
+    const current = getPoint(entry.point.id)
+    if (!current) return
+    entry.point = current
+    const pixelSize = FIXED_MARKER_SIZE
+    const anchor = cameraFacingAnchor(current, markerFacingLift(current, pixelSize))
+    entry.mesh.position.copy(anchor)
+    if (entry.label) entry.label.position.copy(anchor)
+  })
+}
+
+function capturePointer(event) {
+  try {
+    renderer.domElement.setPointerCapture(event.pointerId)
+  } catch {
+    /* pointer may already be captured */
+  }
+}
+
 function getPoint(id) {
   return state.acupoints.find((point) => point.id === id)
 }
@@ -922,6 +951,28 @@ function projectHandleToScreen(mesh) {
     x: rect.left + (ndc.x + 1) * 0.5 * rect.width,
     y: rect.top + (-ndc.y + 1) * 0.5 * rect.height,
   }
+}
+
+/** Prefer the visible acupoint marker, even when a meridian line is closer in 3D. */
+function nearestAcupointMarkerHit(event) {
+  const exact = annotationHit(event, ['acupoint'])
+  if (exact) return exact
+  const screens = []
+  const meshes = []
+  markerVisuals.forEach(({ mesh }) => {
+    if (!mesh.visible || mesh.userData?.type !== 'acupoint') return
+    const screen = projectHandleToScreen(mesh)
+    if (!screen) return
+    screens.push(screen)
+    meshes.push(mesh)
+  })
+  const index = nearestScreenIndex(
+    screens,
+    { x: event.clientX, y: event.clientY },
+    HANDLE_PICK_RADIUS_PX,
+  )
+  if (index < 0) return null
+  return { object: meshes[index], point: meshes[index].position.clone() }
 }
 
 /** Prefer the visible black handle, even when the meridian line is closer in 3D. */
@@ -2802,7 +2853,7 @@ function redrawSelectedSegment({ announce = true } = {}) {
 }
 
 function placeAt(event) {
-  const markerHit = annotationHit(event, ['acupoint'])
+  const markerHit = nearestAcupointMarkerHit(event)
   if (markerHit) {
     const point = getPoint(markerHit.object.userData.id)
     selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
@@ -3454,7 +3505,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   if (orbitLocked) {
     controls.enableRotate = false
   }
-  if (nearestHandleHit(event) || annotationHit(event, ['acupoint'])) {
+  if (nearestHandleHit(event) || nearestAcupointMarkerHit(event)) {
     controls.enabled = false
   }
 }, true)
@@ -3475,10 +3526,11 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     }
     selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
     syncControlsEnabled()
+    capturePointer(event)
     return true
   }
 
-  const acupointHit = annotationHit(event, ['acupoint'])
+  const acupointHit = nearestAcupointMarkerHit(event)
   if (acupointHit) {
     startAcupointDrag(acupointHit)
     return
@@ -3509,6 +3561,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     }
     syncAppModeUI()
     syncControlsEnabled()
+    capturePointer(event)
   }
 })
 renderer.domElement.addEventListener('pointermove', (event) => {
@@ -3525,11 +3578,10 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   const hit = surfaceHit(event)
   if (!hit) return
   dragMoved = true
-  replaceWithoutHistory(updatePairedPoint(dragging.id, hit))
+  previewAcupointDrag(dragging.id, hit)
 })
 renderer.domElement.addEventListener('pointerup', onPointerUp)
-renderer.domElement.addEventListener('pointercancel', onPointerCancel)
-window.addEventListener('pointercancel', onPointerCancel)
+renderer.domElement.addEventListener('pointercancel', onPointerUp)
 
 function onPointerUp(event) {
   const click = pointerDown
@@ -3558,6 +3610,7 @@ function onPointerUp(event) {
         state = setSegmentHandle(handleRouteId, handleFrom, handleTo, pendingHit, handleIndex)
       }
       if (wasAcupoint) {
+        clearPathCaches()
         const point = getPoint(draggedId)
         if (point) {
           const meridian = meridianById(point.meridianId)
@@ -3584,14 +3637,6 @@ function onPointerUp(event) {
   }
   syncControlsEnabled()
   if (click) placeAt(event)
-}
-
-function onPointerCancel() {
-  pointerDown = null
-  dragging = null
-  dragMoved = false
-  dragBaseline = null
-  syncControlsEnabled()
 }
 
 $('#lock-orbit').addEventListener('click', () => {
