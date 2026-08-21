@@ -37,6 +37,13 @@ import {
   useConvexChordWrap,
 } from './skinPath.js'
 import {
+  buildAdjacency,
+  densifyPolylineWithNormals,
+  dist3,
+  shortestSurfacePath,
+  weldVertices,
+} from './geodesic.js'
+import {
   FALLBACK_SHORT_SEGMENT_ARC,
   HANDLE_SKIN_SNAP_RADIUS,
   HANDLE_STRETCH_MAX_OFF_PATH,
@@ -283,6 +290,8 @@ let initialCamPos = perspectiveCamera.position.clone()
 let initialTarget = controls.target.clone()
 
 let modelMeshes = []
+let surfaceGraph = []
+const geodesicCache = new Map()
 let markerVisuals = []
 let routeVisuals = []
 let handleVisuals = []
@@ -991,7 +1000,13 @@ function closestSkinHit(position, {
       const guide = new THREE.Vector3(...guideNormal)
       if (guide.lengthSq() > 1e-10 && hitNormal.dot(guide) < 0) hitNormal.negate()
     }
-    const hit = { position: toArray(worldPoint), normal: toArray(hitNormal), distance }
+    const hit = {
+      position: toArray(worldPoint),
+      normal: toArray(hitNormal),
+      distance,
+      mesh,
+      faceIndex: info.faceIndex,
+    }
     any.push(hit)
     if (sideX == null || Math.abs(sideX) <= 0.03 || hit.position[0] * sideX >= 0) {
       sameSide.push(hit)
@@ -1193,6 +1208,142 @@ function projectFromOutside(chordPoint, guide, standoff) {
   return { position: toArray(hit.point), normal: toArray(hitNormal) }
 }
 
+function triangleCornerIds(geometry, faceIndex) {
+  if (!Number.isInteger(faceIndex) || faceIndex < 0 || !geometry) return null
+  const offset = faceIndex * 3
+  const index = geometry.getIndex()
+  if (index) {
+    if (offset + 2 >= index.count) return null
+    return [index.getX(offset), index.getX(offset + 1), index.getX(offset + 2)]
+  }
+  const count = geometry.getAttribute('position')?.count || 0
+  if (offset + 2 >= count) return null
+  return [offset, offset + 1, offset + 2]
+}
+
+function geodesicCacheKey(a, b) {
+  const quantize = (point) => point.map((value) => Number(value).toFixed(4)).join(',')
+  return `${quantize(a.position)}>${quantize(b.position)}`
+}
+
+function collapseNearPoints(points, normals) {
+  if (!points.length) return { points: [], normals: [] }
+  const outPoints = [points[0]]
+  const outNormals = [normals[0] || [0, 1, 0]]
+  for (let index = 1; index < points.length; index += 1) {
+    if (dist3(points[index], outPoints[outPoints.length - 1]) < 1e-7) continue
+    outPoints.push(points[index])
+    outNormals.push(normals[index] || outNormals[outNormals.length - 1])
+  }
+  return { points: outPoints, normals: outNormals }
+}
+
+function liftGeodesicPolyline(points, normals) {
+  const dense = densifyPolylineWithNormals(points, normals, 0.008)
+  return dense.points.map((point, index) => (
+    new THREE.Vector3(...point).addScaledVector(
+      new THREE.Vector3(...(dense.normals[index] || [0, 1, 0])),
+      SKIN_LIFT,
+    )
+  ))
+}
+
+function rebuildSurfaceGraph() {
+  geodesicCache.clear()
+  surfaceGraph = modelMeshes.map((mesh) => {
+    const geometry = mesh.geometry
+    const positionAttr = geometry?.getAttribute('position')
+    if (!positionAttr) return null
+    mesh.updateMatrixWorld(true)
+    const normalAttr = geometry.getAttribute('normal')
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)
+    const positions = []
+    const normals = []
+    const vertex = new THREE.Vector3()
+    const normal = new THREE.Vector3()
+    for (let index = 0; index < positionAttr.count; index += 1) {
+      vertex.fromBufferAttribute(positionAttr, index).applyMatrix4(mesh.matrixWorld)
+      positions.push(toArray(vertex))
+      if (normalAttr) {
+        normal.fromBufferAttribute(normalAttr, index)
+          .applyNormalMatrix(normalMatrix)
+          .normalize()
+        normals.push(toArray(normal))
+      } else {
+        normals.push([0, 1, 0])
+      }
+    }
+    const triangles = []
+    const indexAttr = geometry.getIndex()
+    if (indexAttr) {
+      for (let index = 0; index < indexAttr.count; index += 1) triangles.push(indexAttr.getX(index))
+    } else {
+      for (let index = 0; index < positionAttr.count; index += 1) triangles.push(index)
+    }
+    const remap = weldVertices(positions)
+    return {
+      mesh,
+      positions,
+      normals,
+      remap,
+      adjacency: buildAdjacency(positions, triangles, remap),
+    }
+  }).filter(Boolean)
+}
+
+/** Shortest path on the loaded mesh; every sample lies on a triangle or edge. */
+function geodesicOnSkin(a, b) {
+  if (!surfaceGraph.length) return null
+  const start = a?.position
+  const end = b?.position
+  if (!start || !end) return null
+  const key = geodesicCacheKey(a, b)
+  const reverseKey = geodesicCacheKey(b, a)
+  if (geodesicCache.has(key)) return geodesicCache.get(key).map((point) => point.clone())
+  if (geodesicCache.has(reverseKey)) {
+    return geodesicCache.get(reverseKey).map((point) => point.clone()).reverse()
+  }
+
+  const hitA = closestSkinHit(start, { maxDistance: 0.12, guideNormal: a.normal })
+  const hitB = closestSkinHit(end, { maxDistance: 0.12, guideNormal: b.normal })
+  if (!hitA?.mesh || hitA.mesh !== hitB?.mesh) return null
+  const graph = surfaceGraph.find((item) => item.mesh === hitA.mesh)
+  if (!graph) return null
+  const cornersA = triangleCornerIds(hitA.mesh.geometry, hitA.faceIndex)
+  const cornersB = triangleCornerIds(hitB.mesh.geometry, hitB.faceIndex)
+  if (!cornersA || !cornersB) return null
+
+  const sameFace = hitA.faceIndex === hitB.faceIndex
+  let points
+  let normals
+  if (sameFace) {
+    points = [hitA.position, hitB.position]
+    normals = [hitA.normal, hitB.normal]
+  } else {
+    const startSeeds = cornersA.map((id) => {
+      const canonical = graph.remap[id]
+      return { id: canonical, cost: dist3(graph.positions[canonical], hitA.position) }
+    })
+    const goalIds = [...new Set(cornersB.map((id) => graph.remap[id]))]
+    const found = shortestSurfacePath({
+      adjacency: graph.adjacency,
+      positions: graph.positions,
+      startSeeds,
+      goalIds,
+      goalPoint: hitB.position,
+    })
+    if (!found?.ids?.length) return null
+    points = [hitA.position, ...found.ids.map((id) => graph.positions[id]), hitB.position]
+    normals = [hitA.normal, ...found.ids.map((id) => graph.normals[id] || hitA.normal), hitB.normal]
+  }
+
+  const collapsed = collapseNearPoints(points, normals)
+  if (collapsed.points.length < 2) return null
+  const lifted = liftGeodesicPolyline(collapsed.points, collapsed.normals)
+  geodesicCache.set(key, lifted)
+  return lifted.map((point) => point.clone())
+}
+
 function chordDivesThroughSkin(a, b) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
@@ -1345,6 +1496,8 @@ function fillClippedSpans(points, sideX, wrapFrom, wrapTo, depth = 0) {
  * cutting through / spawning multiple floating chords.
  */
 function skinSegmentPoints(a, b) {
+  const geodesic = geodesicOnSkin(a, b)
+  if (geodesic?.length >= 2) return geodesic
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   let pos = start.clone()
@@ -1488,13 +1641,15 @@ function concatSkinPieces(pieces) {
 
 /** Localizers are extra on-skin points: 穴1 → 點… → 穴2, marched like acupoints. */
 function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
-  const original = rest?.length >= 2
-    ? vectorsFromArrays(rest)
-    : skinSegmentPoints(fromResolved, toResolved)
-  if (!records.length) return original
-  const restGuide = rest?.length >= 2 ? rest : arraysFromSkin(original)
-  const movedOffPath = records.some((record) => distanceToPolyline(restGuide, record.position) > 0.012)
-  if (!movedOffPath) return original
+  if (!records.length) {
+    return rest?.length >= 2
+      ? vectorsFromArrays(rest)
+      : skinSegmentPoints(fromResolved, toResolved)
+  }
+  const restGuide = rest?.length >= 2 ? rest : null
+  const movedOffPath = restGuide
+    && records.some((record) => distanceToPolyline(restGuide, record.position) > 0.012)
+  if (restGuide && !movedOffPath) return vectorsFromArrays(restGuide)
   const anchors = [
     fromResolved,
     ...records.map((record) => ({
@@ -1503,31 +1658,7 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
     })),
     toResolved,
   ]
-  const pieces = []
-  for (let index = 0; index < anchors.length - 1; index += 1) {
-    const a = resolvedNode(anchors[index])
-    const b = resolvedNode(anchors[index + 1])
-    const marched = skinSegmentPoints(a, b)
-    // Judge each span against its own chord. A front wrap through locators
-    // must not be discarded as "disordered" against a leftover back rest.
-    const spanGuide = [a.position, b.position]
-    const clean = preferCleanSkinPath(marched, null, spanGuide, 1.7)
-    if (clean?.length >= 2) {
-      pieces.push(clean)
-      continue
-    }
-    const wrapped = snapChordSamplesToSkin(a, b)
-    if (wrapped?.length >= 2) {
-      pieces.push(wrapped)
-      continue
-    }
-    if (marched?.length >= 2) {
-      pieces.push(marched)
-      continue
-    }
-    return original
-  }
-  return concatSkinPieces(pieces) || original
+  return joinOnSkin(anchors) || skinSegmentPoints(fromResolved, toResolved)
 }
 
 /** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
@@ -2574,6 +2705,8 @@ function applyModel(gltf, name, hash = null) {
 
   modelGroup.clear()
   modelMeshes = []
+  surfaceGraph = []
+  geodesicCache.clear()
   modelGroup.add(root)
 
   // Recenter at origin and sit on y=0 (same framing approach as the turntable viewer).
@@ -2619,6 +2752,7 @@ function applyModel(gltf, name, hash = null) {
     }
     modelMeshes.push(object)
   })
+  rebuildSurfaceGraph()
 
   const fovRad = THREE.MathUtils.degToRad(perspectiveCamera.fov)
   const dist = (maxDim / 2) / Math.tan(fovRad / 2) * 1.65
