@@ -129,7 +129,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現黑點（短段一顆，長段三顆）。黑點可像穴位一樣在皮膚上拖；放開或按「重繪經脈」後，這一段會依穴1→點→穴2 沿皮膚重畫。任督二脈沒有黑點。拉錯可按「回復上一步」。</p>
+      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現黑點（短段一顆，長段三顆）。拖黑點時經脈會跟著走；也可按「重繪經脈」依目前黑點重畫這一段。任督二脈沒有黑點。拉錯可按「回復上一步」。</p>
     </div>
   </aside>
   <section class="stage">
