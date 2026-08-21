@@ -139,6 +139,42 @@ export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
 }
 
 /**
+ * 肩井→淵腋 lives in the upper torso. A* through the armpit crease
+ * freezes the tab; wrap the chord onto the front skin instead.
+ * 陰谷→橫骨 is lower on the thigh and must keep the geodesic.
+ */
+export function isShoulderAxillaWrap(from = [0, 0, 0], to = [0, 0, 0]) {
+  if (!shouldFrontWrap(from, to)) return false
+  const minY = Math.min(Number(from[1]) || 0, Number(to[1]) || 0)
+  const dropY = Math.abs((Number(from[1]) || 0) - (Number(to[1]) || 0))
+  const meanX = ((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2
+  return minY > 1.05 && dropY > 0.06 && Math.abs(meanX) > 0.08
+}
+
+/**
+ * Pick the tightest acupoint pair whose polyline span contains `clickIndex`.
+ * `nodeIndexes[i]` is the sample index of pair i's start; the last value is
+ * the final acupoint. Prefer the smallest span so a click on a short segment
+ * is not swallowed by a longer neighbour.
+ */
+export function pickPairAlongPolyline(clickIndex, nodeIndexes = []) {
+  if (!nodeIndexes.length || clickIndex == null) return -1
+  let best = -1
+  let bestSpan = Infinity
+  for (let index = 0; index < nodeIndexes.length - 1; index += 1) {
+    const lo = Math.min(nodeIndexes[index], nodeIndexes[index + 1])
+    const hi = Math.max(nodeIndexes[index], nodeIndexes[index + 1])
+    if (clickIndex < lo || clickIndex > hi) continue
+    const span = Math.max(1, hi - lo)
+    if (span <= bestSpan) {
+      bestSpan = span
+      best = index
+    }
+  }
+  return best
+}
+
+/**
  * Reject a wrap sample that jumped onto the scapula / opposite laterality
  * and would tunnel through the shoulder.
  */

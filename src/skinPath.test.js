@@ -7,6 +7,8 @@ import {
   outwardWrapGuide,
   pixelWidthToWorldRadius,
   pruneBacktracking,
+  isShoulderAxillaWrap,
+  pickPairAlongPolyline,
   shouldFrontWrap,
   slerpUnitVectors,
   surfaceStepLength,
@@ -86,5 +88,21 @@ describe('skin path wrapping', () => {
     expect(isHitOnWrapSide([0.13, 1.30, 0.07], jianjing, yuanye)).toBe(true)
     expect(isHitOnWrapSide([0.13, 1.30, -0.09], jianjing, yuanye)).toBe(false)
     expect(isHitOnWrapSide([-0.13, 1.30, 0.07], jianjing, yuanye)).toBe(false)
+  })
+
+  it('wraps 肩井→淵腋 without a geodesic, but keeps 陰谷→橫骨 on the thigh', () => {
+    const jianjing = [0.12, 1.42, -0.02]
+    const yuanye = [0.15, 1.18, 0.03]
+    const ki10 = [-0.08, 0.49, -0.08]
+    const ki11 = [-0.03, 0.90, 0.08]
+    expect(isShoulderAxillaWrap(jianjing, yuanye)).toBe(true)
+    expect(isShoulderAxillaWrap(ki10, ki11)).toBe(false)
+  })
+
+  it('picks the tightest polyline span that contains the click', () => {
+    expect(pickPairAlongPolyline(15, [0, 10, 20, 30])).toBe(1)
+    expect(pickPairAlongPolyline(10, [0, 10, 20])).toBe(1)
+    expect(pickPairAlongPolyline(6, [0, 20, 5, 8])).toBe(2)
+    expect(pickPairAlongPolyline(50, [0, 10, 20])).toBe(-1)
   })
 })
