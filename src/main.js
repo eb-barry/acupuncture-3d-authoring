@@ -28,8 +28,10 @@ import {
   SKIN_LIFT,
   isPointBehindSurface,
   isHitOnWrapSide,
+  isShoulderAxillaWrap,
   marchStandoff,
   outwardWrapGuide,
+  pickPairAlongPolyline,
   pruneBacktracking,
   shouldFrontWrap,
   slerpUnitVectors,
@@ -41,6 +43,7 @@ import {
   collapseOppositeWallSpikes,
   densifyPolylineWithNormals,
   dist3,
+  distanceToSegment3,
   geodesicIsStable,
   shortestSurfacePath,
   snapPolylineToSurface,
@@ -295,6 +298,8 @@ let initialTarget = controls.target.clone()
 let modelMeshes = []
 let surfaceGraph = null
 const geodesicCache = new Map()
+const restPathCache = new Map()
+let shortArcCache = null
 let markerVisuals = []
 let routeVisuals = []
 let handleVisuals = []
@@ -1275,8 +1280,14 @@ function liftGeodesicPolyline(points, normals) {
   ))
 }
 
-function rebuildSurfaceGraph() {
+function clearPathCaches() {
   geodesicCache.clear()
+  restPathCache.clear()
+  shortArcCache = null
+}
+
+function rebuildSurfaceGraph() {
+  clearPathCaches()
   const chunks = []
   const meshOffsets = new Map()
   for (const mesh of modelMeshes) {
@@ -1460,7 +1471,7 @@ function snapChordSamplesToSkin(a, b) {
   const to = [...b.position]
   const sideX = (from[0] + to[0]) / 2
   const dist = Math.max(start.distanceTo(end), 1e-6)
-  const count = Math.max(22, Math.ceil(dist / 0.007) + 14)
+  const count = Math.min(72, Math.max(22, Math.ceil(Math.min(dist, 0.45) / 0.007) + 14))
   const points = []
   const previousRef = { current: null }
   appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), SKIN_LIFT), previousRef)
@@ -1531,16 +1542,23 @@ function fillClippedSpans(points, sideX, wrapFrom, wrapTo, depth = 0) {
  * cutting through / spawning multiple floating chords.
  */
 function skinSegmentPoints(a, b) {
-  const geodesic = geodesicOnSkin(a, b)
-  if (geodesicIsStable(geodesic)) return geodesic
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
-  let pos = start.clone()
   let normal = new THREE.Vector3(...a.normal).normalize()
   const endNormal = new THREE.Vector3(...b.normal).normalize()
-  const totalDist = Math.max(pos.distanceTo(end), 1e-6)
   const normalDot = normal.dot(endNormal)
+  const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
+  // 肩井–淵腋: wrapping the front chord is cheap and stays on skin.
+  // Mesh A* through the axilla crease can freeze the tab before handles appear.
+  if (isShoulderAxillaWrap(a.position, b.position)) {
+    const wrapped = snapChordSamplesToSkin(a, b)
+    if (wrapped?.length >= 2) return wrapped
+  } else {
+    const geodesic = geodesicOnSkin(a, b)
+    if (geodesicIsStable(geodesic)) return geodesic
+  }
+  let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
   if (useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
@@ -1732,10 +1750,18 @@ function skinCurvePoints(route) {
 }
 
 function restPathArrays(fromNode, toNode) {
-  return skinSegmentPoints(resolvedNode(fromNode), resolvedNode(toNode)).map(toArray)
+  const a = resolvedNode(fromNode)
+  const b = resolvedNode(toNode)
+  const key = geodesicCacheKey(a, b)
+  if (restPathCache.has(key)) return restPathCache.get(key).map((point) => [...point])
+  const reverseKey = geodesicCacheKey(b, a)
+  if (restPathCache.has(reverseKey)) {
+    return restPathCache.get(reverseKey).map((point) => [...point]).reverse()
+  }
+  const points = skinSegmentPoints(a, b).map(toArray)
+  restPathCache.set(key, points)
+  return points.map((point) => [...point])
 }
-
-let shortArcCache = null
 
 function lu34Pair(side) {
   const lu3 = state.acupoints.find((point) => point.code === 'LU3' && (!side || point.side === side))
@@ -1936,14 +1962,47 @@ function acupointPairs(route) {
   return pairs
 }
 
-function nearestAcupointPair(route, worldPoint) {
-  const probe = toArray(worldPoint)
+function nearestAcupointPair(route, worldPoint, line = null) {
+  const probe = worldPoint?.isVector3 ? worldPoint : new THREE.Vector3(...toArray(worldPoint))
+  const samples = line?.userData?.tubePoints
+  const pairs = acupointPairs(route)
+  if (samples?.length >= 2 && pairs.length) {
+    let clickIndex = 0
+    let bestClick = Infinity
+    samples.forEach((point, index) => {
+      const distance = point.distanceToSquared(probe)
+      if (distance < bestClick) {
+        bestClick = distance
+        clickIndex = index
+      }
+    })
+    const nodes = [...pairs.map((pair) => pair.fromNode), pairs[pairs.length - 1].toNode]
+    const nodeIndexes = []
+    let searchFrom = 0
+    nodes.forEach((node) => {
+      const target = new THREE.Vector3(...resolvedNode(node).position)
+      let bestIndex = searchFrom
+      let bestDistance = Infinity
+      for (let index = searchFrom; index < samples.length; index += 1) {
+        const distance = samples[index].distanceToSquared(target)
+        if (distance < bestDistance) {
+          bestDistance = distance
+          bestIndex = index
+        }
+      }
+      nodeIndexes.push(bestIndex)
+      searchFrom = bestIndex
+    })
+    const pairIndex = pickPairAlongPolyline(clickIndex, nodeIndexes)
+    if (pairIndex >= 0) return pairs[pairIndex]
+  }
   let best = { pair: null, distance: Infinity }
-  acupointPairs(route).forEach((pair) => {
-    const rest = restPathArrays(pair.fromNode, pair.toNode)
-    const t = closestTOnPolyline(rest, probe)
-    const point = pointAtPolylineT(rest, t)
-    const distance = Math.hypot(point[0] - probe[0], point[1] - probe[1], point[2] - probe[2])
+  pairs.forEach((pair) => {
+    const distance = distanceToSegment3(
+      toArray(probe),
+      resolvedNode(pair.fromNode).position,
+      resolvedNode(pair.toNode).position,
+    )
     if (distance < best.distance) best = { pair, distance }
   })
   return best.pair
@@ -1981,6 +2040,20 @@ function addRouteEditHandles(route) {
           handleVisuals.push({ mesh: handle, routeId: route.id })
         })
     })
+}
+
+function clearRouteEditHandles() {
+  handleVisuals.forEach(({ mesh }) => annotationGroup.remove(mesh))
+  handleVisuals = []
+}
+
+/** Show locators for the selected segment without rebuilding every meridian. */
+function refreshRouteEditHandles() {
+  clearRouteEditHandles()
+  if (appMode !== 'edit' || selected?.type !== 'meridian') return
+  state.meridians.forEach((route) => {
+    if (isRouteSelected(route)) addRouteEditHandles(route)
+  })
 }
 
 function rebuildAnnotations() {
@@ -2598,7 +2671,7 @@ function placeAt(event) {
   if (routeHit) {
     const route = state.meridians.find((item) => item.id === routeHit.object.userData.id)
     const pair = route && !isRenDuMeridian(route.meridianId)
-      ? nearestAcupointPair(route, routeHit.point)
+      ? nearestAcupointPair(route, routeHit.point, routeHit.object)
       : null
     selected = {
       type: 'meridian',
@@ -2607,7 +2680,7 @@ function placeAt(event) {
       fromPointId: pair?.fromPointId || null,
       toPointId: pair?.toPointId || null,
     }
-    rebuildAnnotations()
+    refreshRouteEditHandles()
     updateUI()
     return
   }
@@ -2741,7 +2814,7 @@ function applyModel(gltf, name, hash = null) {
   modelGroup.clear()
   modelMeshes = []
   surfaceGraph = null
-  geodesicCache.clear()
+  clearPathCaches()
   modelGroup.add(root)
 
   // Recenter at origin and sit on y=0 (same framing approach as the turntable viewer).
@@ -3225,7 +3298,7 @@ $('#visible-meridians-none').addEventListener('click', () => {
   updateUI()
 })
 
-// Capture phase: stop OrbitControls from starting a rotate when editing markers/handles.
+// Capture phase: stop OrbitControls from starting a rotate when dragging markers/handles.
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) return
   if (appMode !== 'edit') return
@@ -3234,13 +3307,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   }
   if (nearestHandleHit(event) || annotationHit(event, ['acupoint'])) {
     controls.enabled = false
-    return
   }
-  const hit = annotationHit(event, ['meridian'])
-  if (!hit) return
-  const route = state.meridians.find((item) => item.id === hit.object.userData.id)
-  if (isRenDuMeridian(route?.meridianId)) return
-  controls.enabled = false
 }, true)
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
@@ -3310,7 +3377,15 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   dragMoved = true
   replaceWithoutHistory(updatePairedPoint(dragging.id, hit))
 })
-renderer.domElement.addEventListener('pointerup', (event) => {
+renderer.domElement.addEventListener('pointerup', onPointerUp)
+renderer.domElement.addEventListener('pointercancel', onPointerCancel)
+window.addEventListener('pointercancel', onPointerCancel)
+
+function onPointerUp(event) {
+  const click = pointerDown
+    && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) <= 4
+    && event.button === 0
+  pointerDown = null
   if (dragging) {
     const wasHandle = dragging.type === 'route-handle'
     const wasAcupoint = dragging.type === 'acupoint'
@@ -3357,8 +3432,17 @@ renderer.domElement.addEventListener('pointerup', (event) => {
     }
     return
   }
-  if (pointerDown && Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) <= 4 && event.button === 0) placeAt(event)
-})
+  syncControlsEnabled()
+  if (click) placeAt(event)
+}
+
+function onPointerCancel() {
+  pointerDown = null
+  dragging = null
+  dragMoved = false
+  dragBaseline = null
+  syncControlsEnabled()
+}
 
 $('#lock-orbit').addEventListener('click', () => {
   setOrbitLocked(!orbitLocked, { sticky: true })
