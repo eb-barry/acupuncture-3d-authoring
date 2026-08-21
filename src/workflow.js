@@ -367,9 +367,25 @@ export const HANDLE_SLIDE_MAX_OFF_PATH = 0.08
 export const HANDLE_STRETCH_MAX_OFF_PATH = 0.36
 export const HANDLE_SLIDE_PROJECT_RADIUS = 0.07
 export const HANDLE_STRETCH_PROJECT_RADIUS = 0.22
+/** Snap locators onto the mesh; head chords can sit this far inside the skull. */
+export const HANDLE_SKIN_SNAP_RADIUS = 0.4
+/**
+ * Groin/thigh gap cap only applies when the rest path is clearly a limb.
+ * Head/torso paths (完骨→本神) sit closer to x=0, so a 5cm cap would block
+ * dragging onto the actual temple skin from a through-skull chord.
+ */
+export const LIMB_GAP_MIN_ABS_X = 0.12
 /** @deprecated use HANDLE_STRETCH_MAX_OFF_PATH */
 export const HANDLE_DRAG_MAX_OFF_PATH = HANDLE_STRETCH_MAX_OFF_PATH
 export const HANDLE_PROJECT_RADIUS = HANDLE_STRETCH_PROJECT_RADIUS
+
+/** How far a probe may leave the rest path on this segment. */
+export function limbGapMaxOffPath(restX, maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH) {
+  const cap = Number.isFinite(Number(maxOffPath)) ? Number(maxOffPath) : HANDLE_STRETCH_MAX_OFF_PATH
+  if (!Number.isFinite(Number(restX)) || Math.abs(restX) < LIMB_GAP_MIN_ABS_X) return cap
+  const sep = Math.abs(restX) * 2
+  return Math.min(cap, Math.max(0.05, sep * 0.42))
+}
 
 export function isCloserToMirroredPolyline(points = [], probe = [0, 0, 0]) {
   if (!points.length) return false
@@ -394,9 +410,8 @@ export function isProbeOnSameLimbSegment(rest = [], probe = [0, 0, 0], maxOffPat
   const probeX = probe[0]
   if (Math.abs(restX) > 0.035 && restX * probeX < 0) return false
   // Near the groin the other thigh is close; don't collapse into the inter-leg gap.
-  const sep = Math.abs(restX) * 2
-  const localMax = Math.min(maxOffPath, Math.max(0.05, sep * 0.42))
-  return off <= localMax
+  // Skip that cap on the head/torso so temple locators can sit on skin.
+  return off <= limbGapMaxOffPath(restX, maxOffPath)
 }
 
 /** Slice a polyline between two normalized arc-length values. */
@@ -420,11 +435,6 @@ export function isDisorderedPolyline(points = [], guide = [], { maxLengthRatio =
   const pathLen = polylineArcLength(points)
   const guideLen = polylineArcLength(guide)
   const chord = dist3(points[0], points[points.length - 1])
-  if (guideLen > 1e-4) {
-    if (pathLen > guideLen * maxLengthRatio) return true
-  } else if (chord > 1e-4 && pathLen > chord * 4.2) {
-    return true
-  }
 
   let crossings = 0
   for (let index = 1; index < points.length; index += 1) {
@@ -449,7 +459,18 @@ export function isDisorderedPolyline(points = [], guide = [], { maxLengthRatio =
     const dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (lenA * lenB)
     if (dot < -0.2) reversals += 1
   }
-  return reversals > Math.max(3, points.length * 0.12)
+  if (reversals > Math.max(3, points.length * 0.12)) return true
+
+  // A clean wrap around the skull (完骨→本神) is much longer than the 3D chord.
+  // Only keep a tight length cap when the polyline already looks chaotic.
+  const chaotic = reversals > 1 || crossings > guideCrossings + 1
+  const lengthLimit = chaotic ? maxLengthRatio : Math.max(maxLengthRatio, 3.8)
+  if (guideLen > 1e-4) {
+    if (pathLen > guideLen * lengthLimit) return true
+  } else if (chord > 1e-4 && pathLen > chord * (chaotic ? 4.2 : 8)) {
+    return true
+  }
+  return false
 }
 
 /** True when a route still has enough acupoint anchors to draw a segment. */

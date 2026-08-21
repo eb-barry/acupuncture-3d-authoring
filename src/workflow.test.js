@@ -13,6 +13,7 @@ import {
   isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
   keepPairHandles,
+  limbGapMaxOffPath,
   mergeControlsIntoRoute,
   nearestScreenIndex,
   nextExpectedPoint,
@@ -263,6 +264,16 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(left, [0, 0.9, 0.05], 0.36)).toBe(false)
   })
 
+  it('lets head locators sit on temple skin instead of a through-skull chord', () => {
+    // 完骨 → 本神: the 3D chord is inside the head (|x| ≈ 0.06).
+    const gbHead = [[0.085, 1.52, -0.03], [0.055, 1.62, 0.08]]
+    const temple = [0.12, 1.57, 0.02]
+    expect(limbGapMaxOffPath(0.065, 0.36)).toBeCloseTo(0.36)
+    expect(limbGapMaxOffPath(-0.21, 0.36)).toBeLessThan(0.2)
+    expect(isProbeOnSameLimbSegment(gbHead, temple, 0.36)).toBe(true)
+    expect(isProbeOnSameLimbSegment(gbHead, [-0.12, 1.57, 0.02], 0.36)).toBe(false)
+  })
+
   it('flags a saw-tooth polyline that crosses the midline or backtracks', () => {
     const guide = straightLinePoints([-0.2, 1, 0.05], [-0.18, 0.7, 0.04], 8)
     const zigzag = []
@@ -273,6 +284,22 @@ describe('meridian authoring workflow', () => {
     expect(isDisorderedPolyline(guide, guide)).toBe(false)
     const arc = circularArcPoints([-0.2, 1, 0], [-0.1, 1.08, 0.04], [0, 1, 0], 16)
     expect(isDisorderedPolyline(arc, straightLinePoints([-0.2, 1, 0], [0, 1, 0], 8))).toBe(false)
+  })
+
+  it('keeps a smooth cranial wrap that is longer than the 3D chord', () => {
+    const wrap = []
+    for (let index = 0; index <= 16; index += 1) {
+      const t = index / 16
+      wrap.push([
+        0.08 + (0.05 - 0.08) * t + 0.12 * Math.sin(Math.PI * t),
+        1.52 + 0.10 * t,
+        -0.04 + 0.13 * t,
+      ])
+    }
+    const chord = straightLinePoints(wrap[0], wrap[wrap.length - 1], 8)
+    const ratio = polylineArcLength(wrap) / polylineArcLength(chord)
+    expect(ratio).toBeGreaterThan(1.7)
+    expect(isDisorderedPolyline(wrap, chord, { maxLengthRatio: 1.7 })).toBe(false)
   })
 
   it('splits screen motion into along-path and sideways components', () => {
