@@ -38,10 +38,11 @@ import {
 } from './skinPath.js'
 import {
   buildCombinedSurfaceGraph,
+  collapseOppositeWallSpikes,
   densifyPolylineWithNormals,
   dist3,
+  polylineTurningEnergy,
   shortestSurfacePath,
-  simplifyPolylineWithNormals,
   snapPolylineToSurface,
   tautOnSurfacePolyline,
 } from './geodesic.js'
@@ -1241,26 +1242,34 @@ function collapseNearPoints(points, normals) {
 }
 
 function projectGeodesicSample(point, guideNormal) {
+  const guide = guideNormal || [0, 1, 0]
+  const fromOutside = projectFromOutside(new THREE.Vector3(...point), guide, 0.04)
+  if (fromOutside) return { position: fromOutside.position, normal: fromOutside.normal }
   const hit = closestSkinHit(point, {
-    maxDistance: 0.03,
-    guideNormal,
+    maxDistance: 0.012,
+    guideNormal: guide,
   })
   if (!hit) return null
   return { position: hit.position, normal: hit.normal }
 }
 
 function liftGeodesicPolyline(points, normals) {
-  const simplified = simplifyPolylineWithNormals(points, normals, 0.004)
-  const taut = tautOnSurfacePolyline(simplified.points, simplified.normals, {
+  const cleaned = collapseOppositeWallSpikes(points, normals)
+  const taut = tautOnSurfacePolyline(cleaned.points, cleaned.normals, {
     iterations: 20,
     strength: 0.7,
-    maxStep: 0.01,
-    corridor: points,
-    corridorRadius: 0.02,
+    maxStep: 0.008,
+    corridor: cleaned.points,
+    corridorRadius: 0.016,
     project: projectGeodesicSample,
+    minNormalDot: 0.25,
   })
-  const dense = densifyPolylineWithNormals(taut.points, taut.normals, 0.01)
-  const snapped = snapPolylineToSurface(dense.points, dense.normals, projectGeodesicSample)
+  const dense = densifyPolylineWithNormals(taut.points, taut.normals, 0.008)
+  const snapped = snapPolylineToSurface(dense.points, dense.normals, projectGeodesicSample, {
+    corridor: cleaned.points,
+    corridorRadius: 0.018,
+    minNormalDot: 0.25,
+  })
   return snapped.points.map((point, index) => (
     new THREE.Vector3(...point).addScaledVector(
       new THREE.Vector3(...(snapped.normals[index] || [0, 1, 0])),
@@ -1676,9 +1685,11 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null) {
       : skinSegmentPoints(fromResolved, toResolved)
   }
   const restGuide = rest?.length >= 2 ? rest : null
+  const restJagged = restGuide && polylineTurningEnergy(restGuide) > Math.max(1.6, restGuide.length * 0.06)
+  const onPathSlop = restJagged ? 0.004 : 0.012
   const movedOffPath = restGuide
-    && records.some((record) => distanceToPolyline(restGuide, record.position) > 0.012)
-  if (restGuide && !movedOffPath) return vectorsFromArrays(restGuide)
+    && records.some((record) => distanceToPolyline(restGuide, record.position) > onPathSlop)
+  if (restGuide && !movedOffPath && !restJagged) return vectorsFromArrays(restGuide)
   const anchors = [
     fromResolved,
     ...records.map((record) => ({
