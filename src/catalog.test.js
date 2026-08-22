@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { MERIDIANS, POINTS, POINT_BY_CODE, meridianLineColor, pointsForMeridian } from './catalog.js'
+import {
+  MERIDIANS,
+  POINTS,
+  POINT_BY_CODE,
+  isOmittedSurfaceSpan,
+  meridianLineColor,
+  pointsForMeridian,
+} from './catalog.js'
 
 describe('authorized acupuncture catalog', () => {
   it('contains 361 unique points across fourteen meridians', () => {
@@ -25,6 +32,19 @@ describe('authorized acupuncture catalog', () => {
     expect(MERIDIANS.filter((item) => item.bilateral)).toHaveLength(12)
     expect(MERIDIANS.find((item) => item.id === 'CV').bilateral).toBe(false)
     expect(MERIDIANS.find((item) => item.id === 'GV').bilateral).toBe(false)
+  })
+
+  it('omits the classical BL40–BL41 surface pathway in both directions', () => {
+    const bladder = pointsForMeridian('BL')
+    const bl40 = bladder.findIndex((point) => point.code === 'BL40')
+    expect(POINT_BY_CODE.get('BL40').name).toBe('委中')
+    expect(POINT_BY_CODE.get('BL41').name).toBe('附分')
+    expect(bladder[bl40 + 1].code).toBe('BL41')
+    expect(isOmittedSurfaceSpan('BL40', 'BL41')).toBe(true)
+    expect(isOmittedSurfaceSpan('BL41', 'BL40')).toBe(true)
+    expect(isOmittedSurfaceSpan('BL39', 'BL40')).toBe(false)
+    expect(isOmittedSurfaceSpan('BL41', 'BL42')).toBe(false)
+    expect(isOmittedSurfaceSpan('', 'BL41')).toBe(false)
   })
 
   it('assigns global yin / yang / ren-du meridian line colors', () => {

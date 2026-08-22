@@ -529,6 +529,28 @@ export function routeHasDrawableAcupoints(nodes) {
   return nodes.filter((node) => node.type === 'acupoint').length >= 2
 }
 
+/**
+ * Split consecutive acupoint pairs into drawable surface runs.
+ * An omitted span (no classical skin pathway) ends the current run
+ * so later pairs are not concatenated across the gap.
+ */
+export function drawableSurfacePairRuns(pairs = [], isOmittedSpan = () => false) {
+  const runs = []
+  let current = []
+  for (const pair of pairs) {
+    if (isOmittedSpan(pair)) {
+      if (current.length) {
+        runs.push(current)
+        current = []
+      }
+      continue
+    }
+    current.push(pair)
+  }
+  if (current.length) runs.push(current)
+  return runs
+}
+
 export function isSurfaceFacingCamera(position, normal, cameraPosition) {
   const towardCamera = cameraPosition.map((value, index) => value - position[index])
   const length = Math.hypot(...towardCamera) || 1
