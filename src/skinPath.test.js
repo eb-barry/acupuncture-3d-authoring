@@ -7,10 +7,10 @@ import {
   outwardWrapGuide,
   pixelWidthToWorldRadius,
   pruneBacktracking,
-  digitTipWaypoint,
-  digitWrapAnchors,
+  digitTipProbe,
   isDigitTipWrap,
-  isOnDigitCorridor,
+  isOnDigitSkin,
+  maxPolylineEdge,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
   pathFollowsFacingChord,
@@ -106,14 +106,16 @@ describe('skin path wrapping', () => {
     expect(isDigitTipWrap(shaofu, shaochong, dot)).toBe(true)
     expect(isFacingLimbSpan(shaofu, shaochong, dot)).toBe(false)
     expect(isDigitTipWrap([-0.22, 1.04, 0.02], [-0.24, 0.78, 0.01], 0.86)).toBe(false)
-    const tip = digitTipWaypoint(shaofu, shaochong, palmNormal, nailNormal)
-    expect(tip[1]).toBeLessThan(shaochong[1])
-    expect(Math.abs(tip[0])).toBeGreaterThan(Math.abs(shaofu[0]) - 0.002)
-    expect(isOnDigitCorridor(tip, shaofu, shaochong)).toBe(true)
-    expect(isOnDigitCorridor([0.48, 0.88, 0.03], shaofu, shaochong)).toBe(false)
-    const { base } = digitWrapAnchors(shaofu, shaochong, palmNormal, nailNormal)
-    expect(Math.abs(base[0])).toBeGreaterThan(Math.abs(shaofu[0]) - 0.002)
-    expect(isOnDigitCorridor(base, shaofu, shaochong)).toBe(true)
+    const probe = digitTipProbe(shaofu, shaochong, palmNormal, nailNormal)
+    expect(Math.hypot(probe[0] - shaochong[0], probe[1] - shaochong[1], probe[2] - shaochong[2])).toBeLessThan(0.016)
+    expect(probe[1]).toBeLessThan(shaochong[1])
+    expect(probe[2]).toBeLessThan(shaochong[2])
+    expect(Math.abs(probe[0] - shaochong[0])).toBeLessThan(0.008)
+    expect(isOnDigitSkin(probe, shaofu, shaochong)).toBe(true)
+    expect(isOnDigitSkin(shaofu, shaofu, shaochong)).toBe(true)
+    expect(isOnDigitSkin([0.48, 0.88, 0.03], shaofu, shaochong)).toBe(false)
+    expect(isOnDigitSkin([0.58, 0.86, 0.03], shaofu, shaochong)).toBe(false)
+    expect(maxPolylineEdge([shaofu, [0.52, 0.88, 0.03], shaochong])).toBeLessThan(0.05)
   })
 
   it('treats 少海→靈道 as a straight inner-arm span, not a wrap through the limb', () => {

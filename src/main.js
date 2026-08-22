@@ -29,9 +29,12 @@ import {
   SKIN_LIFT,
   isPointBehindSurface,
   isHitOnWrapSide,
-  digitWrapGuidePoint,
+  digitDistalDir,
+  digitPalmarDir,
+  digitTipProbe,
   isDigitTipWrap,
-  isOnDigitCorridor,
+  isOnDigitSkin,
+  maxPolylineEdge,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
   marchStandoff,
@@ -1699,40 +1702,202 @@ function snapFacingChordToSkin(a, b) {
   return points
 }
 
-/** 少府→少衝: stay on the pinky — palm, pad, fingertip, then nail. */
-function snapDigitTipWrap(a, b) {
+function isUsableDigitPath(points, from, to) {
+  if (!points || points.length < 5) return false
+  if (maxPolylineEdge(points) > 0.016) return false
+  for (const point of points) {
+    const sample = point?.isVector3 ? toArray(point) : point
+    if (!isOnDigitSkin(sample, from, to, 0.026)) return false
+  }
+  return true
+}
+
+/** Split short on-skin gaps; never subdivide a long air chord (that zigzags through the finger). */
+function densifyDigitSkin(points, sideX, from, to, depth = 0) {
+  if (!points || points.length < 2 || depth > 5) return points
+  const out = [points[0]]
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1]
+    const b = points[index]
+    const span = a.distanceTo(b)
+    if (span > 0.007 && span <= 0.02) {
+      const mid = a.clone().lerp(b, 0.5)
+      const hit = closestSkinHit(toArray(mid), { maxDistance: 0.012, sideX })
+      if (hit && isOnDigitSkin(hit.position, from, to, 0.024)) {
+        const lifted = new THREE.Vector3(...hit.position)
+          .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+        const left = densifyDigitSkin([a, lifted], sideX, from, to, depth + 1)
+        const right = densifyDigitSkin([lifted, b], sideX, from, to, depth + 1)
+        for (let cursor = 1; cursor < left.length; cursor += 1) out.push(left[cursor])
+        for (let cursor = 1; cursor < right.length; cursor += 1) out.push(right[cursor])
+        continue
+      }
+    }
+    out.push(b)
+  }
+  return out
+}
+
+/**
+ * Walk the mesh toward `b` from a known skin point.
+ * Only record real hits a few millimetres away — never an air sample.
+ */
+function marchOnSkinHits(a, b, { hint = null, stepScale = 0.5 } = {}) {
+  let pos = new THREE.Vector3(...a.position)
+  let normal = new THREE.Vector3(...a.normal).normalize()
+  const end = new THREE.Vector3(...b.position)
+  const endNormal = new THREE.Vector3(...b.normal).normalize()
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const from = a.position
+  const to = b.position
+  const totalDist = Math.max(pos.distanceTo(end), 1e-6)
+  const stepLen = Math.max(0.0022, surfaceStepLength(totalDist, normal.dot(endNormal)) * stepScale)
+  const hintVec = hint ? new THREE.Vector3(...hint) : end.clone().sub(pos)
+  const hintN = hintVec.lengthSq() > 1e-8 ? hintVec.normalize() : new THREE.Vector3(0, 1, 0)
+  const points = [pos.clone().addScaledVector(normal, SKIN_LIFT)]
+  const maxSteps = Math.max(72, Math.ceil(totalDist / stepLen) * 14 + 32)
+
+  for (let step = 0; step < maxSteps; step += 1) {
+    const toEnd = end.clone().sub(pos)
+    const remaining = toEnd.length()
+    if (remaining < stepLen * 1.05) break
+
+    let tangent = toEnd.clone().addScaledVector(normal, -toEnd.dot(normal))
+    if (tangent.lengthSq() < 1e-10 || tangent.length() < remaining * 0.12) {
+      let axis = new THREE.Vector3().crossVectors(normal, endNormal)
+      if (axis.lengthSq() < 1e-8) axis.crossVectors(normal, hintN)
+      if (axis.lengthSq() < 1e-8) axis.set(0, 1, 0).cross(normal)
+      axis.normalize()
+      tangent = new THREE.Vector3().crossVectors(axis, normal)
+      if (tangent.dot(toEnd) < 0) tangent.negate()
+      const along = hintN.clone().addScaledVector(normal, -hintN.dot(normal))
+      if (along.lengthSq() > 1e-8) tangent.lerp(along.normalize(), 0.72)
+    }
+    tangent.normalize().multiplyScalar(Math.min(stepLen, remaining * 0.35))
+
+    const progress = 1 - remaining / totalDist
+    const guide = slerpUnitVectors(
+      toArray(normal),
+      toArray(endNormal),
+      Math.min(0.8, progress + 0.03),
+      toArray(hintN),
+    )
+    const candidate = pos.clone().add(tangent)
+    const hit = closestSkinHit(toArray(candidate), {
+      maxDistance: 0.01,
+      sideX,
+      guideNormal: guide,
+    })
+      || projectFromOutside(candidate, guide, 0.01)
+      || projectFromOutside(pos.clone().addScaledVector(normal, 0.008), toArray(normal), 0.01)
+    if (!hit) continue
+    const next = new THREE.Vector3(...hit.position)
+    if (next.distanceTo(pos) > 0.012) continue
+    if (next.distanceTo(end) > remaining + 0.01) continue
+    if (!isOnDigitSkin(hit.position, from, to, 0.026)) continue
+    pos.copy(next)
+    normal.set(...hit.normal).normalize()
+    points.push(pos.clone().addScaledVector(normal, SKIN_LIFT))
+  }
+  points.push(end.clone().addScaledVector(endNormal, SKIN_LIFT))
+  return isUsableDigitPath(points, from, to) ? points : null
+}
+
+/** Palm → pinky pad samples, then a short outside cast around the fingertip onto the nail. */
+function sampleDigitSkinPath(a, b, tipPos, tipNormal, { distal, palmar, sideX, tipOnSkin = false }) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
-  const sideX = (a.position[0] + b.position[0]) / 2
-  const minAbsX = Math.abs(a.position[0]) - 0.012
-  const count = 44
+  const tipGuide = Array.isArray(tipNormal) ? tipNormal : toArray(tipNormal)
   const points = []
   const previousRef = { current: null }
-  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), SKIN_LIFT), previousRef)
-  for (let index = 1; index < count - 1; index += 1) {
-    const t = index / (count - 1)
-    const sample = digitWrapGuidePoint(a.position, b.position, a.normal, b.normal, t)
-    const chord = new THREE.Vector3(...sample.point)
-    const guideVec = new THREE.Vector3(...sample.guide)
-    const standoff = 0.016
-    const pushed = chord.clone().addScaledVector(guideVec, standoff)
-    const hit = projectFromOutside(pushed, sample.guide, standoff * 2)
-      || closestSkinHit(toArray(chord), {
-        maxDistance: 0.018,
-        sideX,
-        guideNormal: sample.guide,
-      })
-    if (!hit) continue
-    if (!isOnDigitCorridor(hit.position, a.position, b.position)) continue
-    if (Math.abs(hit.position[0]) < minAbsX) continue
-    const hitNormal = new THREE.Vector3(...hit.normal)
-    if (hitNormal.dot(guideVec) < 0.12) continue
-    const lifted = new THREE.Vector3(...hit.position).addScaledVector(hitNormal, SKIN_LIFT)
-    if (previousRef.current && lifted.distanceTo(previousRef.current) > 0.022) continue
+  const accept = (hit) => {
+    if (!hit || !isOnDigitSkin(hit.position, a.position, b.position, 0.024)) return
+    const lifted = new THREE.Vector3(...hit.position)
+      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
     appendSkinPoint(points, lifted, previousRef)
   }
-  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), SKIN_LIFT), previousRef)
-  return points.length >= 4 ? points : null
+
+  accept({ position: a.position, normal: a.normal })
+
+  const palmarCount = 32
+  for (let index = 1; index < palmarCount; index += 1) {
+    const t = index / palmarCount
+    const chord = start.clone().lerp(tipPos, t)
+    const guide = slerpUnitVectors(a.normal, tipGuide, t, distal)
+    const hit = projectFromOutside(chord, guide, 0.01)
+      || closestSkinHit(toArray(chord), { maxDistance: 0.012, sideX, guideNormal: guide })
+    accept(hit)
+  }
+
+  if (tipOnSkin) accept({ position: toArray(tipPos), normal: tipGuide })
+
+  const wrapCenter = tipPos.clone().lerp(end, 0.45)
+  const wrapCount = 18
+  for (let index = 1; index < wrapCount; index += 1) {
+    const t = index / wrapCount
+    const guide = slerpUnitVectors(palmar, b.normal, t, distal)
+    const hit = projectFromOutside(wrapCenter, guide, 0.011)
+      || closestSkinHit(
+        toArray(wrapCenter.clone().addScaledVector(new THREE.Vector3(...guide), 0.006)),
+        { maxDistance: 0.012, sideX, guideNormal: guide },
+      )
+    accept(hit)
+  }
+
+  accept({ position: b.position, normal: b.normal })
+  return points
+}
+
+/** 少府→少衝: stay on the pinky skin to the fingertip, then onto the nail. */
+function snapDigitTipWrap(a, b) {
+  const distal = digitDistalDir(a.position, b.position)
+  const palmar = digitPalmarDir(a.normal, b.normal)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const probe = digitTipProbe(a.position, b.position, a.normal, b.normal)
+  const tipHit = closestSkinHit(probe, {
+    maxDistance: 0.014,
+    sideX,
+    guideNormal: palmar,
+  })
+  const tipOnSkin = tipHit && isOnDigitSkin(tipHit.position, a.position, b.position, 0.022)
+  const tipPos = tipOnSkin
+    ? new THREE.Vector3(...tipHit.position)
+    : new THREE.Vector3(...probe)
+  const tipNormal = tipOnSkin ? tipHit.normal : palmar
+
+  const finish = (points) => {
+    if (!points || points.length < 3) return null
+    const dense = densifyDigitSkin(points, sideX, a.position, b.position)
+    return isUsableDigitPath(dense, a.position, b.position) ? dense : null
+  }
+
+  const sampled = finish(sampleDigitSkinPath(a, b, tipPos, tipNormal, {
+    distal,
+    palmar,
+    sideX,
+    tipOnSkin,
+  }))
+  if (sampled) return sampled
+
+  if (tipOnSkin) {
+    const tip = { position: tipHit.position, normal: tipHit.normal }
+    const joined = finish(concatSkinPieces([geodesicOnSkin(a, tip), geodesicOnSkin(tip, b)]))
+    if (joined) return joined
+    const marched = finish(concatSkinPieces([
+      marchOnSkinHits(a, tip, { hint: distal, stepScale: 0.5 }),
+      marchOnSkinHits(tip, b, { hint: distal, stepScale: 0.45 }),
+    ]))
+    if (marched) return marched
+  }
+
+  const fallback = finish(marchOnSkinHits(a, b, { hint: distal, stepScale: 0.45 }))
+  if (fallback) return fallback
+  return densifyDigitSkin(
+    sampleDigitSkinPath(a, b, tipPos, tipNormal, { distal, palmar, sideX, tipOnSkin }),
+    sideX,
+    a.position,
+    b.position,
+  )
 }
 
 function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = {}) {
@@ -1746,7 +1911,11 @@ function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = 
   const digitTip = isDigitTipWrap(a.position, b.position, normalDot)
   if (digitTip) {
     const wrapped = snapDigitTipWrap(a, b)
-    if (wrapped?.length >= 3) return wrapped
+    if (wrapped?.length >= 2) return wrapped
+    return [
+      start.clone().addScaledVector(normal, SKIN_LIFT),
+      end.clone().addScaledVector(endNormal, SKIN_LIFT),
+    ]
   }
   const facingLimb = isFacingLimbSpan(a.position, b.position, normalDot)
   if (facingLimb) {
