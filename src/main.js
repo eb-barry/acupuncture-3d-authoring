@@ -60,6 +60,7 @@ import {
   buildRouteNodesFromPlaced,
   clampHandleT,
   closestTOnPolyline,
+  catalogSequence,
   defaultHandleTs,
   drawableSurfacePairRuns,
   exceedsDragThreshold,
@@ -70,6 +71,9 @@ import {
   keepPairHandles,
   mergeControlsIntoRoute,
   nearestScreenIndex,
+  normalizePlacedPointSide,
+  orderRouteAcupointsForDrawing,
+  placedPointSide,
   placementProgress,
   pointAtPolylineT,
   polylineArcLength,
@@ -77,6 +81,8 @@ import {
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   routeHasDrawableAcupoints,
+  sameSpatialSide,
+  spatialSideFromPosition,
   visibleHandleCount,
 } from './workflow.js'
 
@@ -1850,7 +1856,8 @@ function routeNodeCode(node) {
 }
 
 function isOmittedSurfacePair(pair) {
-  return isOmittedSurfaceSpan(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
+  if (isOmittedSurfaceSpan(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))) return true
+  return !sameSpatialSide(resolvedNode(pair.fromNode), resolvedNode(pair.toNode))
 }
 
 function pairKey(pair) {
@@ -2138,23 +2145,43 @@ function isSegmentSelected(route, fromPointId, toPointId) {
 }
 
 function consecutiveAcupointPairs(route) {
-  const indexes = route.nodes
-    .map((node, index) => (node.type === 'acupoint' ? index : -1))
-    .filter((index) => index >= 0)
+  const entries = []
+  route.nodes.forEach((node, index) => {
+    if (node.type !== 'acupoint') return
+    const point = getPoint(node.pointId)
+    const position = point?.position || node.position
+    entries.push({
+      index,
+      node,
+      pointId: node.pointId,
+      code: point?.code || '',
+      sequence: point?.sequence ?? catalogSequence(point?.code),
+      side: placedPointSide({
+        ...point,
+        position,
+        side: point?.side || route.side,
+      }),
+    })
+  })
+  const ordered = orderRouteAcupointsForDrawing(entries)
   const pairs = []
-  for (let index = 0; index < indexes.length - 1; index += 1) {
-    const fromIndex = indexes[index]
-    const toIndex = indexes[index + 1]
+  for (let index = 0; index < ordered.length - 1; index += 1) {
+    const from = ordered[index]
+    const to = ordered[index + 1]
+    const lo = Math.min(from.index, to.index)
+    const hi = Math.max(from.index, to.index)
+    const between = route.nodes.slice(lo + 1, hi)
+    const hasOtherAcupoint = between.some((node) => node.type === 'acupoint')
     pairs.push({
-      fromIndex,
-      toIndex,
-      fromNode: route.nodes[fromIndex],
-      toNode: route.nodes[toIndex],
-      fromPointId: route.nodes[fromIndex].pointId,
-      toPointId: route.nodes[toIndex].pointId,
-      handles: keepPairHandles(
-        route.nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control'),
-      ),
+      fromIndex: from.index,
+      toIndex: to.index,
+      fromNode: from.node,
+      toNode: to.node,
+      fromPointId: from.pointId,
+      toPointId: to.pointId,
+      handles: hasOtherAcupoint
+        ? []
+        : keepPairHandles(between.filter((node) => node.type === 'control')),
     })
   }
   return pairs
@@ -2676,7 +2703,32 @@ function autoEnsureCompletedMeridians() {
   return created
 }
 
+function repairExistingMeridianRoutes(meridians, acupoints) {
+  let next = meridians
+  MERIDIANS.forEach((meridian) => {
+    next = syncMeridianRoutes(
+      next,
+      meridian,
+      acupoints.filter((point) => point.meridianId === meridian.id),
+    )
+  })
+  return next
+}
+
 function normalizeFixedStyles(documentState) {
+  const acupoints = (documentState.acupoints || []).map((point) => ({
+    ...normalizePlacedPointSide(point),
+    size: FIXED_MARKER_SIZE,
+  }))
+  const meridians = repairExistingMeridianRoutes(
+    (documentState.meridians || []).map((route) => ({
+      ...route,
+      width: FIXED_LINE_WIDTH,
+      color: meridianLineColor(route.meridianId),
+      nodes: (route.nodes || []).map(sanitizeRouteNode),
+    })),
+    acupoints,
+  )
   return {
     ...documentState,
     settings: {
@@ -2684,16 +2736,8 @@ function normalizeFixedStyles(documentState) {
       markerSize: FIXED_MARKER_SIZE,
       lineWidth: FIXED_LINE_WIDTH,
     },
-    meridians: (documentState.meridians || []).map((route) => ({
-      ...route,
-      width: FIXED_LINE_WIDTH,
-      color: meridianLineColor(route.meridianId),
-      nodes: (route.nodes || []).map(sanitizeRouteNode),
-    })),
-    acupoints: (documentState.acupoints || []).map((point) => ({
-      ...point,
-      size: FIXED_MARKER_SIZE,
-    })),
+    meridians,
+    acupoints,
   }
 }
 
@@ -2722,7 +2766,7 @@ function placeAcupoint(hit) {
   const meridian = meridianById(selectedCatalog.meridianId)
   let points
   if (meridian.bilateral) {
-    const firstSide = $('#point-side').value
+    const firstSide = spatialSideFromPosition(hit.position, $('#point-side').value)
     const otherSide = firstSide === 'left' ? 'right' : 'left'
     const pairId = makeId()
     const mirrored = mirroredNode(hit)
