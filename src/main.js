@@ -29,12 +29,17 @@ import {
   SKIN_LIFT,
   isPointBehindSurface,
   isHitOnWrapSide,
+  catmullRomThrough,
   digitDistalDir,
   digitPalmarDir,
   digitTipProbe,
   isDigitTipWrap,
   isOnDigitSkin,
+  isTeEarArcPair,
+  isTeTempleHandlePair,
   maxPolylineEdge,
+  teEarArcPoints,
+  TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
   marchStandoff,
@@ -1900,7 +1905,114 @@ function snapDigitTipWrap(a, b) {
   )
 }
 
-function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = {}) {
+function sameHeadSideHit(hit, sideX) {
+  if (!hit) return false
+  if (!Number.isFinite(sideX) || Math.abs(sideX) <= 0.03) return true
+  return !(hit.position[0] * sideX < 0 && Math.abs(hit.position[0]) > 0.03)
+}
+
+function densifyHeadSkin(points, sideX, depth = 0) {
+  if (!points || points.length < 2 || depth > 5) return points
+  const out = [points[0]]
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1]
+    const b = points[index]
+    const span = a.distanceTo(b)
+    if (span > 0.008 && span <= 0.024) {
+      const mid = a.clone().lerp(b, 0.5)
+      const hit = closestSkinHit(toArray(mid), { maxDistance: 0.016, sideX })
+      if (hit && sameHeadSideHit(hit, sideX)) {
+        const lifted = new THREE.Vector3(...hit.position)
+          .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+        const left = densifyHeadSkin([a, lifted], sideX, depth + 1)
+        const right = densifyHeadSkin([lifted, b], sideX, depth + 1)
+        for (let cursor = 1; cursor < left.length; cursor += 1) out.push(left[cursor])
+        for (let cursor = 1; cursor < right.length; cursor += 1) out.push(right[cursor])
+        continue
+      }
+    }
+    out.push(b)
+  }
+  return out
+}
+
+function snapCurveSamplesToHeadSkin(samples, a, b) {
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const points = []
+  const previousRef = { current: null }
+  const accept = (hit) => {
+    if (!sameHeadSideHit(hit, sideX)) return
+    const lifted = new THREE.Vector3(...hit.position)
+      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+    appendSkinPoint(points, lifted, previousRef)
+  }
+  accept({ position: a.position, normal: a.normal })
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    const t = index / Math.max(1, samples.length - 1)
+    const guide = slerpUnitVectors(a.normal, b.normal, t)
+    const sample = samples[index]
+    const hit = closestSkinHit(sample, { maxDistance: 0.05, sideX, guideNormal: guide })
+      || projectFromOutside(new THREE.Vector3(...sample), guide, 0.028)
+    accept(hit)
+  }
+  accept({ position: b.position, normal: b.normal })
+  if (points.length < 2) return null
+  return densifyHeadSkin(points, sideX)
+}
+
+function snapTeTempleCurveToSkin(a, b, records, rest = []) {
+  const path = rest.length >= 2 ? rest : [a.position, b.position]
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
+  ))
+  const controls = [a.position, ...ordered.map((record) => record.position), b.position]
+  return snapCurveSamplesToHeadSkin(catmullRomThrough(controls, 14), a, b)
+}
+
+function tautTeEarOnSkin(points, a, b) {
+  if (!points || points.length < 4) return points
+  const arrays = arraysFromSkin(points)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const normals = arrays.map((_, index) => (
+    slerpUnitVectors(a.normal, b.normal, index / Math.max(1, arrays.length - 1))
+  ))
+  const taut = tautOnSurfacePolyline(arrays, normals, {
+    iterations: 22,
+    strength: 0.82,
+    maxStep: 0.0035,
+    corridor: arrays,
+    corridorRadius: 0.02,
+    minNormalDot: 0.08,
+    project: (point, normal) => {
+      const hit = closestSkinHit(point, { maxDistance: 0.018, sideX, guideNormal: normal })
+      return hit && sameHeadSideHit(hit, sideX)
+        ? { position: hit.position, normal: hit.normal }
+        : null
+    },
+  })
+  return taut.points.map((point, index) => (
+    new THREE.Vector3(...point).addScaledVector(
+      new THREE.Vector3(...(taut.normals[index] || [0, 1, 0])),
+      SKIN_LIFT,
+    )
+  ))
+}
+
+function snapTeEarArcToSkin(a, b, fromCode, toCode) {
+  const samples = teEarArcPoints(fromCode, toCode, a.position, b.position)
+  const snapped = snapCurveSamplesToHeadSkin(samples, a, b)
+  if (snapped?.length >= 4) return tautTeEarOnSkin(snapped, a, b)
+  return snapped
+}
+
+function skinSegmentPoints(a, b, {
+  allowGeodesic = true,
+  preferWrap = false,
+  earArc = false,
+  teTemple = false,
+  fromCode = '',
+  toCode = '',
+} = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   let normal = new THREE.Vector3(...a.normal).normalize()
@@ -1908,6 +2020,20 @@ function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = 
   const normalDot = normal.dot(endNormal)
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
+  if (earArc) {
+    const arced = snapTeEarArcToSkin(a, b, fromCode, toCode)
+    if (arced?.length >= 3) return arced
+    if (allowGeodesic) {
+      const geodesic = geodesicOnSkin(a, b)
+      if (geodesic && (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic.length >= 6)) {
+        return tautTeEarOnSkin(geodesic, a, b)
+      }
+    }
+  }
+  if (teTemple && allowGeodesic) {
+    const geodesic = geodesicOnSkin(a, b)
+    if (geodesic?.length >= 2) return geodesic
+  }
   const digitTip = isDigitTipWrap(a.position, b.position, normalDot)
   if (digitTip) {
     const wrapped = snapDigitTipWrap(a, b)
@@ -1922,7 +2048,7 @@ function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = 
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
   }
-  const wrapFirst = !facingLimb && !digitTip && (
+  const wrapFirst = !earArc && !teTemple && !facingLimb && !digitTip && (
     preferWrap
     || isShoulderAxillaWrap(a.position, b.position)
     || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
@@ -1931,14 +2057,14 @@ function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = 
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
+  if (allowGeodesic && !earArc && !teTemple && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesicIsStable(geodesic)) return geodesic
   }
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!earArc && !teTemple && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -2085,13 +2211,25 @@ function concatSkinPieces(pieces) {
 function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
   preview = false,
   preferWrap = false,
+  earArc = false,
+  teTemple = false,
+  fromCode = '',
+  toCode = '',
 } = {}) {
   const restGuide = rest?.length >= 2 ? rest : null
   const restArrays = restGuide ? arraysFromSkin(restGuide) : []
   const drawSpan = (fromNode, toNode) => skinSegmentPoints(fromNode, toNode, {
-    allowGeodesic: !preview && !preferWrap,
+    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap,
     preferWrap,
+    earArc,
+    teTemple,
+    fromCode,
+    toCode,
   })
+  if (teTemple && records.length) {
+    const curved = snapTeTempleCurveToSkin(fromResolved, toResolved, records, restArrays)
+    if (curved?.length >= 3) return curved
+  }
   if (!records.length) {
     return restArrays.length >= 2
       ? vectorsFromArrays(restArrays)
@@ -2146,9 +2284,17 @@ function drawPairSkinSegment(route, pair, override = null) {
   const records = isOverride && override.records
     ? override.records
     : pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
+  const fromCode = routeNodeCode(pair.fromNode)
+  const toCode = routeNodeCode(pair.toNode)
+  const teTemple = isTeTempleHandlePair(fromCode, toCode)
+  const earArc = isTeEarArcPair(fromCode, toCode)
   return pairDrawnSkinPoints(a, b, records, rest, {
-    preview: Boolean(isOverride && override.preview),
-    preferWrap: isShoulderAxillaWrap(a.position, b.position),
+    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc,
+    preferWrap: !teTemple && !earArc && isShoulderAxillaWrap(a.position, b.position),
+    earArc,
+    teTemple,
+    fromCode,
+    toCode,
   })
 }
 
@@ -2175,6 +2321,10 @@ function skinCurveRuns(route, override = null) {
 function restPathArrays(fromNode, toNode) {
   const a = resolvedNode(fromNode)
   const b = resolvedNode(toNode)
+  const fromCode = routeNodeCode(fromNode)
+  const toCode = routeNodeCode(toNode)
+  const teTemple = isTeTempleHandlePair(fromCode, toCode)
+  const earArc = isTeEarArcPair(fromCode, toCode)
   const key = geodesicCacheKey(a, b)
   const reverseKey = geodesicCacheKey(b, a)
   const usableCached = (cached) => {
@@ -2188,7 +2338,12 @@ function restPathArrays(fromNode, toNode) {
   if (restPathCache.has(reverseKey) && usableCached(restPathCache.get(reverseKey))) {
     return restPathCache.get(reverseKey).map((point) => [...point]).reverse()
   }
-  const points = skinSegmentPoints(a, b).map(toArray)
+  const points = skinSegmentPoints(a, b, {
+    earArc,
+    teTemple,
+    fromCode,
+    toCode,
+  }).map(toArray)
   restPathCache.set(key, points)
   return points.map((point) => [...point])
 }

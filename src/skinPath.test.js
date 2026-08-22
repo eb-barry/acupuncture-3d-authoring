@@ -7,10 +7,17 @@ import {
   outwardWrapGuide,
   pixelWidthToWorldRadius,
   pruneBacktracking,
+  catmullRomThrough,
   digitTipProbe,
   isDigitTipWrap,
   isOnDigitSkin,
+  isTeEarArcPair,
+  isTeHelixPair,
+  isTeTempleHandlePair,
   maxPolylineEdge,
+  teEarArcGuide,
+  teEarArcPoints,
+  TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
   pathFollowsFacingChord,
@@ -20,6 +27,7 @@ import {
   surfaceStepLength,
   useConvexChordWrap,
 } from './skinPath.js'
+import { geodesicIsStable } from './geodesic.js'
 
 describe('skin path wrapping', () => {
   it('slerps nearly-opposite normals toward a hint side (palm wrap)', () => {
@@ -152,5 +160,70 @@ describe('skin path wrapping', () => {
     expect(pickPairAlongPolyline(10, [0, 10, 20])).toBe(1)
     expect(pickPairAlongPolyline(6, [0, 20, 5, 8])).toBe(2)
     expect(pickPairAlongPolyline(50, [0, 10, 20])).toBe(-1)
+  })
+
+  it('limits temple-curve and ear-arc helpers to 手少陽三焦經 head pairs', () => {
+    expect(isTeTempleHandlePair('TE23', 'TE22')).toBe(true)
+    expect(isTeTempleHandlePair('TE22', 'TE23')).toBe(true)
+    expect(isTeTempleHandlePair('GB1', 'GB2')).toBe(false)
+    expect(isTeTempleHandlePair('TE21', 'TE22')).toBe(false)
+    expect(isTeEarArcPair('TE17', 'TE18')).toBe(true)
+    expect(isTeEarArcPair('TE20', 'TE21')).toBe(true)
+    expect(isTeEarArcPair('TE17', 'TE19')).toBe(false)
+    expect(isTeEarArcPair('TE22', 'TE23')).toBe(false)
+    expect(isTeEarArcPair('SI19', 'SI18')).toBe(false)
+    expect(isTeHelixPair('TE20', 'TE21')).toBe(true)
+    expect(isTeHelixPair('TE18', 'TE19')).toBe(false)
+  })
+
+  it('builds a Catmull-Rom through 絲竹空–耳和髎 locators', () => {
+    const from = [0.08, 1.58, 0.06]
+    const h1 = [0.085, 1.56, 0.05]
+    const h2 = [0.09, 1.54, 0.04]
+    const h3 = [0.092, 1.52, 0.035]
+    const to = [0.095, 1.50, 0.03]
+    const curve = catmullRomThrough([from, h1, h2, h3, to], 10)
+    expect(curve.length).toBeGreaterThan(30)
+    const near = (target) => curve.some((point) => (
+      Math.hypot(point[0] - target[0], point[1] - target[1], point[2] - target[2]) < 1e-6
+    ))
+    expect(near(from)).toBe(true)
+    expect(near(h2)).toBe(true)
+    expect(near(to)).toBe(true)
+    const mid = curve[Math.floor(curve.length / 2)]
+    expect(mid[1]).toBeLessThan(from[1])
+    expect(mid[1]).toBeGreaterThan(to[1])
+  })
+
+  it('bulges 翳風–角孫 behind the ear and 角孫–耳門 over the helix', () => {
+    const yifeng = [0.09, 1.40, -0.01]
+    const chima = [0.09, 1.44, -0.02]
+    const jiaosun = [0.09, 1.56, 0.01]
+    const ermen = [0.085, 1.46, 0.05]
+    const behind = teEarArcGuide('TE17', 'TE18', yifeng, chima)
+    expect(behind[2]).toBeLessThan(0)
+    expect(behind[0]).toBeGreaterThan(0)
+    const helix = teEarArcGuide('TE20', 'TE21', jiaosun, ermen)
+    expect(helix[1]).toBeGreaterThan(0.4)
+    expect(helix[2]).toBeGreaterThan(0)
+    const behindArc = teEarArcPoints('TE18', 'TE19', chima, [0.09, 1.50, -0.015])
+    const behindMid = behindArc[Math.floor(behindArc.length / 2)]
+    expect(behindMid[2]).toBeLessThan(Math.min(chima[2], -0.015))
+    const helixArc = teEarArcPoints('TE20', 'TE21', jiaosun, ermen)
+    const helixHigh = Math.max(...helixArc.map((point) => point[1]))
+    expect(helixHigh).toBeGreaterThan(jiaosun[1] - 0.002)
+  })
+
+  it('keeps a high-curvature ear polyline that the default geodesic gate would drop', () => {
+    const wiggly = []
+    for (let index = 0; index < 20; index += 1) {
+      wiggly.push([
+        0.085 + (index % 2) * 0.0015,
+        1.40 + index * 0.005,
+        -0.02 + Math.sin(index * 0.7) * 0.004,
+      ])
+    }
+    expect(geodesicIsStable(wiggly)).toBe(false)
+    expect(geodesicIsStable(wiggly, TE_EAR_GEODESIC_STABLE)).toBe(true)
   })
 })
