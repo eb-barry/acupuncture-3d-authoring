@@ -447,6 +447,35 @@ export function catmullRomThrough(points = [], samplesPerSpan = 12) {
   return out
 }
 
+/** 小海 SI8 ↔ 肩貞 SI9 only. */
+export function isSiXiaohaiJianzhenPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('SI8') && codes.has('SI9')
+}
+
+/** Stay on the back of the arm/shoulder — not into the axilla or chest. */
+export function siArmShoulderWrapGuide(chordPoint = [0, 0, 0], sideX = 0) {
+  const side = Math.sign(Number(sideX) || Number(chordPoint[0]) || 1) || 1
+  return normalize([side * 0.28, 0.08, -0.96])
+}
+
+/** Reject samples that fell into the armpit crease or jumped onto the chest. */
+export function isSiArmShoulderHit(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  if (p[0] * side < 0 && Math.abs(p[0]) > 0.03) return false
+  const minAbsX = Math.min(Math.abs(a[0]), Math.abs(b[0])) - 0.05
+  if (Math.abs(p[0]) < Math.max(0.12, minAbsX)) return false
+  const maxZ = Math.max(a[2], b[2]) + 0.045
+  if (p[2] > maxZ) return false
+  const yMin = Math.min(a[1], b[1]) - 0.06
+  const yMax = Math.max(a[1], b[1]) + 0.06
+  if (p[1] < yMin || p[1] > yMax) return false
+  return true
+}
+
 export function digitWrapGuidePoint(from, to, fromNormal, toNormal, t) {
   const { base, tip, distal, palmar } = digitWrapAnchors(from, to, fromNormal, toNormal)
   const tt = Math.min(1, Math.max(0, Number(t) || 0))

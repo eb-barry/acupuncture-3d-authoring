@@ -14,6 +14,9 @@ import {
   isTeEarArcPair,
   isTeHelixPair,
   isTeTempleHandlePair,
+  isSiXiaohaiJianzhenPair,
+  isSiArmShoulderHit,
+  siArmShoulderWrapGuide,
   maxPolylineEdge,
   teEarArcGuide,
   teEarArcPoints,
@@ -225,5 +228,21 @@ describe('skin path wrapping', () => {
     }
     expect(geodesicIsStable(wiggly)).toBe(false)
     expect(geodesicIsStable(wiggly, TE_EAR_GEODESIC_STABLE)).toBe(true)
+  })
+
+  it('keeps 小海–肩貞 on the posterior arm, not the axilla or chest', () => {
+    expect(isSiXiaohaiJianzhenPair('SI8', 'SI9')).toBe(true)
+    expect(isSiXiaohaiJianzhenPair('SI9', 'SI8')).toBe(true)
+    expect(isSiXiaohaiJianzhenPair('SI7', 'SI8')).toBe(false)
+    expect(isSiXiaohaiJianzhenPair('TE14', 'TE13')).toBe(false)
+    const xiaohai = [0.32, 1.02, -0.04]
+    const jianzhen = [0.18, 1.32, -0.08]
+    const guide = siArmShoulderWrapGuide([0.25, 1.17, -0.06], 0.25)
+    expect(guide[2]).toBeLessThan(-0.7)
+    expect(guide[0]).toBeGreaterThan(0)
+    expect(isSiArmShoulderHit([0.26, 1.16, -0.07], xiaohai, jianzhen)).toBe(true)
+    expect(isSiArmShoulderHit([0.06, 1.18, -0.04], xiaohai, jianzhen)).toBe(false)
+    expect(isSiArmShoulderHit([0.24, 1.16, 0.08], xiaohai, jianzhen)).toBe(false)
+    expect(isSiArmShoulderHit([-0.26, 1.16, -0.07], xiaohai, jianzhen)).toBe(false)
   })
 })
