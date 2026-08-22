@@ -68,7 +68,9 @@ import {
   isOcclusionHitBlocking,
   isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
+  keepLocatorsOnPairLimb,
   keepPairHandles,
+  locatorOnPairLimb,
   mergeControlsIntoRoute,
   nearestScreenIndex,
   normalizePlacedPointSide,
@@ -1833,7 +1835,8 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
       ? vectorsFromArrays(restArrays)
       : drawSpan(fromResolved, toResolved)
   }
-  const spans = locatorSpans(restArrays, fromResolved, toResolved, records)
+  const usable = keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays)
+  const spans = locatorSpans(restArrays, fromResolved, toResolved, usable)
   const pieces = spans.map((span) => {
     if (span.restSlice?.length >= 2) return vectorsFromArrays(span.restSlice)
     return drawSpan(
@@ -1986,7 +1989,9 @@ function restPathAnchor(fromNode, toNode, rest, t) {
 }
 
 function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(fromNode, toNode)) {
-  if (handle?.position) {
+  const from = resolvedNode(fromNode)
+  const to = resolvedNode(toNode)
+  if (handle?.position && locatorOnPairLimb(from, to, handle, rest)) {
     return snapHandleToSkin({ position: handle.position, normal: handle.normal }, fromNode, toNode)
   }
   const t = 0.5
@@ -1994,7 +1999,11 @@ function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(f
 }
 
 function pairWaypoints(fromNode, toNode, handles, count, rest) {
-  const slots = resolveHandleSlots(handles, count, rest)
+  const slots = resolveHandleSlots(
+    keepLocatorsOnPairLimb(resolvedNode(fromNode), resolvedNode(toNode), handles, rest),
+    count,
+    rest,
+  )
   const defaults = defaultHandleTs(count)
   return slots.map((handle, index) => {
     if (handle) return segmentHandlePosition(fromNode, toNode, handle, rest)
@@ -2003,7 +2012,11 @@ function pairWaypoints(fromNode, toNode, handles, count, rest) {
 }
 
 function pairHandleRecords(fromNode, toNode, handles, count, rest) {
-  const slots = resolveHandleSlots(handles, count, rest)
+  const slots = resolveHandleSlots(
+    keepLocatorsOnPairLimb(resolvedNode(fromNode), resolvedNode(toNode), handles, rest),
+    count,
+    rest,
+  )
   const defaults = defaultHandleTs(count)
   return slots.map((handle, index) => {
     const placed = handle
@@ -2181,7 +2194,11 @@ function consecutiveAcupointPairs(route) {
       toPointId: to.pointId,
       handles: hasOtherAcupoint
         ? []
-        : keepPairHandles(between.filter((node) => node.type === 'control')),
+        : keepLocatorsOnPairLimb(
+          resolvedNode(from.node),
+          resolvedNode(to.node),
+          keepPairHandles(between.filter((node) => node.type === 'control')),
+        ),
     })
   }
   return pairs
