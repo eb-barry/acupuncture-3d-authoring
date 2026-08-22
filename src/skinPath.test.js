@@ -8,7 +8,9 @@ import {
   pixelWidthToWorldRadius,
   pruneBacktracking,
   digitTipWaypoint,
+  digitWrapAnchors,
   isDigitTipWrap,
+  isOnDigitCorridor,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
   pathFollowsFacingChord,
@@ -104,12 +106,14 @@ describe('skin path wrapping', () => {
     expect(isDigitTipWrap(shaofu, shaochong, dot)).toBe(true)
     expect(isFacingLimbSpan(shaofu, shaochong, dot)).toBe(false)
     expect(isDigitTipWrap([-0.22, 1.04, 0.02], [-0.24, 0.78, 0.01], 0.86)).toBe(false)
-    const tip = digitTipWaypoint(shaofu, shaochong, palmNormal)
+    const tip = digitTipWaypoint(shaofu, shaochong, palmNormal, nailNormal)
     expect(tip[1]).toBeLessThan(shaochong[1])
-    const towardPalm = (tip[0] - shaochong[0]) * palmNormal[0]
-      + (tip[1] - shaochong[1]) * palmNormal[1]
-      + (tip[2] - shaochong[2]) * palmNormal[2]
-    expect(towardPalm).toBeGreaterThan(0)
+    expect(Math.abs(tip[0])).toBeGreaterThan(Math.abs(shaofu[0]) - 0.002)
+    expect(isOnDigitCorridor(tip, shaofu, shaochong)).toBe(true)
+    expect(isOnDigitCorridor([0.48, 0.88, 0.03], shaofu, shaochong)).toBe(false)
+    const { base } = digitWrapAnchors(shaofu, shaochong, palmNormal, nailNormal)
+    expect(Math.abs(base[0])).toBeGreaterThan(Math.abs(shaofu[0]) - 0.002)
+    expect(isOnDigitCorridor(base, shaofu, shaochong)).toBe(true)
   })
 
   it('treats 少海→靈道 as a straight inner-arm span, not a wrap through the limb', () => {
