@@ -9,7 +9,7 @@ import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, getTriangleHitPointInfo } from 'three-mesh-bvh'
-import { MERIDIANS, POINTS, POINT_BY_CODE, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, isOmittedSurfaceSpan, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
 import {
   BODY_MODELS,
   emptyDocument,
@@ -61,6 +61,7 @@ import {
   clampHandleT,
   closestTOnPolyline,
   defaultHandleTs,
+  drawableSurfacePairRuns,
   exceedsDragThreshold,
   isDisorderedPolyline,
   isOcclusionHitBlocking,
@@ -1843,49 +1844,60 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
   return concatSkinPieces(pieces) || drawSpan(fromResolved, toResolved)
 }
 
-/** Continuous on-skin polyline: 穴→點 or 穴→點一→點二→穴. */
-function skinCurvePoints(route, override = null) {
-  const nodes = route.nodes
-  if (!nodes.length) return []
-  const acupointIndexes = nodes
-    .map((node, index) => (node.type === 'acupoint' ? index : -1))
-    .filter((index) => index >= 0)
-  if (!acupointIndexes.length) return []
-  if (acupointIndexes.length === 1) return [offsetPosition(resolvedNode(nodes[acupointIndexes[0]]), SKIN_LIFT)]
+function routeNodeCode(node) {
+  if (!node?.pointId) return ''
+  return getPoint(node.pointId)?.code || ''
+}
 
-  const referenceArc = shortSegmentReferenceArc(route.side)
-  const points = []
-  const previousRef = { current: null }
-  for (let pair = 0; pair < acupointIndexes.length - 1; pair += 1) {
-    const fromIndex = acupointIndexes[pair]
-    const toIndex = acupointIndexes[pair + 1]
-    const fromNode = nodes[fromIndex]
-    const toNode = nodes[toIndex]
-    const a = resolvedNode(fromNode)
-    const b = resolvedNode(toNode)
-    const isOverride = override
-      && fromNode.pointId === override.fromPointId
-      && toNode.pointId === override.toPointId
-    const handles = keepPairHandles(nodes.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control'))
-    const rest = isOverride && override.rest
-      ? override.rest
-      : restPathArrays(fromNode, toNode)
-    const count = visibleHandleCount(polylineArcLength(rest), referenceArc, handles.length)
-    const records = isOverride && override.records
-      ? override.records
-      : pairHandleRecords(fromNode, toNode, handles, count, rest)
-    const segment = pairDrawnSkinPoints(a, b, records, rest, {
-      preview: Boolean(isOverride && override.preview),
-      preferWrap: isShoulderAxillaWrap(a.position, b.position),
+function isOmittedSurfacePair(pair) {
+  return isOmittedSurfaceSpan(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
+}
+
+function pairKey(pair) {
+  return `${pair.fromPointId}|${pair.toPointId}`
+}
+
+function drawPairSkinSegment(route, pair, override = null) {
+  const a = resolvedNode(pair.fromNode)
+  const b = resolvedNode(pair.toNode)
+  const isOverride = override
+    && pair.fromNode.pointId === override.fromPointId
+    && pair.toNode.pointId === override.toPointId
+  const rest = isOverride && override.rest
+    ? override.rest
+    : restPathArrays(pair.fromNode, pair.toNode)
+  const count = visibleHandleCount(
+    polylineArcLength(rest),
+    shortSegmentReferenceArc(route.side),
+    pair.handles.length,
+  )
+  const records = isOverride && override.records
+    ? override.records
+    : pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
+  return pairDrawnSkinPoints(a, b, records, rest, {
+    preview: Boolean(isOverride && override.preview),
+    preferWrap: isShoulderAxillaWrap(a.position, b.position),
+  })
+}
+
+/** One or more on-skin polylines. Omitted spans (BL40–BL41) start a new run. */
+function skinCurveRuns(route, override = null) {
+  const pairRuns = drawableSurfacePairRuns(consecutiveAcupointPairs(route), isOmittedSurfacePair)
+  return pairRuns.map((pairs) => {
+    const points = []
+    const pairKeys = []
+    const previousRef = { current: null }
+    pairs.forEach((pair) => {
+      const segment = drawPairSkinSegment(route, pair, override)
+      if (!segment?.length) return
+      const start = points.length === 0 ? 0 : 1
+      for (let i = start; i < segment.length; i += 1) {
+        appendSkinPoint(points, segment[i], previousRef)
+      }
+      pairKeys.push(pairKey(pair))
     })
-    const start = points.length === 0 ? 0 : 1
-    for (let i = start; i < segment.length; i += 1) {
-      appendSkinPoint(points, segment[i], previousRef)
-    }
-  }
-  return points.length >= 2
-    ? points
-    : acupointIndexes.map((index) => offsetPosition(resolvedNode(nodes[index]), SKIN_LIFT))
+    return { points, pairKeys }
+  }).filter((run) => run.points.length >= 2)
 }
 
 function restPathArrays(fromNode, toNode) {
@@ -2047,19 +2059,33 @@ function createMeridianLine(points, color) {
   return line
 }
 
-function replaceRouteLine(routeId, points) {
-  if (points?.length < 2) return
-  const index = routeVisuals.findIndex((entry) => entry.route.id === routeId)
-  if (index < 0) return
-  const previous = routeVisuals[index]
-  const next = createMeridianLine(points, meridianLineColor(previous.route.meridianId))
-  next.userData.type = 'meridian'
-  next.userData.id = routeId
-  annotationGroup.remove(previous.line)
-  previous.line.geometry?.dispose?.()
-  previous.line.material?.dispose?.()
-  annotationGroup.add(next)
-  routeVisuals[index] = { line: next, route: previous.route }
+function disposeRouteLine(line) {
+  annotationGroup.remove(line)
+  line.geometry?.dispose?.()
+  line.material?.dispose?.()
+}
+
+function addRouteLineVisuals(route, runs = []) {
+  const color = meridianLineColor(route.meridianId)
+  runs.forEach((run) => {
+    const points = run.points || run
+    if (!points || points.length < 2) return
+    const mesh = createMeridianLine(points, color)
+    mesh.userData.type = 'meridian'
+    mesh.userData.id = route.id
+    if (run.pairKeys) mesh.userData.pairKeys = run.pairKeys
+    annotationGroup.add(mesh)
+    routeVisuals.push({ line: mesh, route })
+  })
+}
+
+function replaceRouteLine(routeId, runs) {
+  const route = routeVisuals.find((entry) => entry.route.id === routeId)?.route
+    || state.meridians.find((item) => item.id === routeId)
+  if (!route) return
+  routeVisuals.filter((entry) => entry.route.id === routeId).forEach(({ line }) => disposeRouteLine(line))
+  routeVisuals = routeVisuals.filter((entry) => entry.route.id !== routeId)
+  addRouteLineVisuals(route, runs)
 }
 
 function markerFacingLift(point, pixelSize) {
@@ -2111,7 +2137,7 @@ function isSegmentSelected(route, fromPointId, toPointId) {
     && selected.toPointId === toPointId
 }
 
-function acupointPairs(route) {
+function consecutiveAcupointPairs(route) {
   const indexes = route.nodes
     .map((node, index) => (node.type === 'acupoint' ? index : -1))
     .filter((index) => index >= 0)
@@ -2134,10 +2160,34 @@ function acupointPairs(route) {
   return pairs
 }
 
+function acupointPairs(route) {
+  return consecutiveAcupointPairs(route).filter((pair) => !isOmittedSurfacePair(pair))
+}
+
+function pairsOnClickedLine(pairs, line) {
+  const keys = line?.userData?.pairKeys
+  if (keys?.length) {
+    const allowed = new Set(keys)
+    return pairs.filter((pair) => allowed.has(pairKey(pair)))
+  }
+  const samples = line?.userData?.tubePoints
+  if (!samples?.length) return pairs
+  const near = (node) => {
+    const target = new THREE.Vector3(...resolvedNode(node).position)
+    let best = Infinity
+    samples.forEach((sample) => {
+      const distance = sample.distanceToSquared(target)
+      if (distance < best) best = distance
+    })
+    return best < 0.04 * 0.04
+  }
+  return pairs.filter((pair) => near(pair.fromNode) && near(pair.toNode))
+}
+
 function nearestAcupointPair(route, worldPoint, line = null) {
   const probe = worldPoint?.isVector3 ? worldPoint : new THREE.Vector3(...toArray(worldPoint))
   const samples = line?.userData?.tubePoints
-  const pairs = acupointPairs(route)
+  const pairs = pairsOnClickedLine(acupointPairs(route), line)
   if (samples?.length >= 2 && pairs.length) {
     let clickIndex = 0
     let bestClick = Infinity
@@ -2241,13 +2291,7 @@ function rebuildAnnotations() {
   state.meridians
     .filter((route) => displayIds.has(route.meridianId))
     .forEach((route) => {
-      const points = skinCurvePoints(route)
-      if (points.length < 2) return
-      const mesh = createMeridianLine(points, meridianLineColor(route.meridianId))
-      mesh.userData.type = 'meridian'
-      mesh.userData.id = route.id
-      annotationGroup.add(mesh)
-      routeVisuals.push({ line: mesh, route })
+      addRouteLineVisuals(route, skinCurveRuns(route))
       if (isRouteSelected(route)) addRouteEditHandles(route)
     })
 
@@ -2809,7 +2853,7 @@ function previewHandleDrag(drag, hit) {
       ? { ...record, position: [...hit.position], normal: [...hit.normal] }
       : record
   ))
-  replaceRouteLine(route.id, skinCurvePoints(route, {
+  replaceRouteLine(route.id, skinCurveRuns(route, {
     fromPointId: pair.fromPointId,
     toPointId: pair.toPointId,
     records,
@@ -2829,7 +2873,7 @@ function previewHandleDrag(drag, hit) {
         normal: [-record.normal[0], record.normal[1], record.normal[2]],
       }))
       const mirroredRest = (drag.rest || []).map((point) => [-point[0], point[1], point[2]])
-      replaceRouteLine(mirror.id, skinCurvePoints(mirror, {
+      replaceRouteLine(mirror.id, skinCurveRuns(mirror, {
         fromPointId: mirrorPair.fromPointId,
         toPointId: mirrorPair.toPointId,
         records: mirroredRecords,
@@ -2894,7 +2938,7 @@ function placeAt(event) {
       fromPointId: pair?.fromPointId || null,
       toPointId: pair?.toPointId || null,
     }
-    if (route) replaceRouteLine(route.id, skinCurvePoints(route))
+    if (route) replaceRouteLine(route.id, skinCurveRuns(route))
     refreshRouteEditHandles()
     updateUI()
     return

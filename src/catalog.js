@@ -76,3 +76,20 @@ export function pointsForMeridian(meridianId) {
 export function meridianById(id) {
   return MERIDIANS.find((item) => item.id === id)
 }
+
+/**
+ * Consecutive catalog points that have no classical surface pathway.
+ * The editor still keeps both acupoints; it just does not draw a geodesic
+ * between them (足太陽膀胱經 委中 BL40 → 附分 BL41).
+ */
+export const OMITTED_SURFACE_SPANS = Object.freeze([
+  Object.freeze(['BL40', 'BL41']),
+])
+
+export function isOmittedSurfaceSpan(fromCode, toCode) {
+  const a = String(fromCode || '')
+  const b = String(toCode || '')
+  if (!a || !b) return false
+  return OMITTED_SURFACE_SPANS.some(([left, right]) =>
+    (a === left && b === right) || (a === right && b === left))
+}

@@ -28,6 +28,7 @@ import {
   primaryBendStyle,
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
+  drawableSurfacePairRuns,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
   segmentHandleCount,
@@ -375,5 +376,20 @@ describe('meridian authoring workflow', () => {
     expect(stretched[3].restSlice).toBeTruthy()
     const kept = [...stretched[0].restSlice, ...stretched[3].restSlice]
     expect(Math.max(...kept.map((point) => Math.abs(point[1])))).toBeLessThan(0.05)
+  })
+
+  it('breaks drawable surface runs at omitted spans so neighbors are not concatenated', () => {
+    const pairs = [
+      { from: 'BL39', to: 'BL40' },
+      { from: 'BL40', to: 'BL41' },
+      { from: 'BL41', to: 'BL42' },
+    ]
+    const omitted = (pair) => pair.from === 'BL40' && pair.to === 'BL41'
+    expect(drawableSurfacePairRuns(pairs, omitted)).toEqual([
+      [{ from: 'BL39', to: 'BL40' }],
+      [{ from: 'BL41', to: 'BL42' }],
+    ])
+    expect(drawableSurfacePairRuns(pairs, () => false)).toHaveLength(1)
+    expect(drawableSurfacePairRuns(pairs, () => true)).toEqual([])
   })
 })
