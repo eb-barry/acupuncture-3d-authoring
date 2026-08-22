@@ -25,13 +25,60 @@ export function routeIncludesAllPoints(requiredPoints, draftNodes) {
     && requiredPoints.every((point, index) => point.code === usedCodes[index])
 }
 
+export const SIDE_X_EPSILON = 1e-4
+
+export function catalogSequence(code) {
+  const match = /^[A-Z]+(\d+)$/.exec(String(code || ''))
+  return match ? Number(match[1]) : Number.POSITIVE_INFINITY
+}
+
+/** Body side from model X: x<0 left, x>0 right. Near the midline, keep fallback. */
+export function spatialSideFromPosition(position, fallback = null) {
+  const x = Number(position?.[0])
+  if (!Number.isFinite(x) || Math.abs(x) <= SIDE_X_EPSILON) return fallback || null
+  return x < 0 ? 'left' : 'right'
+}
+
+export function placedPointSide(point) {
+  if (!point) return null
+  if (point.side === 'midline') return 'midline'
+  return spatialSideFromPosition(point.position, point.side || null)
+}
+
+export function sameSpatialSide(from, to) {
+  const sideA = spatialSideFromPosition(from?.position ?? from, null)
+  const sideB = spatialSideFromPosition(to?.position ?? to, null)
+  if (!sideA || !sideB) return true
+  return sideA === sideB
+}
+
+export function normalizePlacedPointSide(point) {
+  if (!point || point.side === 'midline') return point
+  const inferred = spatialSideFromPosition(point.position, point.side)
+  if (!inferred || inferred === point.side) return point
+  return { ...point, side: inferred }
+}
+
+const SIDE_DRAW_RANK = { left: 0, right: 1, midline: 2 }
+
+/** Same-side first, then international-code order. Never interleave left/right. */
+export function orderRouteAcupointsForDrawing(entries = []) {
+  return [...entries].sort((a, b) => {
+    const sideA = SIDE_DRAW_RANK[a.side] ?? 3
+    const sideB = SIDE_DRAW_RANK[b.side] ?? 3
+    const seqA = Number.isFinite(a.sequence) ? a.sequence : catalogSequence(a.code)
+    const seqB = Number.isFinite(b.sequence) ? b.sequence : catalogSequence(b.code)
+    return (sideA - sideB) || (seqA - seqB) || ((a.index ?? 0) - (b.index ?? 0))
+  })
+}
+
 /** Placed points for one side, sorted by catalog / international-code order. */
 export function orderedPlacedPointsForSide(requiredPoints, placedPoints, side) {
-  const byCode = new Map(
-    placedPoints
-      .filter((point) => point.side === side)
-      .map((point) => [point.code, point]),
-  )
+  const byCode = new Map()
+  placedPoints.forEach((point) => {
+    if (placedPointSide(point) !== side || byCode.has(point.code)) return
+    byCode.set(point.code, point)
+  })
   return requiredPoints
     .map((required) => byCode.get(required.code))
     .filter(Boolean)
@@ -201,9 +248,15 @@ export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
     const toIndex = previousNodes.findIndex((node) => node.type === 'acupoint' && node.pointId === toId)
     if (fromIndex < 0 || toIndex <= fromIndex) continue
     const controls = []
+    let crossedOtherAcupoint = false
     for (let cursor = fromIndex + 1; cursor < toIndex; cursor += 1) {
+      if (previousNodes[cursor].type === 'acupoint') {
+        crossedOtherAcupoint = true
+        break
+      }
       if (previousNodes[cursor].type === 'control') controls.push(previousNodes[cursor])
     }
+    if (crossedOtherAcupoint) continue
     result.push(...keepPairHandles(controls))
   }
   return result

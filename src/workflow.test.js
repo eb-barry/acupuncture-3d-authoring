@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildRouteNodesFromPlaced,
+  catalogSequence,
   circularArcPoints,
   clampHandleT,
   clampPairedHandleT,
@@ -16,6 +17,9 @@ import {
   limbGapMaxOffPath,
   mergeControlsIntoRoute,
   nearestScreenIndex,
+  normalizePlacedPointSide,
+  orderRouteAcupointsForDrawing,
+  placedPointSide,
   nextExpectedPoint,
   orderedPlacedPointsForSide,
   pairControlPolyline,
@@ -31,6 +35,8 @@ import {
   drawableSurfacePairRuns,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
+  sameSpatialSide,
+  spatialSideFromPosition,
   segmentHandleCount,
   slideHandleOnPolyline,
   splitAlongAndSide,
@@ -91,6 +97,40 @@ describe('meridian authoring workflow', () => {
       .toEqual(['l1', 'l2', 'l3'])
   })
 
+  it('groups a side by body position, not a swapped left/right label', () => {
+    const requiredHT = [{ code: 'HT3' }, { code: 'HT4' }]
+    const placed = [
+      { id: 'label-left-on-right', code: 'HT3', side: 'left', position: [0.2, 1, 0], normal: [1, 0, 0] },
+      { id: 'label-right-on-left', code: 'HT3', side: 'right', position: [-0.2, 1, 0], normal: [-1, 0, 0] },
+      { id: 'ht4-right', code: 'HT4', side: 'left', position: [0.25, 0.8, 0], normal: [1, 0, 0] },
+      { id: 'ht4-left', code: 'HT4', side: 'right', position: [-0.25, 0.8, 0], normal: [-1, 0, 0] },
+    ]
+    expect(orderedPlacedPointsForSide(requiredHT, placed, 'left').map((point) => point.id))
+      .toEqual(['label-right-on-left', 'ht4-left'])
+    expect(orderedPlacedPointsForSide(requiredHT, placed, 'right').map((point) => point.id))
+      .toEqual(['label-left-on-right', 'ht4-right'])
+    expect(normalizePlacedPointSide(placed[0]).side).toBe('right')
+    expect(placedPointSide(placed[1])).toBe('left')
+  })
+
+  it('orders interleaved left/right acupoints into two same-side code runs', () => {
+    expect(catalogSequence('HT9')).toBe(9)
+    expect(orderRouteAcupointsForDrawing([
+      { code: 'HT3', side: 'left', sequence: 3, index: 0 },
+      { code: 'HT4', side: 'right', sequence: 4, index: 1 },
+      { code: 'HT4', side: 'left', sequence: 4, index: 2 },
+      { code: 'HT3', side: 'right', sequence: 3, index: 3 },
+    ]).map((item) => `${item.side}:${item.code}`)).toEqual([
+      'left:HT3',
+      'left:HT4',
+      'right:HT3',
+      'right:HT4',
+    ])
+    expect(sameSpatialSide({ position: [-0.2, 1, 0] }, { position: [0.2, 0.8, 0] })).toBe(false)
+    expect(sameSpatialSide({ position: [-0.2, 1, 0] }, { position: [-0.25, 0.8, 0] })).toBe(true)
+    expect(spatialSideFromPosition([0.2, 1, 0], 'left')).toBe('right')
+  })
+
   it('trims first/last acupoint segments when endpoints are deleted', () => {
     const nodes = [
       { type: 'acupoint', pointId: 'a1' },
@@ -119,6 +159,22 @@ describe('meridian authoring workflow', () => {
     ]
     expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || 'control'))
       .toEqual(['a1', 'a2', 'control', 'a3'])
+  })
+
+  it('does not keep locators that sat across an opposite-side acupoint', () => {
+    const previous = [
+      { type: 'acupoint', pointId: 'L3' },
+      { type: 'control', pointId: null, style: 'along', position: [0, 0, 0] },
+      { type: 'acupoint', pointId: 'R4' },
+      { type: 'control', pointId: null, style: 'along', position: [1, 0, 0] },
+      { type: 'acupoint', pointId: 'L4' },
+    ]
+    const next = [
+      { type: 'acupoint', pointId: 'L3' },
+      { type: 'acupoint', pointId: 'L4' },
+    ]
+    expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || node.type))
+      .toEqual(['L3', 'L4'])
   })
 
   it('re-links routes and keeps two styled controls between a pair', () => {
