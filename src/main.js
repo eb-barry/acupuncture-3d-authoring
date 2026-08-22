@@ -37,6 +37,9 @@ import {
   isOnDigitSkin,
   isTeEarArcPair,
   isTeTempleHandlePair,
+  isSiXiaohaiJianzhenPair,
+  isSiArmShoulderHit,
+  siArmShoulderWrapGuide,
   maxPolylineEdge,
   teEarArcPoints,
   TE_EAR_GEODESIC_STABLE,
@@ -2005,6 +2008,63 @@ function snapTeEarArcToSkin(a, b, fromCode, toCode) {
   return snapped
 }
 
+function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const path = rest.length >= 2 ? rest : [a.position, b.position]
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
+  ))
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  const samples = ordered.length
+    ? catmullRomThrough(
+      [a.position, ...ordered.map((record) => record.position), b.position],
+      16,
+    )
+    : null
+  const points = []
+  const previousRef = { current: null }
+  const accept = (hit) => {
+    if (!hit || !isSiArmShoulderHit(hit.position, a.position, b.position)) return
+    const lifted = new THREE.Vector3(...hit.position)
+      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+    appendSkinPoint(points, lifted, previousRef)
+  }
+  accept({ position: a.position, normal: a.normal })
+  if (samples) {
+    for (let index = 1; index < samples.length - 1; index += 1) {
+      const t = index / Math.max(1, samples.length - 1)
+      const guide = slerpUnitVectors(
+        siArmShoulderWrapGuide(samples[index], sideX),
+        slerpUnitVectors(a.normal, b.normal, t),
+        0.35,
+      )
+      const chord = new THREE.Vector3(...samples[index])
+      const hit = projectFromOutside(chord, guide, 0.036)
+        || closestSkinHit(samples[index], { maxDistance: 0.055, sideX, guideNormal: guide })
+      accept(hit)
+    }
+  } else {
+    const dist = Math.max(start.distanceTo(end), 1e-6)
+    const count = Math.min(64, Math.max(24, Math.ceil(dist / 0.008) + 12))
+    for (let index = 1; index < count - 1; index += 1) {
+      const t = index / (count - 1)
+      const chord = start.clone().lerp(end, t)
+      const guide = slerpUnitVectors(
+        siArmShoulderWrapGuide(toArray(chord), sideX),
+        slerpUnitVectors(a.normal, b.normal, t),
+        0.35,
+      )
+      const hit = projectFromOutside(chord, guide, 0.04)
+        || closestSkinHit(toArray(chord), { maxDistance: 0.06, sideX, guideNormal: guide })
+      accept(hit)
+    }
+  }
+  accept({ position: b.position, normal: b.normal })
+  if (points.length < 3) return null
+  return densifyHeadSkin(points, sideX)
+}
+
 function skinSegmentPoints(a, b, {
   allowGeodesic = true,
   preferWrap = false,
@@ -2020,6 +2080,11 @@ function skinSegmentPoints(a, b, {
   const normalDot = normal.dot(endNormal)
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
+  const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
+  if (siArmShoulder) {
+    const wrapped = snapSiArmShoulderToSkin(a, b)
+    if (wrapped?.length >= 3) return wrapped
+  }
   if (earArc) {
     const arced = snapTeEarArcToSkin(a, b, fromCode, toCode)
     if (arced?.length >= 3) return arced
@@ -2043,12 +2108,12 @@ function skinSegmentPoints(a, b, {
       end.clone().addScaledVector(endNormal, SKIN_LIFT),
     ]
   }
-  const facingLimb = isFacingLimbSpan(a.position, b.position, normalDot)
+  const facingLimb = !siArmShoulder && isFacingLimbSpan(a.position, b.position, normalDot)
   if (facingLimb) {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
   }
-  const wrapFirst = !earArc && !teTemple && !facingLimb && !digitTip && (
+  const wrapFirst = !siArmShoulder && !earArc && !teTemple && !facingLimb && !digitTip && (
     preferWrap
     || isShoulderAxillaWrap(a.position, b.position)
     || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
@@ -2057,14 +2122,14 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !earArc && !teTemple && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
+  if (allowGeodesic && !siArmShoulder && !earArc && !teTemple && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesicIsStable(geodesic)) return geodesic
   }
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!earArc && !teTemple && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !earArc && !teTemple && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -2213,13 +2278,14 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
   preferWrap = false,
   earArc = false,
   teTemple = false,
+  siArmShoulder = false,
   fromCode = '',
   toCode = '',
 } = {}) {
   const restGuide = rest?.length >= 2 ? rest : null
   const restArrays = restGuide ? arraysFromSkin(restGuide) : []
   const drawSpan = (fromNode, toNode) => skinSegmentPoints(fromNode, toNode, {
-    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap,
+    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap && !siArmShoulder,
     preferWrap,
     earArc,
     teTemple,
@@ -2230,12 +2296,18 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
     const curved = snapTeTempleCurveToSkin(fromResolved, toResolved, records, restArrays)
     if (curved?.length >= 3) return curved
   }
+  if (siArmShoulder) {
+    const wrapped = snapSiArmShoulderToSkin(fromResolved, toResolved, records, restArrays)
+    if (wrapped?.length >= 3) return wrapped
+  }
   if (!records.length) {
     return restArrays.length >= 2
       ? vectorsFromArrays(restArrays)
       : drawSpan(fromResolved, toResolved)
   }
-  const usable = keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays)
+  const usable = (siArmShoulder
+    ? keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
+    : keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays))
   const spans = locatorSpans(restArrays, fromResolved, toResolved, usable)
   const pieces = spans.map((span) => {
     if (span.restSlice?.length >= 2) return vectorsFromArrays(span.restSlice)
@@ -2288,11 +2360,13 @@ function drawPairSkinSegment(route, pair, override = null) {
   const toCode = routeNodeCode(pair.toNode)
   const teTemple = isTeTempleHandlePair(fromCode, toCode)
   const earArc = isTeEarArcPair(fromCode, toCode)
+  const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   return pairDrawnSkinPoints(a, b, records, rest, {
-    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc,
-    preferWrap: !teTemple && !earArc && isShoulderAxillaWrap(a.position, b.position),
+    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder,
+    preferWrap: !teTemple && !earArc && !siArmShoulder && isShoulderAxillaWrap(a.position, b.position),
     earArc,
     teTemple,
+    siArmShoulder,
     fromCode,
     toCode,
   })
@@ -2325,10 +2399,12 @@ function restPathArrays(fromNode, toNode) {
   const toCode = routeNodeCode(toNode)
   const teTemple = isTeTempleHandlePair(fromCode, toCode)
   const earArc = isTeEarArcPair(fromCode, toCode)
+  const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   const key = geodesicCacheKey(a, b)
   const reverseKey = geodesicCacheKey(b, a)
   const usableCached = (cached) => {
     if (!cached?.length) return false
+    if (siArmShoulder) return !isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.55 })
     if (!isShoulderAxillaWrap(a.position, b.position)) return true
     return !isDisorderedPolyline(cached, [a.position, b.position])
   }
@@ -2429,8 +2505,11 @@ function pairWaypoints(fromNode, toNode, handles, count, rest) {
 }
 
 function pairHandleRecords(fromNode, toNode, handles, count, rest) {
+  const from = resolvedNode(fromNode)
+  const to = resolvedNode(toNode)
+  const ignoreMirror = isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))
   const slots = resolveHandleSlots(
-    keepLocatorsOnPairLimb(resolvedNode(fromNode), resolvedNode(toNode), handles, rest),
+    keepLocatorsOnPairLimb(from, to, handles, ignoreMirror ? [] : rest),
     count,
     rest,
   )
