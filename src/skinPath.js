@@ -203,19 +203,97 @@ export function isDigitTipWrap(from = [0, 0, 0], to = [0, 0, 0], normalDot = 0) 
   return maxY <= 1.25 && minY >= 0.55
 }
 
-/** Palmar point just past the nail, so the wrap goes around the fingertip. */
-export function digitTipWaypoint(from = [0, 0, 0], to = [0, 0, 0], fromNormal = [0, 0, 1]) {
-  const distal = normalize([
+export function digitDistalDir(from = [0, 0, 0], to = [0, 0, 0]) {
+  return normalize([
     (Number(to[0]) || 0) - (Number(from[0]) || 0),
     (Number(to[1]) || 0) - (Number(from[1]) || 0),
     (Number(to[2]) || 0) - (Number(from[2]) || 0),
   ])
+}
+
+/** Away from the neighbouring fingers (ulnar for the little finger). */
+export function digitUlnarDir(from = [0, 0, 0], to = [0, 0, 0]) {
+  const distal = digitDistalDir(from, to)
+  const side = Math.sign((Number(to[0]) || 0) + (Number(from[0]) || 0)) || 1
+  const raw = [side, 0, 0]
+  const parallel = raw[0] * distal[0] + raw[1] * distal[1] + raw[2] * distal[2]
+  const perp = [raw[0] - distal[0] * parallel, raw[1] - distal[1] * parallel, raw[2] - distal[2] * parallel]
+  return length3(perp) < 1e-6 ? raw : normalize(perp)
+}
+
+/** Palmar side of the fingertip: opposite the nail, not toward the palm centre. */
+export function digitPalmarDir(fromNormal = [0, 0, 1], toNormal = [0, 0, 1]) {
+  const nail = normalize(toNormal)
   const palm = normalize(fromNormal)
+  const antiNail = [-nail[0], -nail[1], -nail[2]]
+  return dot3(antiNail, palm) > 0.05 ? antiNail : palm
+}
+
+export function digitAxisEnds(from = [0, 0, 0], to = [0, 0, 0]) {
+  const distal = digitDistalDir(from, to)
+  const ulnar = digitUlnarDir(from, to)
   return [
-    (Number(to[0]) || 0) + distal[0] * 0.022 + palm[0] * 0.012,
-    (Number(to[1]) || 0) + distal[1] * 0.022 + palm[1] * 0.012,
-    (Number(to[2]) || 0) + distal[2] * 0.022 + palm[2] * 0.012,
+    [
+      (Number(from[0]) || 0) + ulnar[0] * 0.01,
+      (Number(from[1]) || 0) + ulnar[1] * 0.01,
+      (Number(from[2]) || 0) + ulnar[2] * 0.01,
+    ],
+    [
+      (Number(to[0]) || 0) + distal[0] * 0.034,
+      (Number(to[1]) || 0) + distal[1] * 0.034,
+      (Number(to[2]) || 0) + distal[2] * 0.034,
+    ],
   ]
+}
+
+export const DIGIT_CORRIDOR_RADIUS = 0.022
+
+export function isOnDigitCorridor(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], radius = DIGIT_CORRIDOR_RADIUS) {
+  const [start, end] = digitAxisEnds(from, to)
+  return distanceToSegment(point, start, end) <= radius
+}
+
+/** Palm → pinky pad → fingertip (nail free edge) → nail (少衝). */
+export function digitWrapAnchors(from = [0, 0, 0], to = [0, 0, 0], fromNormal = [0, 0, 1], toNormal = [0, 0, 1]) {
+  const distal = digitDistalDir(from, to)
+  const ulnar = digitUlnarDir(from, to)
+  const palmar = digitPalmarDir(fromNormal, toNormal)
+  const base = [
+    (Number(from[0]) || 0) * 0.55 + (Number(to[0]) || 0) * 0.45 + ulnar[0] * 0.012 + palmar[0] * 0.006,
+    (Number(from[1]) || 0) * 0.55 + (Number(to[1]) || 0) * 0.45 + ulnar[1] * 0.012 + palmar[1] * 0.006,
+    (Number(from[2]) || 0) * 0.55 + (Number(to[2]) || 0) * 0.45 + ulnar[2] * 0.012 + palmar[2] * 0.006,
+  ]
+  const tip = [
+    (Number(to[0]) || 0) + distal[0] * 0.03 + palmar[0] * 0.01 + ulnar[0] * 0.006,
+    (Number(to[1]) || 0) + distal[1] * 0.03 + palmar[1] * 0.01 + ulnar[1] * 0.006,
+    (Number(to[2]) || 0) + distal[2] * 0.03 + palmar[2] * 0.01 + ulnar[2] * 0.006,
+  ]
+  return { base, tip, distal, ulnar, palmar }
+}
+
+export function digitTipWaypoint(from = [0, 0, 0], to = [0, 0, 0], fromNormal = [0, 0, 1], toNormal = [0, 0, 1]) {
+  return digitWrapAnchors(from, to, fromNormal, toNormal).tip
+}
+
+export function digitWrapGuidePoint(from, to, fromNormal, toNormal, t) {
+  const { base, tip, distal, palmar } = digitWrapAnchors(from, to, fromNormal, toNormal)
+  const tt = Math.min(1, Math.max(0, Number(t) || 0))
+  const lerp = (a, b, u) => [
+    a[0] + (b[0] - a[0]) * u,
+    a[1] + (b[1] - a[1]) * u,
+    a[2] + (b[2] - a[2]) * u,
+  ]
+  if (tt <= 0.38) {
+    return { point: lerp(from, base, tt / 0.38), guide: palmar, phase: 'palm' }
+  }
+  if (tt <= 0.74) {
+    return { point: lerp(base, tip, (tt - 0.38) / 0.36), guide: palmar, phase: 'digit' }
+  }
+  return {
+    point: lerp(tip, to, (tt - 0.74) / 0.26),
+    guide: slerpUnitVectors(palmar, toNormal, (tt - 0.74) / 0.26, distal),
+    phase: 'nail',
+  }
 }
 
 function distanceToSegment(point, a, b) {
