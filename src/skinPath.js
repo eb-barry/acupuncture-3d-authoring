@@ -275,6 +275,45 @@ export function digitTipWaypoint(from = [0, 0, 0], to = [0, 0, 0], fromNormal = 
   return digitWrapAnchors(from, to, fromNormal, toNormal).tip
 }
 
+/**
+ * Probe a few millimetres past 少衝 on the palmar face of the same fingertip.
+ * Must stay next to the nail — never an ulnar/air offset beside the hand.
+ */
+export function digitTipProbe(from = [0, 0, 0], to = [0, 0, 0], fromNormal = [0, 0, 1], toNormal = [0, 0, 1]) {
+  const distal = digitDistalDir(from, to)
+  const palmar = digitPalmarDir(fromNormal, toNormal)
+  return [
+    (Number(to[0]) || 0) + distal[0] * 0.006 + palmar[0] * 0.008,
+    (Number(to[1]) || 0) + distal[1] * 0.006 + palmar[1] * 0.008,
+    (Number(to[2]) || 0) + distal[2] * 0.006 + palmar[2] * 0.008,
+  ]
+}
+
+/** True when a sample still sits inside the pinky volume (HT8 → just past HT9). */
+export function isOnDigitSkin(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], radius = 0.022) {
+  const distal = digitDistalDir(from, to)
+  const tip = [
+    (Number(to[0]) || 0) + distal[0] * 0.01,
+    (Number(to[1]) || 0) + distal[1] * 0.01,
+    (Number(to[2]) || 0) + distal[2] * 0.01,
+  ]
+  return distanceToSegment(point, from, tip) <= radius
+}
+
+export function maxPolylineEdge(points = []) {
+  let max = 0
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1]
+    const b = points[index]
+    const pa = a?.isVector3 ? [a.x, a.y, a.z] : a
+    const pb = b?.isVector3 ? [b.x, b.y, b.z] : b
+    if (!pa || !pb) continue
+    const span = length3([pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]])
+    if (span > max) max = span
+  }
+  return max
+}
+
 export function digitWrapGuidePoint(from, to, fromNormal, toNormal, t) {
   const { base, tip, distal, palmar } = digitWrapAnchors(from, to, fromNormal, toNormal)
   const tt = Math.min(1, Math.max(0, Number(t) || 0))
