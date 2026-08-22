@@ -46,10 +46,24 @@ export function placedPointSide(point) {
 }
 
 export function sameSpatialSide(from, to) {
-  const sideA = spatialSideFromPosition(from?.position ?? from, null)
-  const sideB = spatialSideFromPosition(to?.position ?? to, null)
-  if (!sideA || !sideB) return true
-  return sideA === sideB
+  const xa = Number((from?.position ?? from)?.[0])
+  const xb = Number((to?.position ?? to)?.[0])
+  if (!Number.isFinite(xa) || !Number.isFinite(xb)) return true
+  if (Math.abs(xa) <= SIDE_X_EPSILON || Math.abs(xb) <= SIDE_X_EPSILON) return true
+  return xa * xb > 0
+}
+
+/** Drop locators that sit on the opposite limb from this acupoint pair. */
+export function locatorOnPairLimb(from, to, locator, rest = []) {
+  const locPos = locator?.position
+  if (!Array.isArray(locPos) || locPos.length < 3) return false
+  if (!sameSpatialSide(from, locator) || !sameSpatialSide(to, locator)) return false
+  if (rest.length >= 2 && isCloserToMirroredPolyline(rest, locPos)) return false
+  return true
+}
+
+export function keepLocatorsOnPairLimb(from, to, handles = [], rest = []) {
+  return (handles || []).filter((handle) => locatorOnPairLimb(from, to, handle, rest))
 }
 
 export function normalizePlacedPointSide(point) {
@@ -257,7 +271,11 @@ export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
       if (previousNodes[cursor].type === 'control') controls.push(previousNodes[cursor])
     }
     if (crossedOtherAcupoint) continue
-    result.push(...keepPairHandles(controls))
+    result.push(...keepLocatorsOnPairLimb(
+      nextAcupointNodes[index],
+      nextAcupointNodes[index + 1],
+      keepPairHandles(controls),
+    ))
   }
   return result
 }
@@ -412,8 +430,14 @@ export function stretchHandleNeighbors(from, to, records = [], index = 0) {
  */
 export function pairControlPolyline(from, to, records = [], restPts = []) {
   const rest = restPts.length >= 2 ? restPts : [from, to]
-  if (!records.length) return rest.map((point) => [...point])
-  return [from, ...records.map((record) => [...record.position]), to]
+  const usable = keepLocatorsOnPairLimb(
+    { position: from },
+    { position: to },
+    records,
+    restPts,
+  )
+  if (!usable.length) return rest.map((point) => [...point])
+  return [from, ...usable.map((record) => [...record.position]), to]
 }
 
 export const HANDLE_SLIDE_MAX_OFF_PATH = 0.08
@@ -504,7 +528,7 @@ export function locatorSpans(rest = [], from, to, records = [], onRest = LOCATOR
     t: 1,
     onRest: true,
   }
-  const inner = (records || []).map((record) => {
+  const inner = keepLocatorsOnPairLimb(from, to, records || [], rest).map((record) => {
     const position = [...(record?.position || [0, 0, 0])]
     const t = rest.length >= 2 ? closestTOnPolyline(rest, position) : 0.5
     return {

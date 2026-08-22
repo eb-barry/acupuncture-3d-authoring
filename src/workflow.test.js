@@ -13,7 +13,9 @@ import {
   isOcclusionHitBlocking,
   isProbeOnSameLimbSegment,
   isSurfaceFacingCamera,
+  keepLocatorsOnPairLimb,
   keepPairHandles,
+  locatorOnPairLimb,
   limbGapMaxOffPath,
   mergeControlsIntoRoute,
   nearestScreenIndex,
@@ -175,6 +177,35 @@ describe('meridian authoring workflow', () => {
     ]
     expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || node.type))
       .toEqual(['L3', 'L4'])
+  })
+
+  it('drops a locator that sits on the opposite hand from its acupoint pair', () => {
+    const from = { position: [-0.22, 1.05, 0.04] }
+    const to = { position: [-0.24, 0.82, 0.03] }
+    const rest = [
+      [-0.22, 1.05, 0.04],
+      [-0.23, 0.94, 0.04],
+      [-0.24, 0.82, 0.03],
+    ]
+    const opposite = { type: 'control', style: 'along', position: [0.24, 0.82, 0.03] }
+    const same = { type: 'control', style: 'along', position: [-0.23, 0.94, 0.05] }
+    expect(locatorOnPairLimb(from, to, opposite, rest)).toBe(false)
+    expect(locatorOnPairLimb(from, to, same, rest)).toBe(true)
+    expect(keepLocatorsOnPairLimb(from, to, [opposite, same], rest)).toEqual([same])
+
+    const previous = [
+      { type: 'acupoint', pointId: 'HT3L', position: [-0.22, 1.05, 0.04] },
+      { type: 'control', pointId: null, style: 'along', position: [0.24, 0.82, 0.03] },
+      { type: 'acupoint', pointId: 'HT4L', position: [-0.24, 0.82, 0.03] },
+    ]
+    const next = [
+      { type: 'acupoint', pointId: 'HT3L', position: [-0.22, 1.05, 0.04] },
+      { type: 'acupoint', pointId: 'HT4L', position: [-0.24, 0.82, 0.03] },
+    ]
+    expect(mergeControlsIntoRoute(previous, next).map((node) => node.pointId || node.type))
+      .toEqual(['HT3L', 'HT4L'])
+    expect(pairControlPolyline(from.position, to.position, [opposite], rest))
+      .toEqual(rest)
   })
 
   it('re-links routes and keeps two styled controls between a pair', () => {
