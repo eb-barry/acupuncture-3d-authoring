@@ -29,6 +29,8 @@ import {
   SKIN_LIFT,
   isPointBehindSurface,
   isHitOnWrapSide,
+  digitTipWaypoint,
+  isDigitTipWrap,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
   marchStandoff,
@@ -1696,6 +1698,58 @@ function snapFacingChordToSkin(a, b) {
   return points
 }
 
+/** 少府→少衝: palmar skin to the fingertip, then wrap onto the nail. */
+function snapDigitTipWrap(a, b) {
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const tip = digitTipWaypoint(a.position, b.position, a.normal)
+  const tipHit = closestSkinHit(tip, {
+    maxDistance: 0.05,
+    sideX,
+    guideNormal: a.normal,
+  })
+  const tipPos = new THREE.Vector3(...(tipHit?.position || tip))
+  const tipNormal = tipHit?.normal || a.normal
+  const count = 36
+  const points = []
+  const previousRef = { current: null }
+  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), SKIN_LIFT), previousRef)
+  for (let index = 1; index < count - 1; index += 1) {
+    const t = index / (count - 1)
+    const onPalm = t <= 0.62
+    const localT = onPalm ? t / 0.62 : (t - 0.62) / 0.38
+    const chord = onPalm
+      ? start.clone().lerp(tipPos, localT)
+      : tipPos.clone().lerp(end, localT)
+    const guide = onPalm
+      ? a.normal
+      : slerpUnitVectors(tipNormal, b.normal, localT, [
+        end.x - start.x,
+        end.y - start.y,
+        end.z - start.z,
+      ])
+    const guideVec = new THREE.Vector3(...guide)
+    const standoff = 0.022
+    const pushed = chord.clone().addScaledVector(guideVec, standoff)
+    const hit = projectFromOutside(pushed, guide, standoff * 2.1)
+      || closestSkinHit(toArray(chord), {
+        maxDistance: 0.035,
+        sideX,
+        guideNormal: guide,
+      })
+    if (!hit) continue
+    const hitNormal = new THREE.Vector3(...hit.normal)
+    if (hitNormal.dot(guideVec) < 0.08) continue
+    if (hit.position[0] * sideX < 0 && Math.abs(hit.position[0]) > 0.04) continue
+    const lifted = new THREE.Vector3(...hit.position).addScaledVector(hitNormal, SKIN_LIFT)
+    if (previousRef.current && lifted.distanceTo(previousRef.current) > 0.03) continue
+    appendSkinPoint(points, lifted, previousRef)
+  }
+  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), SKIN_LIFT), previousRef)
+  return points.length >= 3 ? points : null
+}
+
 function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
@@ -1704,12 +1758,17 @@ function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = 
   const normalDot = normal.dot(endNormal)
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
+  const digitTip = isDigitTipWrap(a.position, b.position, normalDot)
+  if (digitTip) {
+    const wrapped = snapDigitTipWrap(a, b)
+    if (wrapped?.length >= 3) return wrapped
+  }
   const facingLimb = isFacingLimbSpan(a.position, b.position, normalDot)
   if (facingLimb) {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
   }
-  const wrapFirst = !facingLimb && (
+  const wrapFirst = !facingLimb && !digitTip && (
     preferWrap
     || isShoulderAxillaWrap(a.position, b.position)
     || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
@@ -1718,14 +1777,14 @@ function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = 
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb) {
+  if (allowGeodesic && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesicIsStable(geodesic)) return geodesic
   }
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!facingLimb && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -1815,10 +1874,14 @@ function joinOnSkin(anchors) {
   const points = []
   const previousRef = { current: null }
   for (let index = 0; index < anchors.length - 1; index += 1) {
-    const skipGeodesic = isShoulderAxillaWrap(
-      resolvedNode(anchors[index]).position,
-      resolvedNode(anchors[index + 1]).position,
-    )
+    const from = resolvedNode(anchors[index])
+    const to = resolvedNode(anchors[index + 1])
+    const skipGeodesic = isShoulderAxillaWrap(from.position, to.position)
+      || isDigitTipWrap(
+        from.position,
+        to.position,
+        new THREE.Vector3(...from.normal).normalize().dot(new THREE.Vector3(...to.normal).normalize()),
+      )
     const piece = skinSegmentPoints(
       resolvedNode(anchors[index]),
       resolvedNode(anchors[index + 1]),

@@ -7,6 +7,8 @@ import {
   outwardWrapGuide,
   pixelWidthToWorldRadius,
   pruneBacktracking,
+  digitTipWaypoint,
+  isDigitTipWrap,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
   pathFollowsFacingChord,
@@ -90,6 +92,24 @@ describe('skin path wrapping', () => {
     expect(isHitOnWrapSide([0.13, 1.30, 0.07], jianjing, yuanye)).toBe(true)
     expect(isHitOnWrapSide([0.13, 1.30, -0.09], jianjing, yuanye)).toBe(false)
     expect(isHitOnWrapSide([-0.13, 1.30, 0.07], jianjing, yuanye)).toBe(false)
+  })
+
+  it('wraps 少府→少衝 around the pinky tip instead of cutting through the finger', () => {
+    const shaofu = [0.5124204957027906, 0.9176148523570886, 0.030278267964379893]
+    const shaochong = [0.5279002611732267, 0.8457131126923373, 0.03287212440530844]
+    const palmNormal = [-0.9022152269243789, -0.4066208439972457, -0.14376082057625791]
+    const nailNormal = [0.07755903397447586, -0.27969431312017146, 0.956951246123428]
+    const dot = palmNormal[0] * nailNormal[0] + palmNormal[1] * nailNormal[1] + palmNormal[2] * nailNormal[2]
+    expect(dot).toBeLessThan(0.25)
+    expect(isDigitTipWrap(shaofu, shaochong, dot)).toBe(true)
+    expect(isFacingLimbSpan(shaofu, shaochong, dot)).toBe(false)
+    expect(isDigitTipWrap([-0.22, 1.04, 0.02], [-0.24, 0.78, 0.01], 0.86)).toBe(false)
+    const tip = digitTipWaypoint(shaofu, shaochong, palmNormal)
+    expect(tip[1]).toBeLessThan(shaochong[1])
+    const towardPalm = (tip[0] - shaochong[0]) * palmNormal[0]
+      + (tip[1] - shaochong[1]) * palmNormal[1]
+      + (tip[2] - shaochong[2]) * palmNormal[2]
+    expect(towardPalm).toBeGreaterThan(0)
   })
 
   it('treats 少海→靈道 as a straight inner-arm span, not a wrap through the limb', () => {
