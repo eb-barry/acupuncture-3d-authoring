@@ -153,6 +153,75 @@ export function isShoulderAxillaWrap(from = [0, 0, 0], to = [0, 0, 0]) {
 }
 
 /**
+ * 少海→靈道 and other same-face limb spans (inner arm / inner thigh).
+ * These should ride a nearly-straight skin chord, not wrap around or
+ * through the hollow limb.
+ */
+export function isFacingLimbSpan(from = [0, 0, 0], to = [0, 0, 0], normalDot = 1) {
+  if (isShoulderAxillaWrap(from, to)) return false
+  const ax = Number(from[0]) || 0
+  const ay = Number(from[1]) || 0
+  const az = Number(from[2]) || 0
+  const bx = Number(to[0]) || 0
+  const by = Number(to[1]) || 0
+  const bz = Number(to[2]) || 0
+  if (ax * bx <= 0) return false
+  const meanX = (ax + bx) / 2
+  if (Math.abs(meanX) < 0.13) return false
+  if (Number(normalDot) < 0.2) return false
+  const dx = Math.abs(ax - bx)
+  const dy = Math.abs(ay - by)
+  const dz = Math.abs(az - bz)
+  const chord = Math.hypot(dx, dy, dz)
+  if (chord < 0.04 || chord > 0.55) return false
+  if (dy < 0.06) return false
+  if (dy < dx * 1.05 && dy < dz * 1.05) return false
+  const maxY = Math.max(ay, by)
+  const minY = Math.min(ay, by)
+  return maxY <= 1.52 && minY >= 0.55
+}
+
+function distanceToSegment(point, a, b) {
+  const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+  const span = length3(ab)
+  if (span < 1e-12) {
+    return length3([point[0] - a[0], point[1] - a[1], point[2] - a[2]])
+  }
+  const t = Math.min(1, Math.max(0, (
+    (point[0] - a[0]) * ab[0]
+    + (point[1] - a[1]) * ab[1]
+    + (point[2] - a[2]) * ab[2]
+  ) / (span * span)))
+  return length3([
+    point[0] - (a[0] + ab[0] * t),
+    point[1] - (a[1] + ab[1] * t),
+    point[2] - (a[2] + ab[2] * t),
+  ])
+}
+
+/** True when a polyline stays close to the 3D chord (no wrap through the limb). */
+export function pathFollowsFacingChord(points = [], from = [0, 0, 0], to = [0, 0, 0], maxOffChord = 0.045) {
+  if (!points || points.length < 2) return false
+  const start = Array.isArray(from) ? from : [from.x, from.y, from.z]
+  const end = Array.isArray(to) ? to : [to.x, to.y, to.z]
+  const chord = length3([end[0] - start[0], end[1] - start[1], end[2] - start[2]])
+  if (chord < 1e-6) return false
+  let length = 0
+  let maxOff = 0
+  for (let index = 1; index < points.length; index += 1) {
+    const prev = points[index - 1]
+    const point = points[index]
+    const a = prev?.isVector3 ? [prev.x, prev.y, prev.z] : prev
+    const b = point?.isVector3 ? [point.x, point.y, point.z] : point
+    length += length3([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
+    const off = distanceToSegment(b, start, end)
+    if (off > maxOff) maxOff = off
+  }
+  if (length > chord * 1.4) return false
+  return maxOff <= Math.max(maxOffChord, chord * 0.18)
+}
+
+/**
  * Pick the tightest acupoint pair whose polyline span contains `clickIndex`.
  * `nodeIndexes[i]` is the sample index of pair i's start; the last value is
  * the final acupoint. Prefer the smallest span so a click on a short segment

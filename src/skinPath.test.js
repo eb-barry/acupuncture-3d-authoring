@@ -7,7 +7,9 @@ import {
   outwardWrapGuide,
   pixelWidthToWorldRadius,
   pruneBacktracking,
+  isFacingLimbSpan,
   isShoulderAxillaWrap,
+  pathFollowsFacingChord,
   pickPairAlongPolyline,
   shouldFrontWrap,
   slerpUnitVectors,
@@ -88,6 +90,25 @@ describe('skin path wrapping', () => {
     expect(isHitOnWrapSide([0.13, 1.30, 0.07], jianjing, yuanye)).toBe(true)
     expect(isHitOnWrapSide([0.13, 1.30, -0.09], jianjing, yuanye)).toBe(false)
     expect(isHitOnWrapSide([-0.13, 1.30, 0.07], jianjing, yuanye)).toBe(false)
+  })
+
+  it('treats 少海→靈道 as a straight inner-arm span, not a wrap through the limb', () => {
+    const shaohai = [-0.22, 1.04, 0.02]
+    const lingdao = [-0.24, 0.78, 0.01]
+    expect(isFacingLimbSpan(shaohai, lingdao, 0.86)).toBe(true)
+    expect(isShoulderAxillaWrap(shaohai, lingdao)).toBe(false)
+    expect(isFacingLimbSpan([0.12, 1.42, -0.02], [0.15, 1.18, 0.03], 0.4)).toBe(false)
+    expect(isFacingLimbSpan([-0.08, 0.49, -0.08], [-0.03, 0.90, 0.08], 0.5)).toBe(false)
+    expect(pathFollowsFacingChord([
+      shaohai,
+      [-0.23, 0.91, 0.015],
+      lingdao,
+    ], shaohai, lingdao)).toBe(true)
+    expect(pathFollowsFacingChord([
+      shaohai,
+      [0.22, 0.91, 0.02],
+      lingdao,
+    ], shaohai, lingdao)).toBe(false)
   })
 
   it('wraps 肩井→淵腋 without a geodesic, but keeps 陰谷→橫骨 on the thigh', () => {

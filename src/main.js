@@ -29,8 +29,10 @@ import {
   SKIN_LIFT,
   isPointBehindSurface,
   isHitOnWrapSide,
+  isFacingLimbSpan,
   isShoulderAxillaWrap,
   marchStandoff,
+  pathFollowsFacingChord,
   outwardWrapGuide,
   pickPairAlongPolyline,
   pruneBacktracking,
@@ -1658,6 +1660,42 @@ function simplifyLiftedPolyline(points) {
  * Opposite-normal segments (太淵→魚際→少商) orbit the limb instead of
  * cutting through / spawning multiple floating chords.
  */
+/** Project a same-face limb chord onto the facing skin (inner arm, not through it). */
+function snapFacingChordToSkin(a, b) {
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const dist = Math.max(start.distanceTo(end), 1e-6)
+  const count = Math.min(48, Math.max(16, Math.ceil(dist / 0.01) + 8))
+  const points = []
+  const previousRef = { current: null }
+  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), SKIN_LIFT), previousRef)
+  for (let index = 1; index < count - 1; index += 1) {
+    const t = index / (count - 1)
+    const chord = start.clone().lerp(end, t)
+    const guide = slerpUnitVectors(a.normal, b.normal, t)
+    const guideVec = new THREE.Vector3(...guide)
+    const standoff = 0.045
+    const pushed = chord.clone().addScaledVector(guideVec, standoff)
+    const hit = projectFromOutside(pushed, guide, standoff * 2)
+      || closestSkinHit(toArray(chord), {
+        maxDistance: 0.07,
+        sideX,
+        guideNormal: guide,
+      })
+    if (!hit) continue
+    const hitNormal = new THREE.Vector3(...hit.normal)
+    if (hitNormal.dot(guideVec) < 0.15) continue
+    if (hit.position[0] * sideX < 0 && Math.abs(hit.position[0]) > 0.04) continue
+    const lifted = new THREE.Vector3(...hit.position).addScaledVector(hitNormal, SKIN_LIFT)
+    appendSkinPoint(points, lifted, previousRef)
+  }
+  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), SKIN_LIFT), previousRef)
+  if (points.length < 2) return null
+  if (!pathFollowsFacingChord(arraysFromSkin(points), a.position, b.position)) return null
+  return points
+}
+
 function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
@@ -1666,21 +1704,28 @@ function skinSegmentPoints(a, b, { allowGeodesic = true, preferWrap = false } = 
   const normalDot = normal.dot(endNormal)
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
-  const wrapFirst = preferWrap
+  const facingLimb = isFacingLimbSpan(a.position, b.position, normalDot)
+  if (facingLimb) {
+    const facing = snapFacingChordToSkin(a, b)
+    if (facing?.length >= 2) return facing
+  }
+  const wrapFirst = !facingLimb && (
+    preferWrap
     || isShoulderAxillaWrap(a.position, b.position)
     || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
+  )
   if (wrapFirst) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !preferWrap && !isShoulderAxillaWrap(a.position, b.position)) {
+  if (allowGeodesic && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesicIsStable(geodesic)) return geodesic
   }
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!facingLimb && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
