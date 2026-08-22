@@ -181,6 +181,43 @@ export function isFacingLimbSpan(from = [0, 0, 0], to = [0, 0, 0], normalDot = 1
   return maxY <= 1.52 && minY >= 0.55
 }
 
+/**
+ * 少府→少衝 (and 魚際→少商): palm/pad to the nail of the same digit.
+ * The 3D chord cuts through the finger; the skin path must run to the
+ * fingertip on the palmar side, then wrap onto the nail.
+ */
+export function isDigitTipWrap(from = [0, 0, 0], to = [0, 0, 0], normalDot = 0) {
+  const ax = Number(from[0]) || 0
+  const ay = Number(from[1]) || 0
+  const az = Number(from[2]) || 0
+  const bx = Number(to[0]) || 0
+  const by = Number(to[1]) || 0
+  const bz = Number(to[2]) || 0
+  if (ax * bx <= 0) return false
+  if (Math.abs((ax + bx) / 2) < 0.28) return false
+  if (Number(normalDot) >= 0.25) return false
+  const chord = Math.hypot(ax - bx, ay - by, az - bz)
+  if (chord < 0.03 || chord > 0.18) return false
+  const maxY = Math.max(ay, by)
+  const minY = Math.min(ay, by)
+  return maxY <= 1.25 && minY >= 0.55
+}
+
+/** Palmar point just past the nail, so the wrap goes around the fingertip. */
+export function digitTipWaypoint(from = [0, 0, 0], to = [0, 0, 0], fromNormal = [0, 0, 1]) {
+  const distal = normalize([
+    (Number(to[0]) || 0) - (Number(from[0]) || 0),
+    (Number(to[1]) || 0) - (Number(from[1]) || 0),
+    (Number(to[2]) || 0) - (Number(from[2]) || 0),
+  ])
+  const palm = normalize(fromNormal)
+  return [
+    (Number(to[0]) || 0) + distal[0] * 0.022 + palm[0] * 0.012,
+    (Number(to[1]) || 0) + distal[1] * 0.022 + palm[1] * 0.012,
+    (Number(to[2]) || 0) + distal[2] * 0.022 + palm[2] * 0.012,
+  ]
+}
+
 function distanceToSegment(point, a, b) {
   const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
   const span = length3(ab)
