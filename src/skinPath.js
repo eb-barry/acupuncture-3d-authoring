@@ -314,6 +314,139 @@ export function maxPolylineEdge(points = []) {
   return max
 }
 
+const TE_EAR_ARC_CODES = new Set(['TE17', 'TE18', 'TE19', 'TE20', 'TE21'])
+
+function teSequence(code) {
+  const match = /^TE(\d+)$/.exec(String(code || ''))
+  return match ? Number(match[1]) : NaN
+}
+
+function asPathPoint(point) {
+  if (!point) return [0, 0, 0]
+  if (point.isVector3) return [point.x, point.y, point.z]
+  return [Number(point[0]) || 0, Number(point[1]) || 0, Number(point[2]) || 0]
+}
+
+/** 絲竹空 TE23 ↔ 耳和髎 TE22 only. */
+export function isTeTempleHandlePair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('TE22') && codes.has('TE23')
+}
+
+/** 翳風 TE17 … 耳門 TE21 consecutive pairs. */
+export function isTeEarArcPair(fromCode = '', toCode = '') {
+  const a = String(fromCode || '')
+  const b = String(toCode || '')
+  if (!TE_EAR_ARC_CODES.has(a) || !TE_EAR_ARC_CODES.has(b)) return false
+  return Math.abs(teSequence(a) - teSequence(b)) === 1
+}
+
+/** 角孫 TE20 ↔ 耳門 TE21: around the top/front of the ear. */
+export function isTeHelixPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('TE20') && codes.has('TE21')
+}
+
+/** Relaxed geodesic gate for the high-curvature ear root (TE only). */
+export const TE_EAR_GEODESIC_STABLE = Object.freeze({
+  maxLengthRatio: 3.8,
+  maxEdge: 0.055,
+  maxTurningPerPoint: 0.32,
+})
+
+export function teEarArcGuide(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+  const side = Math.sign(((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2) || 1
+  if (isTeHelixPair(fromCode, toCode)) {
+    return normalize([side * 0.4, 0.72, 0.55])
+  }
+  return normalize([side * 0.5, 0.2, -0.84])
+}
+
+export function quadraticArcPoints(from = [0, 0, 0], to = [0, 0, 0], guide = [1, 0, 0], {
+  bulge = 0.24,
+  samples = 22,
+} = {}) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const mid = lerp3(a, b, 0.5)
+  const span = length3([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
+  const g = normalize(guide)
+  const rise = Math.max(0.006, span * Math.max(0, Number(bulge) || 0))
+  const control = [mid[0] + g[0] * rise, mid[1] + g[1] * rise, mid[2] + g[2] * rise]
+  const count = Math.max(8, Math.floor(Number(samples) || 22))
+  const out = []
+  for (let index = 0; index <= count; index += 1) {
+    const t = index / count
+    const u = 1 - t
+    out.push([
+      u * u * a[0] + 2 * u * t * control[0] + t * t * b[0],
+      u * u * a[1] + 2 * u * t * control[1] + t * t * b[1],
+      u * u * a[2] + 2 * u * t * control[2] + t * t * b[2],
+    ])
+  }
+  return out
+}
+
+/** Target polyline along the ear root; samples are later snapped to skin. */
+export function teEarArcPoints(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const guide = teEarArcGuide(fromCode, toCode, a, b)
+  const span = length3([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
+  const samples = Math.max(16, Math.ceil(span / 0.004))
+  if (!isTeHelixPair(fromCode, toCode)) {
+    return quadraticArcPoints(a, b, guide, { bulge: 0.28, samples })
+  }
+  const side = Math.sign((a[0] + b[0]) / 2) || 1
+  const high = a[1] >= b[1] ? a : b
+  const front = a[2] >= b[2] ? a : b
+  const waypoint = [
+    side * (Math.max(Math.abs(high[0]), Math.abs(front[0])) + 0.006),
+    Math.max(high[1], front[1]) + 0.004,
+    high[2] * 0.4 + front[2] * 0.6 + 0.008,
+  ]
+  const first = quadraticArcPoints(a, waypoint, guide, { bulge: 0.18, samples: 14 })
+  const second = quadraticArcPoints(waypoint, b, guide, { bulge: 0.16, samples: 14 })
+  return first.slice(0, -1).concat(second)
+}
+
+function uniformCatmullRom(p0, p1, p2, p3, t) {
+  const t2 = t * t
+  const t3 = t2 * t
+  return [0, 1, 2].map((axis) => (
+    0.5 * (
+      (2 * p1[axis])
+      + (-p0[axis] + p2[axis]) * t
+      + (2 * p0[axis] - 5 * p1[axis] + 4 * p2[axis] - p3[axis]) * t2
+      + (-p0[axis] + 3 * p1[axis] - 3 * p2[axis] + p3[axis]) * t3
+    )
+  ))
+}
+
+/** Interpolating spline through 穴 and TE temple locators. */
+export function catmullRomThrough(points = [], samplesPerSpan = 12) {
+  const pts = (points || []).map(asPathPoint)
+  if (pts.length < 2) return pts.map((point) => [...point])
+  const steps = Math.max(4, Math.floor(Number(samplesPerSpan) || 12))
+  if (pts.length === 2) {
+    const out = []
+    for (let index = 0; index <= steps; index += 1) out.push(lerp3(pts[0], pts[1], index / steps))
+    return out
+  }
+  const out = []
+  for (let index = 0; index < pts.length - 1; index += 1) {
+    const p0 = pts[Math.max(0, index - 1)]
+    const p1 = pts[index]
+    const p2 = pts[index + 1]
+    const p3 = pts[Math.min(pts.length - 1, index + 2)]
+    for (let step = 0; step < steps; step += 1) {
+      out.push(uniformCatmullRom(p0, p1, p2, p3, step / steps))
+    }
+  }
+  out.push([...pts[pts.length - 1]])
+  return out
+}
+
 export function digitWrapGuidePoint(from, to, fromNormal, toNormal, t) {
   const { base, tip, distal, palmar } = digitWrapAnchors(from, to, fromNormal, toNormal)
   const tt = Math.min(1, Math.max(0, Number(t) || 0))
