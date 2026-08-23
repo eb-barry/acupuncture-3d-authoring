@@ -5,9 +5,6 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js'
-import { Line2 } from 'three/addons/lines/Line2.js'
-import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, getTriangleHitPointInfo } from 'three-mesh-bvh'
 import { MERIDIANS, POINTS, POINT_BY_CODE, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
 import {
@@ -62,6 +59,29 @@ import {
   surfaceStepLength,
   useConvexChordWrap,
 } from './skinPath.js'
+import {
+  DEFAULT_MARKER_DIAMETER_MM,
+  DEFAULT_RIBBON_WIDTH_MM,
+  DEFAULT_SKIN_LIFT_MM,
+  MARKER_MIN_PIXELS,
+  MAX_MARKER_DIAMETER_MM,
+  MAX_RIBBON_WIDTH_MM,
+  MAX_SKIN_LIFT_MM,
+  MIN_MARKER_DIAMETER_MM,
+  MIN_RIBBON_WIDTH_MM,
+  RIBBON_MIN_PIXELS,
+  buildDiscAttributes,
+  buildRibbonAttributes,
+  clampMillimetres,
+  conformDisc,
+  conformPath,
+  densifyPath,
+  markerScreenScale,
+  perspectivePixelScale,
+  sampleStepForQuality,
+  smoothPathNormals,
+  worldPerMillimetre,
+} from './skinRibbon.js'
 import {
   buildCombinedSurfaceGraph,
   collapseOppositeWallSpikes,
@@ -210,6 +230,31 @@ $('#app').innerHTML = `
           <option value="skin" selected>皮膚色</option>
           <option value="original">原材質（白瓷）</option>
         </select></label>
+        <div class="skin-fit-field" aria-label="貼皮渲染設定">
+          <span class="dual-field-label">貼皮渲染（不寫入 JSON）</span>
+          <label class="dual-field">
+            <span class="dual-field-label">經脈線寬（mm）</span>
+            <div class="dual-controls">
+              <input name="ribbonWidth" type="range" min="${MIN_RIBBON_WIDTH_MM}" max="${MAX_RIBBON_WIDTH_MM}" step="0.1" value="${DEFAULT_RIBBON_WIDTH_MM}">
+              <input name="ribbonWidthInput" type="number" min="${MIN_RIBBON_WIDTH_MM}" max="${MAX_RIBBON_WIDTH_MM}" step="0.1" value="${DEFAULT_RIBBON_WIDTH_MM}" inputmode="decimal" title="經脈墨線實際寬度">
+            </div>
+          </label>
+          <label class="dual-field">
+            <span class="dual-field-label">穴位直徑（mm）</span>
+            <div class="dual-controls">
+              <input name="markerDiameter" type="range" min="${MIN_MARKER_DIAMETER_MM}" max="${MAX_MARKER_DIAMETER_MM}" step="0.5" value="${DEFAULT_MARKER_DIAMETER_MM}">
+              <input name="markerDiameterInput" type="number" min="${MIN_MARKER_DIAMETER_MM}" max="${MAX_MARKER_DIAMETER_MM}" step="0.5" value="${DEFAULT_MARKER_DIAMETER_MM}" inputmode="decimal" title="貼皮圓點實際直徑">
+            </div>
+          </label>
+          <label class="dual-field">
+            <span class="dual-field-label">離皮位移（mm）</span>
+            <div class="dual-controls">
+              <input name="skinLift" type="range" min="0" max="${MAX_SKIN_LIFT_MM}" step="0.1" value="${DEFAULT_SKIN_LIFT_MM}">
+              <input name="skinLiftInput" type="number" min="0" max="${MAX_SKIN_LIFT_MM}" step="0.1" value="${DEFAULT_SKIN_LIFT_MM}" inputmode="decimal" title="0 為完全貼皮；調高可與舊版浮起效果比對">
+            </div>
+          </label>
+          <label class="checkbox-row"><span>編輯透視（穴位與定位點不被皮膚遮住）</span><input name="xrayEdit" type="checkbox"></label>
+        </div>
         <label class="checkbox-row"><span>顯示格線</span><input name="gridEnabled" type="checkbox" checked></label>
         <label class="grid-spacing-field dual-field">
           <span class="dual-field-label">格線間距（px）</span>
@@ -232,7 +277,7 @@ $('#app').innerHTML = `
             <input name="modelZoomInput" type="number" min="0.25" max="20" step="0.01" value="1" inputmode="decimal" title="可直接輸入放大倍數">
           </div>
         </label>
-        <p class="form-help">經脈為平面 3px 線、穴位為平面 10px 圓點。經脈顏色：任督藍、陰經綠、陽經紅。編輯模式可改穴位顏色；檢視模式為唯讀。格線為螢幕輔助線，不寫入 JSON。</p>
+        <p class="form-help">經脈與穴位貼合皮膚繪製：線寬與圓點以實際毫米計，離皮位移預設 0，旋轉縮放都不會浮起。經脈顏色：任督藍、陰經綠、陽經紅。編輯模式可改穴位顏色；檢視模式為唯讀。貼皮渲染與格線只影響畫面，不寫入 JSON。</p>
       </form>
     </section>
   </aside>
@@ -365,6 +410,20 @@ let lockedOrthoHalfHeight = 1
 let lockedZoomFactor = 1
 const FIXED_MARKER_SIZE = 10
 const FIXED_LINE_WIDTH = 3
+/**
+ * Skin-conformal render settings (方案 A). These describe how the annotation
+ * is drawn, never where it sits: they are not part of the document and are
+ * never exported.
+ */
+let skinLiftMm = DEFAULT_SKIN_LIFT_MM
+let ribbonWidthMm = DEFAULT_RIBBON_WIDTH_MM
+let markerDiameterMm = DEFAULT_MARKER_DIAMETER_MM
+let xrayEdit = false
+/** Framed model height, so the millimetre settings mean the same on any GLB. */
+let bodyHeightWorld = 0
+const skinDecalMaterials = new Set()
+const conformCache = new Map()
+const discCache = new Map()
 const visibleMeridianIds = new Set()
 const linkedMeridianIds = new Set()
 const storageKeyForBody = (body) => `meridian-studio-document-v2-${inferBodyModel({ body })}`
@@ -757,8 +816,7 @@ function previewAcupointDrag(pointId, hit) {
     const current = getPoint(entry.point.id)
     if (!current) return
     entry.point = current
-    const pixelSize = FIXED_MARKER_SIZE
-    const anchor = cameraFacingAnchor(current, markerFacingLift(current, pixelSize))
+    const anchor = new THREE.Vector3(...resolvedNode(current).position)
     entry.mesh.position.copy(anchor)
     if (entry.label) entry.label.position.copy(anchor)
   })
@@ -812,14 +870,6 @@ function applyLabelPlacement(labelElement, point) {
   const placement = labelPlacementClass(point)
   labelElement.classList.toggle('label-left', placement === 'label-left')
   labelElement.classList.toggle('label-right', placement === 'label-right')
-}
-
-function cameraFacingAnchor(node, amount = 0.003) {
-  const resolved = resolvedNode(node)
-  const position = new THREE.Vector3(...resolved.position)
-  const toCamera = camera.position.clone().sub(position)
-  if (toCamera.lengthSq() < 1e-12) return position
-  return position.addScaledVector(toCamera.normalize(), amount)
 }
 
 function refreshBodyFrontAxis() {
@@ -1117,6 +1167,108 @@ function closestSkinHit(position, {
   return chosen[0]
 }
 
+const frameScratch = {
+  probe: new THREE.Vector3(),
+  local: new THREE.Vector3(),
+  world: new THREE.Vector3(),
+  best: new THREE.Vector3(),
+  normal: new THREE.Vector3(),
+  corner: new THREE.Vector3(),
+  guide: new THREE.Vector3(),
+  hit: { point: new THREE.Vector3() },
+  triangle: { face: { normal: new THREE.Vector3() }, barycoord: new THREE.Vector3() },
+}
+const normalMatrices = new Map()
+
+function meshNormalMatrix(mesh) {
+  let matrix = normalMatrices.get(mesh)
+  if (!matrix) {
+    matrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)
+    normalMatrices.set(mesh, matrix)
+  }
+  return matrix
+}
+
+/** Smooth (barycentric) surface normal at a closest-point hit. */
+function smoothNormalAt(mesh, localPoint, faceIndex) {
+  const geometry = mesh.geometry
+  if (!geometry?.getIndex() || !Number.isInteger(faceIndex) || faceIndex < 0) return null
+  let info = null
+  try {
+    info = getTriangleHitPointInfo(localPoint, geometry, faceIndex, frameScratch.triangle)
+  } catch {
+    return null
+  }
+  if (!info?.face) return null
+  const normals = geometry.getAttribute('normal')
+  const target = frameScratch.normal
+  if (normals && info.barycoord) {
+    target.set(0, 0, 0)
+    const weights = [info.barycoord.x, info.barycoord.y, info.barycoord.z]
+    const corners = [info.face.a, info.face.b, info.face.c]
+    for (let index = 0; index < 3; index += 1) {
+      frameScratch.corner.fromBufferAttribute(normals, corners[index])
+      target.addScaledVector(frameScratch.corner, weights[index])
+    }
+    if (target.lengthSq() < 1e-12) target.copy(info.face.normal)
+  } else {
+    target.copy(info.face.normal)
+  }
+  return target.applyNormalMatrix(meshNormalMatrix(mesh)).normalize()
+}
+
+/**
+ * Nearest point on the skin plus its smooth surface normal. This is the single
+ * gate every rendered annotation vertex passes through, so a sample can never
+ * be left hanging in the air by an upstream fallback.
+ */
+function surfaceFrameAt(point, guideNormal = null, maxDistance = 0.02) {
+  if (!modelMeshes.length || !point) return null
+  const probe = frameScratch.probe.set(point[0], point[1], point[2])
+  let bestMesh = null
+  let bestFace = -1
+  let bestDistance = Infinity
+  for (const mesh of modelMeshes) {
+    const bvh = mesh.geometry?.boundsTree
+    if (!bvh) continue
+    const local = frameScratch.local.copy(probe)
+    mesh.worldToLocal(local)
+    const box = mesh.geometry.boundingBox
+    if (box && box.distanceToPoint(local) > maxDistance) continue
+    const info = bvh.closestPointToPoint(local, frameScratch.hit, 0, maxDistance)
+    if (!info?.point) continue
+    const world = frameScratch.world.copy(info.point)
+    mesh.localToWorld(world)
+    const distance = world.distanceTo(probe)
+    if (distance >= bestDistance) continue
+    bestDistance = distance
+    bestMesh = mesh
+    bestFace = info.faceIndex
+    frameScratch.best.copy(world)
+  }
+  if (!bestMesh) return null
+  const local = frameScratch.local.copy(frameScratch.best)
+  bestMesh.worldToLocal(local)
+  const normal = smoothNormalAt(bestMesh, local, bestFace)
+  const surface = normal
+    ? [normal.x, normal.y, normal.z]
+    : (guideNormal ? [...guideNormal] : [0, 1, 0])
+  if (guideNormal) {
+    const guide = frameScratch.guide.set(guideNormal[0], guideNormal[1], guideNormal[2])
+    if (guide.lengthSq() > 1e-10
+      && (surface[0] * guide.x + surface[1] * guide.y + surface[2] * guide.z) < 0) {
+      surface[0] = -surface[0]
+      surface[1] = -surface[1]
+      surface[2] = -surface[2]
+    }
+  }
+  return {
+    position: [frameScratch.best.x, frameScratch.best.y, frameScratch.best.z],
+    normal: surface,
+    distance: bestDistance,
+  }
+}
+
 function projectHandleOnSkin(planePoint, guideNormal, radius, sideX = null) {
   return closestSkinHit(toArray(planePoint), {
     maxDistance: radius,
@@ -1399,11 +1551,14 @@ function liftGeodesicPolyline(points, normals) {
 function clearPathCaches() {
   geodesicCache.clear()
   restPathCache.clear()
+  conformCache.clear()
+  discCache.clear()
   shortArcCache = null
 }
 
 function rebuildSurfaceGraph() {
   clearPathCaches()
+  normalMatrices.clear()
   const chunks = []
   const meshOffsets = new Map()
   for (const mesh of modelMeshes) {
@@ -2669,36 +2824,224 @@ function createPolylineCurve(points) {
   return curve
 }
 
-function createMeridianLine(points, color) {
-  const positions = []
-  points.forEach((point) => {
-    positions.push(point.x, point.y, point.z)
-  })
-  const geometry = new LineGeometry()
-  geometry.setPositions(positions)
-  const material = new LineMaterial({
-    color: new THREE.Color(color).getHex(),
-    linewidth: FIXED_LINE_WIDTH,
-    worldUnits: false,
-    dashed: false,
-    transparent: false,
+/**
+ * Skin decal shader. The strip is stored as its on-skin centreline plus a
+ * tangent-plane side direction, and widened here — so it can never be pushed
+ * out along the surface normal, and at a grazing angle it foreshortens and
+ * fades instead of hanging off the silhouette.
+ */
+const SKIN_DECAL_VERTEX = /* glsl */`
+attribute vec3 aOffset;
+uniform float uWidth;
+uniform float uMinPixels;
+uniform float uPixelScale;
+uniform float uOrthoPixel;
+uniform float uIsOrtho;
+uniform float uLift;
+varying float vCoverage;
+varying vec3 vSurfaceNormal;
+varying vec3 vViewDirection;
+
+void main() {
+  vec4 centre = modelViewMatrix * vec4(position, 1.0);
+  float viewDepth = max(-centre.z, 1e-4);
+  float pixel = mix(viewDepth * uPixelScale, uOrthoPixel, uIsOrtho);
+  float inkHalf = uWidth * 0.5;
+  float floorHalf = uMinPixels * pixel * 0.5;
+  float drawHalf = max(inkHalf, floorHalf);
+  // Widening to the pixel floor must not add ink: give back the coverage.
+  vCoverage = drawHalf > 0.0 ? clamp(inkHalf / drawHalf, 0.0, 1.0) : 1.0;
+  vec3 placed = position + aOffset * drawHalf + normal * uLift;
+  vec4 view = modelViewMatrix * vec4(placed, 1.0);
+  vSurfaceNormal = normalize(normalMatrix * normal);
+  vViewDirection = -view.xyz;
+  gl_Position = projectionMatrix * view;
+}
+`
+
+const SKIN_DECAL_FRAGMENT = /* glsl */`
+uniform vec3 uColor;
+uniform float uOpacity;
+uniform float uFade;
+varying float vCoverage;
+varying vec3 vSurfaceNormal;
+varying vec3 vViewDirection;
+
+void main() {
+  float facing = abs(dot(normalize(vSurfaceNormal), normalize(vViewDirection)));
+  float alpha = uOpacity * vCoverage * smoothstep(0.0, uFade, facing);
+  if (alpha < 0.008) discard;
+  gl_FragColor = vec4(uColor, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`
+
+function skinLiftWorld() {
+  return worldPerMillimetre(bodyHeightWorld) * skinLiftMm
+}
+
+function ribbonWidthWorld() {
+  return worldPerMillimetre(bodyHeightWorld) * ribbonWidthMm
+}
+
+function markerDiameterWorld() {
+  return worldPerMillimetre(bodyHeightWorld) * markerDiameterMm
+}
+
+/**
+ * @param {number|string} color
+ * @param {{ opacity?: number, widthWorld?: number, minPixels?: number, depthOffset?: number }} options
+ */
+function createSkinDecalMaterial(color, {
+  opacity = 1,
+  widthWorld = 0,
+  minPixels = 0,
+  depthOffset = -2,
+} = {}) {
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: opacity },
+      uWidth: { value: widthWorld },
+      uMinPixels: { value: minPixels },
+      uPixelScale: { value: perspectivePixelScale(45, 1) },
+      uOrthoPixel: { value: 0.001 },
+      uIsOrtho: { value: 0 },
+      uLift: { value: skinLiftWorld() },
+      uFade: { value: 0.14 },
+    },
+    vertexShader: SKIN_DECAL_VERTEX,
+    fragmentShader: SKIN_DECAL_FRAGMENT,
+    transparent: true,
     depthTest: true,
-    depthWrite: true,
+    // Zero offset means the strip is coplanar with the skin; depth bias, not a
+    // world-space lift, is what keeps it visible.
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: depthOffset,
+    polygonOffsetUnits: depthOffset,
+    toneMapped: true,
   })
-  material.resolution.set(Math.max(viewport.clientWidth, 1), Math.max(viewport.clientHeight, 1))
-  const line = new Line2(geometry, material)
-  line.computeLineDistances()
-  line.renderOrder = 2
-  line.frustumCulled = false
-  line.userData.tubePoints = points.map((point) => point.clone())
-  line.userData.lineWidth = FIXED_LINE_WIDTH
-  return line
+  skinDecalMaterials.add(material)
+  return material
+}
+
+function disposeSkinDecalMaterial(material) {
+  if (!material) return
+  skinDecalMaterials.delete(material)
+  material.dispose?.()
+}
+
+function skinDecalGeometry(attributes) {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(attributes.position, 3))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(attributes.normal, 3))
+  geometry.setAttribute('aOffset', new THREE.BufferAttribute(attributes.offset, 3))
+  geometry.setIndex(new THREE.BufferAttribute(attributes.index, 1))
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function quantizeKey(point) {
+  const value = point?.isVector3 ? [point.x, point.y, point.z] : point
+  return `${Number(value[0]).toFixed(4)},${Number(value[1]).toFixed(4)},${Number(value[2]).toFixed(4)}`
+}
+
+function trimCache(cache, limit) {
+  while (cache.size > limit) {
+    const oldest = cache.keys().next().value
+    cache.delete(oldest)
+  }
+}
+
+/**
+ * Resample a run to the current quality and pull every sample onto the skin.
+ * Dragging uses the coarse step so a preview stays interactive; the settled
+ * rebuild refines it.
+ */
+function conformRunToSkin(points) {
+  const step = sampleStepForQuality(dragging ? 'coarse' : 'fine')
+  const mid = points[Math.floor(points.length / 2)]
+  const key = [
+    points.length,
+    step,
+    quantizeKey(points[0]),
+    quantizeKey(mid),
+    quantizeKey(points[points.length - 1]),
+  ].join('|')
+  const cached = conformCache.get(key)
+  if (cached) return cached
+  const dense = densifyPath(points.map((point) => toArray(point)), step)
+  const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide))
+  const run = {
+    points: conformed.points,
+    normals: smoothPathNormals(conformed.normals, 2),
+    unresolved: conformed.unresolved,
+  }
+  conformCache.set(key, run)
+  trimCache(conformCache, 400)
+  return run
+}
+
+const ribbonRayScratch = {
+  onRay: new THREE.Vector3(),
+  onSegment: new THREE.Vector3(),
+}
+
+/** Click target for a strip whose width only exists in the vertex shader. */
+function ribbonPickRadius(distance) {
+  return Math.max(ribbonWidthWorld(), pixelSizeToWorld(5, distance))
+}
+
+function raycastSkinRibbon(raycaster, intersects) {
+  const points = this.userData?.tubePoints
+  if (!this.visible || !points || points.length < 2) return
+  let best = null
+  for (let index = 1; index < points.length; index += 1) {
+    const distanceSq = raycaster.ray.distanceSqToSegment(
+      points[index - 1],
+      points[index],
+      ribbonRayScratch.onRay,
+      ribbonRayScratch.onSegment,
+    )
+    const along = ribbonRayScratch.onRay.distanceTo(raycaster.ray.origin)
+    const radius = ribbonPickRadius(along)
+    if (distanceSq > radius * radius) continue
+    if (best && along >= best.distance) continue
+    best = {
+      distance: along,
+      point: ribbonRayScratch.onSegment.clone(),
+      object: this,
+    }
+  }
+  if (best) intersects.push(best)
+}
+
+function createMeridianLine(points, color) {
+  const run = conformRunToSkin(points)
+  const mesh = new THREE.Mesh(
+    skinDecalGeometry(buildRibbonAttributes(run.points, run.normals)),
+    createSkinDecalMaterial(color, {
+      widthWorld: ribbonWidthWorld(),
+      minPixels: RIBBON_MIN_PIXELS,
+      depthOffset: -2,
+    }),
+  )
+  mesh.renderOrder = 2
+  mesh.frustumCulled = false
+  mesh.raycast = raycastSkinRibbon
+  mesh.userData.tubePoints = run.points.map((point) => new THREE.Vector3(...point))
+  mesh.userData.lineWidth = FIXED_LINE_WIDTH
+  mesh.userData.unresolvedSamples = run.unresolved
+  return mesh
 }
 
 function disposeRouteLine(line) {
   annotationGroup.remove(line)
   line.geometry?.dispose?.()
-  line.material?.dispose?.()
+  disposeSkinDecalMaterial(line.material)
 }
 
 function addRouteLineVisuals(route, runs = []) {
@@ -2724,27 +3067,64 @@ function replaceRouteLine(routeId, runs) {
   addRouteLineVisuals(route, runs)
 }
 
-function markerFacingLift(point, pixelSize) {
-  const distance = camera.position.distanceTo(new THREE.Vector3(...resolvedNode(point).position))
-  const markerRadius = pixelSizeToWorld(pixelSize, distance) * 0.5
-  let lift = Math.max(0.003, markerRadius * 0.25)
-  const hasRoute = state.meridians.some((route) => route.meridianId === point.meridianId)
-  if (hasRoute) {
-    const lineRadius = Math.max(0.0004, pixelSizeToWorld(FIXED_LINE_WIDTH, distance) * 0.5)
-    lift = Math.max(lift, lineRadius + markerRadius * 0.35)
-  }
-  return lift
+/** Reveal the anatomy under the pointer while editing, without moving it. */
+function skinDecalXray() {
+  return appMode === 'edit' && (xrayEdit || Boolean(dragging))
 }
 
-function updateRouteLineMaterials() {
-  const width = Math.max(viewport.clientWidth, 1)
-  const height = Math.max(viewport.clientHeight, 1)
-  routeVisuals.forEach(({ line }) => {
-    if (line?.material?.resolution) line.material.resolution.set(width, height)
+/**
+ * Per-frame uniforms: the strip's pixel floor and the depth-independent lift
+ * are the only things that react to camera changes. Geometry never moves.
+ */
+function updateSkinDecalUniforms() {
+  const viewportHeight = Math.max(viewport.clientHeight, 1)
+  const isOrtho = Boolean(camera.isOrthographicCamera)
+  const pixelScale = perspectivePixelScale(camera.fov || 45, viewportHeight)
+  const orthoPixel = isOrtho
+    ? (camera.top - camera.bottom) / Math.max(camera.zoom, 1e-6) / viewportHeight
+    : 0.001
+  const lift = skinLiftWorld()
+  const xray = skinDecalXray()
+  skinDecalMaterials.forEach((material) => {
+    const uniforms = material.uniforms
+    if (!uniforms) return
+    uniforms.uPixelScale.value = pixelScale
+    uniforms.uOrthoPixel.value = orthoPixel
+    uniforms.uIsOrtho.value = isOrtho ? 1 : 0
+    uniforms.uLift.value = lift
+    if (material.userData?.type === 'acupoint') {
+      const wantsDepthTest = !xray
+      if (material.depthTest !== wantsDepthTest) {
+        material.depthTest = wantsDepthTest
+        material.needsUpdate = true
+      }
+      return
+    }
+    uniforms.uWidth.value = ribbonWidthWorld()
   })
 }
 
-function createFlatMarkerMaterial(color, { selected = false } = {}) {
+/** Conformed dot geometry: a fan whose rim is projected onto the skin. */
+function acupointDotGeometry(point, radius) {
+  const resolved = resolvedNode(point)
+  const key = `${quantizeKey(resolved.position)}|${radius.toFixed(5)}`
+  const cached = discCache.get(key)
+  if (cached) return cached
+  const disc = conformDisc(
+    resolved.position,
+    resolved.normal,
+    radius,
+    (probe, guide) => surfaceFrameAt(probe, guide, Math.max(radius * 2, 0.006)),
+    { segments: 24 },
+  )
+  const geometry = skinDecalGeometry(buildDiscAttributes(disc))
+  discCache.set(key, geometry)
+  trimCache(discCache, 1600)
+  return geometry
+}
+
+/** Edit gizmos (locator handles) stay lifted spheres: they are UI, not anatomy. */
+function createGizmoMaterial(color, { selected = false } = {}) {
   return new THREE.MeshBasicMaterial({
     color,
     depthTest: true,
@@ -2752,9 +3132,26 @@ function createFlatMarkerMaterial(color, { selected = false } = {}) {
     transparent: true,
     opacity: selected ? 1 : 0.92,
     polygonOffset: true,
-    polygonOffsetFactor: -4,
-    polygonOffsetUnits: -4,
+    polygonOffsetFactor: -6,
+    polygonOffsetUnits: -6,
   })
+}
+
+function createAcupointDot(point, { selected = false } = {}) {
+  const material = createSkinDecalMaterial(point.color, {
+    opacity: selected ? 1 : 0.92,
+    widthWorld: 0,
+    minPixels: 0,
+    depthOffset: -4,
+  })
+  material.userData.type = 'acupoint'
+  const mesh = new THREE.Mesh(
+    acupointDotGeometry(point, markerDiameterWorld() * 0.5),
+    material,
+  )
+  mesh.renderOrder = 8
+  mesh.frustumCulled = false
+  return mesh
 }
 
 function isRenDuMeridian(meridianId) {
@@ -2905,12 +3302,12 @@ function addRouteEditHandles(route) {
         .forEach((placed, handleIndex) => {
           const handle = new THREE.Mesh(
             new THREE.SphereGeometry(0.5, 12, 10),
-            createFlatMarkerMaterial(0x111111, { selected: true }),
+            createGizmoMaterial(0x111111, { selected: true }),
           )
           handle.position.copy(offsetPosition(placed, 0.006))
           handle.scale.setScalar(0.012)
           handle.renderOrder = 12
-          handle.material.depthTest = true
+          handle.material.depthTest = !skinDecalXray()
           handle.userData = {
             type: 'route-handle',
             routeId: route.id,
@@ -2939,6 +3336,10 @@ function refreshRouteEditHandles() {
 }
 
 function rebuildAnnotations() {
+  // Decal materials are per visual; drop them before the group is cleared so
+  // the shader material set does not grow with every rebuild.
+  routeVisuals.forEach(({ line }) => disposeSkinDecalMaterial(line?.material))
+  markerVisuals.forEach(({ mesh }) => disposeSkinDecalMaterial(mesh?.material))
   annotationGroup.clear()
   markerVisuals = []
   routeVisuals = []
@@ -2962,13 +3363,9 @@ function rebuildAnnotations() {
       const isSelected = selected?.type === 'acupoint'
         && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
       const pixelSize = FIXED_MARKER_SIZE
-      const anchor = cameraFacingAnchor(point, markerFacingLift(point, pixelSize))
-      const marker = new THREE.Mesh(
-        new THREE.SphereGeometry(0.5, 20, 16),
-        createFlatMarkerMaterial(point.color, { selected: isSelected }),
-      )
+      const anchor = new THREE.Vector3(...resolvedNode(point).position)
+      const marker = createAcupointDot(point, { selected: isSelected })
       marker.position.copy(anchor)
-      marker.renderOrder = 8
       marker.userData = { type: 'acupoint', id: point.id }
       annotationGroup.add(marker)
 
@@ -2986,16 +3383,23 @@ function rebuildAnnotations() {
 }
 
 function updateMarkerScales() {
-  updateRouteLineMaterials()
+  updateSkinDecalUniforms()
+  const viewportHeight = Math.max(viewport.clientHeight, 1)
+  const dotDiameter = markerDiameterWorld()
+  const xray = skinDecalXray()
   markerVisuals.forEach(({ mesh, label, point }) => {
-    const pixelSize = FIXED_MARKER_SIZE
-    const anchor = cameraFacingAnchor(point, markerFacingLift(point, pixelSize))
+    const resolved = resolvedNode(point)
+    const anchor = new THREE.Vector3(...resolved.position)
     mesh.position.copy(anchor)
     if (label) label.position.copy(anchor)
-    const distance = camera.position.distanceTo(mesh.position)
-    mesh.scale.setScalar(pixelSizeToWorld(pixelSize, distance))
+    const distance = camera.position.distanceTo(anchor)
+    const pixel = camera.isOrthographicCamera
+      ? (camera.top - camera.bottom) / Math.max(camera.zoom, 1e-6) / viewportHeight
+      : perspectivePixelScale(camera.fov || 45, viewportHeight) * distance
+    // Inflate only when an on-skin dot would otherwise fall below a few pixels.
+    mesh.scale.setScalar(markerScreenScale(dotDiameter, pixel, MARKER_MIN_PIXELS))
     if (label?.element) {
-      label.element.style.setProperty('--marker-size', `${pixelSize}px`)
+      label.element.style.setProperty('--marker-size', `${FIXED_MARKER_SIZE}px`)
       applyLabelPlacement(label.element, point)
     }
   })
@@ -3003,9 +3407,11 @@ function updateMarkerScales() {
     pixelSizeToWorld(pixels, camera.position.distanceTo(position))
   handleVisuals.forEach(({ mesh }) => {
     mesh.scale.setScalar(handleSize(mesh.position, 10))
+    if (mesh.material) mesh.material.depthTest = !xray
   })
   midpointVisuals.forEach(({ mesh }) => {
     mesh.scale.setScalar(handleSize(mesh.position, 12))
+    if (mesh.material) mesh.material.depthTest = !xray
   })
 }
 
@@ -3187,6 +3593,14 @@ function syncStyleSettings() {
   form.markerColor.innerHTML = colorOptions(markerColor)
   if (form.surfaceFinish) form.surfaceFinish.value = surfaceFinish
   if (form.gridEnabled) form.gridEnabled.checked = gridEnabled
+  const syncNumber = (slider, input, value) => {
+    if (slider) slider.value = value
+    if (input && document.activeElement !== input) input.value = value
+  }
+  syncNumber(form.ribbonWidth, form.ribbonWidthInput, ribbonWidthMm)
+  syncNumber(form.markerDiameter, form.markerDiameterInput, markerDiameterMm)
+  syncNumber(form.skinLift, form.skinLiftInput, skinLiftMm)
+  if (form.xrayEdit) form.xrayEdit.checked = xrayEdit
   if (form.gridSpacing) form.gridSpacing.value = gridSpacing
   if (form.gridSpacingInput) form.gridSpacingInput.value = gridSpacing
   if (form.gridRotation) form.gridRotation.value = gridRotation
@@ -3770,6 +4184,9 @@ function applyModel(gltf, name, hash = null) {
   const framedBox = new THREE.Box3().setFromObject(root)
   const framedSize = framedBox.getSize(new THREE.Vector3())
   const maxDim = Math.max(framedSize.x, framedSize.y, framedSize.z, 0.001)
+  // Millimetre render settings are read against the framed stature, so the
+  // same slider value means the same real width on any GLB.
+  bodyHeightWorld = framedSize.y
 
   const radius = maxDim * 0.85
   pedestal.scale.setScalar(radius)
@@ -3801,6 +4218,8 @@ function applyModel(gltf, name, hash = null) {
       if (!object.geometry.boundsTree) {
         object.geometry.computeBoundsTree()
       }
+      // Lets the conform pass skip meshes that cannot own the nearest point.
+      if (!object.geometry.boundingBox) object.geometry.computeBoundingBox()
     }
     modelMeshes.push(object)
   })
@@ -4167,9 +4586,7 @@ function resize() {
   camera.updateProjectionMatrix()
   renderer.setSize(clientWidth, clientHeight, false)
   labelRenderer.setSize(clientWidth, clientHeight)
-  routeVisuals.forEach(({ line }) => {
-    if (line.material?.resolution) line.material.resolution.set(clientWidth, clientHeight)
-  })
+  updateSkinDecalUniforms()
 }
 new ResizeObserver(resize).observe(viewport)
 renderer.setAnimationLoop((time) => {
@@ -4420,6 +4837,49 @@ $('#style-settings').addEventListener('change', (event) => {
     setStatus(surfaceFinish === 'skin' ? '已套用皮膚色表面' : '已還原原材質表面')
     return
   }
+  if (name === 'ribbonWidth' || name === 'ribbonWidthInput') {
+    ribbonWidthMm = clampMillimetres(
+      name === 'ribbonWidthInput' ? form.ribbonWidthInput.value : form.ribbonWidth.value,
+      MIN_RIBBON_WIDTH_MM,
+      MAX_RIBBON_WIDTH_MM,
+      ribbonWidthMm,
+    )
+    syncStyleSettings()
+    updateSkinDecalUniforms()
+    setStatus(`經脈線寬 ${ribbonWidthMm} mm`)
+    return
+  }
+  if (name === 'markerDiameter' || name === 'markerDiameterInput') {
+    markerDiameterMm = clampMillimetres(
+      name === 'markerDiameterInput' ? form.markerDiameterInput.value : form.markerDiameter.value,
+      MIN_MARKER_DIAMETER_MM,
+      MAX_MARKER_DIAMETER_MM,
+      markerDiameterMm,
+    )
+    syncStyleSettings()
+    // Dot rims are conformed geometry, so a size change rebuilds the fans.
+    rebuildAnnotations()
+    setStatus(`穴位直徑 ${markerDiameterMm} mm`)
+    return
+  }
+  if (name === 'skinLift' || name === 'skinLiftInput') {
+    skinLiftMm = clampMillimetres(
+      name === 'skinLiftInput' ? form.skinLiftInput.value : form.skinLift.value,
+      0,
+      MAX_SKIN_LIFT_MM,
+      skinLiftMm,
+    )
+    syncStyleSettings()
+    updateSkinDecalUniforms()
+    setStatus(skinLiftMm > 0 ? `離皮位移 ${skinLiftMm} mm` : '經脈與穴位完全貼皮（位移 0）')
+    return
+  }
+  if (name === 'xrayEdit') {
+    xrayEdit = Boolean(form.xrayEdit?.checked)
+    updateSkinDecalUniforms()
+    setStatus(xrayEdit ? '編輯透視已開啟' : '編輯透視已關閉')
+    return
+  }
   if (name === 'gridEnabled') {
     gridEnabled = Boolean(form.gridEnabled?.checked)
     applyViewportGrid()
@@ -4514,23 +4974,18 @@ updateUI()
 applyViewportGrid()
 syncZoomUI({ force: true })
 resize()
-let lastTubeZoomFactor = getZoomFactor()
 let lastZoomForUi = getZoomFactor()
 controls.addEventListener('change', () => {
   const zoom = getZoomFactor()
   if (Math.abs(zoom - lastZoomForUi) < 0.0008) return
   lastZoomForUi = zoom
   syncZoomUI({ flash: true })
-  // Keep meridian thickness matched while zooming so tubes do not engulf points.
-  updateRouteLineMaterials()
+  // Strip width and the dot pixel floor live in the shader, so zooming only
+  // refreshes uniforms — the on-skin geometry never has to be rebuilt.
+  updateSkinDecalUniforms()
 })
 controls.addEventListener('end', () => {
-  const zoom = getZoomFactor()
-  if (Math.abs(zoom - lastTubeZoomFactor) / Math.max(zoom, 0.01) > 0.05) {
-    lastTubeZoomFactor = zoom
-    rebuildAnnotations()
-  }
-  lastZoomForUi = zoom
+  lastZoomForUi = getZoomFactor()
   syncZoomUI({ force: true })
 })
 $('#body-model-filter').addEventListener('change', (event) => {
