@@ -459,21 +459,87 @@ export function siArmShoulderWrapGuide(chordPoint = [0, 0, 0], sideX = 0) {
   return normalize([side * 0.28, 0.08, -0.96])
 }
 
+function clamp01(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 0
+  return Math.min(1, Math.max(0, n))
+}
+
+/**
+ * A point outside the through-axilla chord, on the posterior-lateral arm.
+ * Mid-span stays farther out so samples are never taken from inside the hollow.
+ */
+export function siArmShoulderOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const tt = clamp01(t)
+  const chord = lerp3(a, b, tt)
+  const side = Math.sign((a[0] + b[0]) / 2) || 1
+  const keepOut = Math.sin(Math.PI * tt)
+  const guide = siArmShoulderWrapGuide(chord, side)
+  const standoff = 0.018 + keepOut * 0.038
+  const lateral = keepOut * 0.022
+  return [
+    chord[0] + guide[0] * standoff + side * lateral,
+    chord[1] + guide[1] * standoff,
+    chord[2] + guide[2] * standoff,
+  ]
+}
+
+/** How lateral a sample must stay at progress `t` (hold the arm, ease in only near 肩貞). */
+export function siArmShoulderAbsXFloor(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const a = Math.abs(Number(from[0]) || 0)
+  const b = Math.abs(Number(to[0]) || 0)
+  const tt = clamp01(t)
+  const outer = Math.max(a, b)
+  const inner = Math.min(a, b)
+  if (tt <= 0.12 || tt >= 0.88) return inner - 0.018
+  const hold = Math.min(1, Math.max(0, (tt - 0.12) / 0.64))
+  const eased = outer + (inner - outer) * hold * hold
+  return Math.max(inner + 0.02, eased - 0.01)
+}
+
 /** Reject samples that fell into the armpit crease or jumped onto the chest. */
-export function isSiArmShoulderHit(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+export function isSiArmShoulderHit(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = null) {
   const p = asPathPoint(point)
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
   if (p[0] * side < 0 && Math.abs(p[0]) > 0.03) return false
-  const minAbsX = Math.min(Math.abs(a[0]), Math.abs(b[0])) - 0.05
-  if (Math.abs(p[0]) < Math.max(0.12, minAbsX)) return false
-  const maxZ = Math.max(a[2], b[2]) + 0.045
+  const span = length3([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
+  const progress = Number.isFinite(Number(t))
+    ? clamp01(t)
+    : (span < 1e-8 ? 0.5 : clamp01((
+      (p[0] - a[0]) * (b[0] - a[0])
+      + (p[1] - a[1]) * (b[1] - a[1])
+      + (p[2] - a[2]) * (b[2] - a[2])
+    ) / (span * span)))
+  if (Math.abs(p[0]) < siArmShoulderAbsXFloor(a, b, progress)) return false
+  const maxZ = Math.max(a[2], b[2]) + 0.03
   if (p[2] > maxZ) return false
   const yMin = Math.min(a[1], b[1]) - 0.06
   const yMax = Math.max(a[1], b[1]) + 0.06
   if (p[1] < yMin || p[1] > yMax) return false
+  if (progress > 0.14 && progress < 0.86) {
+    const chord = lerp3(a, b, progress)
+    const outer = siArmShoulderOuterPoint(a, b, progress)
+    const toChord = length3([p[0] - chord[0], p[1] - chord[1], p[2] - chord[2]])
+    const toOuter = length3([p[0] - outer[0], p[1] - outer[1], p[2] - outer[2]])
+    if (toChord + 0.01 < toOuter && toChord < 0.028) return false
+  }
   return true
+}
+
+export function siArmShoulderGuidePoints(from = [0, 0, 0], to = [0, 0, 0], samplesPerSpan = 12) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  return catmullRomThrough([
+    a,
+    siArmShoulderOuterPoint(a, b, 0.32),
+    siArmShoulderOuterPoint(a, b, 0.62),
+    siArmShoulderOuterPoint(a, b, 0.84),
+    b,
+  ], samplesPerSpan)
 }
 
 export function digitWrapGuidePoint(from, to, fromNormal, toNormal, t) {

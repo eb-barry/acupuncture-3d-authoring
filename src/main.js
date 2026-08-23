@@ -39,6 +39,8 @@ import {
   isTeTempleHandlePair,
   isSiXiaohaiJianzhenPair,
   isSiArmShoulderHit,
+  siArmShoulderGuidePoints,
+  siArmShoulderOuterPoint,
   siArmShoulderWrapGuide,
   maxPolylineEdge,
   teEarArcPoints,
@@ -2010,59 +2012,68 @@ function snapTeEarArcToSkin(a, b, fromCode, toCode) {
 
 function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
   const sideX = (a.position[0] + b.position[0]) / 2
-  const path = rest.length >= 2 ? rest : [a.position, b.position]
+  const path = rest.length >= 2 ? rest : siArmShoulderGuidePoints(a.position, b.position)
   const ordered = [...records].sort((left, right) => (
     closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
   ))
-  const start = new THREE.Vector3(...a.position)
-  const end = new THREE.Vector3(...b.position)
-  const samples = ordered.length
+  const sanitized = ordered
+    .map((record) => snapSiHandleToSkin(record, a, b, path))
+    .filter(Boolean)
+  const samples = sanitized.length
     ? catmullRomThrough(
-      [a.position, ...ordered.map((record) => record.position), b.position],
+      [a.position, ...sanitized.map((record) => record.position), b.position],
       16,
     )
-    : null
+    : siArmShoulderGuidePoints(a.position, b.position, 14)
   const points = []
   const previousRef = { current: null }
-  const accept = (hit) => {
-    if (!hit || !isSiArmShoulderHit(hit.position, a.position, b.position)) return
+  const accept = (hit, t) => {
+    if (!hit || !isSiArmShoulderHit(hit.position, a.position, b.position, t)) return
     const lifted = new THREE.Vector3(...hit.position)
       .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
     appendSkinPoint(points, lifted, previousRef)
   }
-  accept({ position: a.position, normal: a.normal })
-  if (samples) {
-    for (let index = 1; index < samples.length - 1; index += 1) {
-      const t = index / Math.max(1, samples.length - 1)
-      const guide = slerpUnitVectors(
-        siArmShoulderWrapGuide(samples[index], sideX),
-        slerpUnitVectors(a.normal, b.normal, t),
-        0.35,
-      )
-      const chord = new THREE.Vector3(...samples[index])
-      const hit = projectFromOutside(chord, guide, 0.036)
-        || closestSkinHit(samples[index], { maxDistance: 0.055, sideX, guideNormal: guide })
-      accept(hit)
-    }
-  } else {
-    const dist = Math.max(start.distanceTo(end), 1e-6)
-    const count = Math.min(64, Math.max(24, Math.ceil(dist / 0.008) + 12))
-    for (let index = 1; index < count - 1; index += 1) {
-      const t = index / (count - 1)
-      const chord = start.clone().lerp(end, t)
-      const guide = slerpUnitVectors(
-        siArmShoulderWrapGuide(toArray(chord), sideX),
-        slerpUnitVectors(a.normal, b.normal, t),
-        0.35,
-      )
-      const hit = projectFromOutside(chord, guide, 0.04)
-        || closestSkinHit(toArray(chord), { maxDistance: 0.06, sideX, guideNormal: guide })
-      accept(hit)
-    }
+  accept({ position: a.position, normal: a.normal }, 0)
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    const t = index / Math.max(1, samples.length - 1)
+    const outer = siArmShoulderOuterPoint(a.position, b.position, t)
+    const sample = samples[index]
+    const side = Math.sign(sideX) || 1
+    const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - 0.003
+    const tooAnterior = sample[2] > outer[2] + 0.006
+    const probe = (tooMedial || tooAnterior) ? outer : sample
+    const guide = siArmShoulderWrapGuide(probe, side)
+    const hit = projectFromOutside(new THREE.Vector3(...probe), guide, 0.03)
+      || closestSkinHit(probe, { maxDistance: 0.04, sideX: side, guideNormal: guide })
+    accept(hit, t)
   }
-  accept({ position: b.position, normal: b.normal })
-  if (points.length < 3) return null
-  return densifyHeadSkin(points, sideX)
+  accept({ position: b.position, normal: b.normal }, 1)
+  return points.length >= 3 ? points : null
+}
+
+function snapSiHandleToSkin(placed, fromResolved, toResolved, rest = []) {
+  if (!placed?.position) return null
+  const sideX = (fromResolved.position[0] + toResolved.position[0]) / 2
+  const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
+  const guide = siArmShoulderWrapGuide(placed.position, sideX)
+  const outer = siArmShoulderOuterPoint(fromResolved.position, toResolved.position, t)
+  const tooMedial = Math.abs(placed.position[0]) < Math.abs(outer[0]) - 0.004
+  const probe = tooMedial || !isSiArmShoulderHit(placed.position, fromResolved.position, toResolved.position, t)
+    ? outer
+    : placed.position
+  const hit = projectFromOutside(new THREE.Vector3(...probe), guide, 0.03)
+    || closestSkinHit(probe, { maxDistance: 0.04, sideX, guideNormal: guide })
+  if (hit && isSiArmShoulderHit(hit.position, fromResolved.position, toResolved.position, t)) {
+    return { position: hit.position, normal: hit.normal }
+  }
+  const fallback = rest.length >= 2
+    ? pointAtPolylineT(rest, clampHandleT(t))
+    : outer
+  const fbHit = closestSkinHit(fallback, { maxDistance: 0.035, sideX, guideNormal: guide })
+  if (fbHit && isSiArmShoulderHit(fbHit.position, fromResolved.position, toResolved.position, t)) {
+    return { position: fbHit.position, normal: fbHit.normal }
+  }
+  return { position: [...fallback], normal: [...(placed.normal || guide)] }
 }
 
 function skinSegmentPoints(a, b, {
@@ -2404,7 +2415,11 @@ function restPathArrays(fromNode, toNode) {
   const reverseKey = geodesicCacheKey(b, a)
   const usableCached = (cached) => {
     if (!cached?.length) return false
-    if (siArmShoulder) return !isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.55 })
+    if (siArmShoulder) {
+      if (isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.55 })) return false
+      const mid = cached[Math.floor(cached.length / 2)]
+      return Boolean(mid) && isSiArmShoulderHit(mid, a.position, b.position)
+    }
     if (!isShoulderAxillaWrap(a.position, b.position)) return true
     return !isDisorderedPolyline(cached, [a.position, b.position])
   }
@@ -2462,6 +2477,11 @@ function shortSegmentReferenceArc(side) {
 
 function snapHandleToSkin(placed, fromNode, toNode) {
   if (!placed?.position) return placed
+  const from = resolvedNode(fromNode)
+  const to = resolvedNode(toNode)
+  if (isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))) {
+    return snapSiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode)) || placed
+  }
   const sideX = pairSideX(fromNode, toNode)
   return closestSkinHit(placed.position, {
     maxDistance: HANDLE_SKIN_SNAP_RADIUS,
@@ -2484,7 +2504,8 @@ function restPathAnchor(fromNode, toNode, rest, t) {
 function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(fromNode, toNode)) {
   const from = resolvedNode(fromNode)
   const to = resolvedNode(toNode)
-  if (handle?.position && locatorOnPairLimb(from, to, handle, rest)) {
+  const siPair = isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))
+  if (handle?.position && (siPair || locatorOnPairLimb(from, to, handle, rest))) {
     return snapHandleToSkin({ position: handle.position, normal: handle.normal }, fromNode, toNode)
   }
   const t = 0.5
@@ -2492,8 +2513,14 @@ function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(f
 }
 
 function pairWaypoints(fromNode, toNode, handles, count, rest) {
+  const ignoreMirror = isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))
   const slots = resolveHandleSlots(
-    keepLocatorsOnPairLimb(resolvedNode(fromNode), resolvedNode(toNode), handles, rest),
+    keepLocatorsOnPairLimb(
+      resolvedNode(fromNode),
+      resolvedNode(toNode),
+      handles,
+      ignoreMirror ? [] : rest,
+    ),
     count,
     rest,
   )
@@ -3371,11 +3398,14 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
     return gap < 0.01
   })
   if (tooClose) return state
+  const placed = isSiXiaohaiJianzhenPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
+    ? snapSiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
+    : hit
   records[index] = {
     type: 'control',
     pointId: null,
-    position: [...hit.position],
-    normal: [...hit.normal],
+    position: [...placed.position],
+    normal: [...placed.normal],
     style: 'along',
   }
   return writePairHandles(routeId, fromPointId, toPointId, records)
@@ -3383,6 +3413,12 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
 
 function previewHandleDrag(drag, hit) {
   const pairId = state.meridians.find((item) => item.id === drag.routeId)?.pairId || null
+  const route = state.meridians.find((item) => item.id === drag.routeId)
+  const pair = route && acupointPairs(route).find((item) =>
+    item.fromPointId === drag.fromPointId && item.toPointId === drag.toPointId)
+  const skinHit = pair && isSiXiaohaiJianzhenPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
+    ? snapSiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), drag.rest || []) || hit
+    : hit
   handleVisuals.forEach(({ mesh }) => {
     const data = mesh.userData
     if (data.handleIndex !== drag.handleIndex) return
@@ -3392,22 +3428,18 @@ function previewHandleDrag(drag, hit) {
       && state.meridians.find((item) => item.id === data.routeId)?.pairId === pairId
     if (!same && !mirrored) return
     const node = same
-      ? hit
+      ? skinHit
       : {
-        position: [-hit.position[0], hit.position[1], hit.position[2]],
-        normal: [-hit.normal[0], hit.normal[1], hit.normal[2]],
+        position: [-skinHit.position[0], skinHit.position[1], skinHit.position[2]],
+        normal: [-skinHit.normal[0], skinHit.normal[1], skinHit.normal[2]],
       }
     mesh.position.copy(offsetPosition(node, 0.006))
   })
   if (!drag.records?.length || drag.handleIndex == null) return
-  const route = state.meridians.find((item) => item.id === drag.routeId)
-  if (!route) return
-  const pair = acupointPairs(route).find((item) =>
-    item.fromPointId === drag.fromPointId && item.toPointId === drag.toPointId)
-  if (!pair) return
+  if (!route || !pair) return
   const records = drag.records.map((record, index) => (
     index === drag.handleIndex
-      ? { ...record, position: [...hit.position], normal: [...hit.normal] }
+      ? { ...record, position: [...skinHit.position], normal: [...skinHit.normal] }
       : record
   ))
   replaceRouteLine(route.id, skinCurveRuns(route, {

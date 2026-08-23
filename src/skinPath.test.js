@@ -16,6 +16,7 @@ import {
   isTeTempleHandlePair,
   isSiXiaohaiJianzhenPair,
   isSiArmShoulderHit,
+  siArmShoulderOuterPoint,
   siArmShoulderWrapGuide,
   maxPolylineEdge,
   teEarArcGuide,
@@ -240,9 +241,19 @@ describe('skin path wrapping', () => {
     const guide = siArmShoulderWrapGuide([0.25, 1.17, -0.06], 0.25)
     expect(guide[2]).toBeLessThan(-0.7)
     expect(guide[0]).toBeGreaterThan(0)
-    expect(isSiArmShoulderHit([0.26, 1.16, -0.07], xiaohai, jianzhen)).toBe(true)
+    expect(isSiArmShoulderHit([0.30, 1.16, -0.09], xiaohai, jianzhen)).toBe(true)
     expect(isSiArmShoulderHit([0.06, 1.18, -0.04], xiaohai, jianzhen)).toBe(false)
+    expect(isSiArmShoulderHit([0.16, 1.17, -0.05], xiaohai, jianzhen)).toBe(false)
     expect(isSiArmShoulderHit([0.24, 1.16, 0.08], xiaohai, jianzhen)).toBe(false)
     expect(isSiArmShoulderHit([-0.26, 1.16, -0.07], xiaohai, jianzhen)).toBe(false)
+    const midChord = [
+      (xiaohai[0] + jianzhen[0]) / 2,
+      (xiaohai[1] + jianzhen[1]) / 2,
+      (xiaohai[2] + jianzhen[2]) / 2,
+    ]
+    const outer = siArmShoulderOuterPoint(xiaohai, jianzhen, 0.5)
+    expect(Math.abs(outer[0])).toBeGreaterThan(Math.abs(midChord[0]))
+    expect(outer[2]).toBeLessThan(midChord[2])
+    expect(isSiArmShoulderHit(midChord, xiaohai, jianzhen, 0.5)).toBe(false)
   })
 })
