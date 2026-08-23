@@ -4,6 +4,7 @@ import {
   POINTS,
   POINT_BY_CODE,
   isOmittedSurfaceSpan,
+  isRenDuCodePair,
   meridianLineColor,
   pointsForMeridian,
 } from './catalog.js'
@@ -45,6 +46,17 @@ describe('authorized acupuncture catalog', () => {
     expect(isOmittedSurfaceSpan('BL39', 'BL40')).toBe(false)
     expect(isOmittedSurfaceSpan('BL41', 'BL42')).toBe(false)
     expect(isOmittedSurfaceSpan('', 'BL41')).toBe(false)
+  })
+
+  it('keeps 任督 consecutive pairs drawable even when they are not BL40–BL41', () => {
+    expect(isRenDuCodePair('GV15', 'GV14')).toBe(true)
+    expect(isRenDuCodePair('GV13', 'GV12')).toBe(true)
+    expect(isRenDuCodePair('GV11', 'GV10')).toBe(true)
+    expect(isRenDuCodePair('GV3', 'GV2')).toBe(true)
+    expect(isRenDuCodePair('CV4', 'CV3')).toBe(true)
+    expect(isRenDuCodePair('GV14', 'BL11')).toBe(false)
+    expect(isRenDuCodePair('BL40', 'BL41')).toBe(false)
+    expect(isOmittedSurfaceSpan('GV15', 'GV14')).toBe(false)
   })
 
   it('assigns global yin / yang / ren-du meridian line colors', () => {
