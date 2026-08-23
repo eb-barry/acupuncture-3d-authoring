@@ -80,6 +80,7 @@ import {
   perspectivePixelScale,
   sampleStepForQuality,
   smoothPathNormals,
+  tangentWindow,
   worldPerMillimetre,
 } from './skinRibbon.js'
 import {
@@ -1175,6 +1176,7 @@ const frameScratch = {
   normal: new THREE.Vector3(),
   corner: new THREE.Vector3(),
   guide: new THREE.Vector3(),
+  inward: new THREE.Vector3(),
   hit: { point: new THREE.Vector3() },
   triangle: { face: { normal: new THREE.Vector3() }, barycoord: new THREE.Vector3() },
 }
@@ -1217,12 +1219,49 @@ function smoothNormalAt(mesh, localPoint, faceIndex) {
   return target.applyNormalMatrix(meshNormalMatrix(mesh)).normalize()
 }
 
+const normalCaster = new THREE.Raycaster()
+normalCaster.firstHitOnly = true
+
 /**
- * Nearest point on the skin plus its smooth surface normal. This is the single
- * gate every rendered annotation vertex passes through, so a sample can never
- * be left hanging in the air by an upstream fallback.
+ * Drop a sample straight onto the skin along `guide`. Nearest-point snapping
+ * would slide it sideways wherever a crease wall is closer than the skin
+ * directly beneath, which wobbles the drawn line off the authored route; a
+ * cast along the normal only moves it in and out.
  */
-function surfaceFrameAt(point, guideNormal = null, maxDistance = 0.02) {
+function surfaceFrameAlongNormal(point, guide, reach = 0.008) {
+  const direction = frameScratch.guide.set(guide[0], guide[1], guide[2])
+  if (direction.lengthSq() < 1e-10) return null
+  direction.normalize()
+  const origin = frameScratch.probe
+    .set(point[0], point[1], point[2])
+    .addScaledVector(direction, reach)
+  normalCaster.set(origin, frameScratch.inward.copy(direction).negate())
+  normalCaster.near = 0
+  normalCaster.far = reach * 2
+  const hit = normalCaster.intersectObjects(modelMeshes, false)[0]
+  if (!hit?.face) return null
+  const depth = hit.distance - reach
+  if (Math.abs(depth) > reach) return null
+  const local = frameScratch.local.copy(hit.point)
+  hit.object.worldToLocal(local)
+  const smooth = smoothNormalAt(hit.object, local, hit.faceIndex)
+  const normal = smooth
+    ? [smooth.x, smooth.y, smooth.z]
+    : [direction.x, direction.y, direction.z]
+  if (normal[0] * direction.x + normal[1] * direction.y + normal[2] * direction.z < 0) {
+    normal[0] = -normal[0]
+    normal[1] = -normal[1]
+    normal[2] = -normal[2]
+  }
+  return {
+    position: [hit.point.x, hit.point.y, hit.point.z],
+    normal,
+    distance: Math.abs(depth),
+  }
+}
+
+/** Nearest point on the skin plus its smooth normal. */
+function nearestSurfaceFrame(point, guideNormal = null, maxDistance = 0.02) {
   if (!modelMeshes.length || !point) return null
   const probe = frameScratch.probe.set(point[0], point[1], point[2])
   let bestMesh = null
@@ -1267,6 +1306,21 @@ function surfaceFrameAt(point, guideNormal = null, maxDistance = 0.02) {
     normal: surface,
     distance: bestDistance,
   }
+}
+
+/**
+ * Skin frame for one annotation vertex: dropped along `guideNormal` when there
+ * is one, else the nearest surface point. Every rendered vertex passes through
+ * here, so a sample can never be left hanging in the air by an upstream
+ * fallback.
+ */
+function surfaceFrameAt(point, guideNormal = null, maxDistance = 0.02) {
+  if (!modelMeshes.length || !point) return null
+  if (guideNormal) {
+    const dropped = surfaceFrameAlongNormal(point, guideNormal, Math.max(maxDistance * 0.6, 0.012))
+    if (dropped) return dropped
+  }
+  return nearestSurfaceFrame(point, guideNormal, maxDistance)
 }
 
 function projectHandleOnSkin(planePoint, guideNormal, radius, sideX = null) {
@@ -2825,13 +2879,15 @@ function createPolylineCurve(points) {
 }
 
 /**
- * Skin decal shader. The strip is stored as its on-skin centreline plus a
- * tangent-plane side direction, and widened here — so it can never be pushed
- * out along the surface normal, and at a grazing angle it foreshortens and
- * fades instead of hanging off the silhouette.
+ * Skin decal shader. Vertices sit on the skin; the strip is widened here,
+ * across the view direction, so its screen width is stable and it cannot
+ * twist. Nothing is pushed outward along the surface normal beyond `uLift`,
+ * and the surface-normal fade stops the strip reaching past the silhouette.
  */
 const SKIN_DECAL_VERTEX = /* glsl */`
 attribute vec3 aOffset;
+attribute vec3 aTangent;
+attribute float aSign;
 uniform float uWidth;
 uniform float uMinPixels;
 uniform float uPixelScale;
@@ -2843,7 +2899,8 @@ varying vec3 vSurfaceNormal;
 varying vec3 vViewDirection;
 
 void main() {
-  vec4 centre = modelViewMatrix * vec4(position, 1.0);
+  vec3 anchor = position + normal * uLift;
+  vec4 centre = modelViewMatrix * vec4(anchor, 1.0);
   float viewDepth = max(-centre.z, 1e-4);
   float pixel = mix(viewDepth * uPixelScale, uOrthoPixel, uIsOrtho);
   float inkHalf = uWidth * 0.5;
@@ -2851,8 +2908,15 @@ void main() {
   float drawHalf = max(inkHalf, floorHalf);
   // Widening to the pixel floor must not add ink: give back the coverage.
   vCoverage = drawHalf > 0.0 ? clamp(inkHalf / drawHalf, 0.0, 1.0) : 1.0;
-  vec3 placed = position + aOffset * drawHalf + normal * uLift;
-  vec4 view = modelViewMatrix * vec4(placed, 1.0);
+
+  vec3 toEye = normalize(cameraPosition - anchor);
+  vec3 across = cross(aTangent, toEye);
+  float reach = length(across);
+  // Where the path runs at the camera there is no stable screen side; fall
+  // back to the tangent-plane direction, which is still on the skin.
+  vec3 side = reach > 0.2 ? (across / reach) * aSign : aOffset;
+
+  vec4 view = modelViewMatrix * vec4(anchor + side * drawHalf, 1.0);
   vSurfaceNormal = normalize(normalMatrix * normal);
   vViewDirection = -view.xyz;
   gl_Position = projectionMatrix * view;
@@ -2939,6 +3003,8 @@ function skinDecalGeometry(attributes) {
   geometry.setAttribute('position', new THREE.BufferAttribute(attributes.position, 3))
   geometry.setAttribute('normal', new THREE.BufferAttribute(attributes.normal, 3))
   geometry.setAttribute('aOffset', new THREE.BufferAttribute(attributes.offset, 3))
+  geometry.setAttribute('aTangent', new THREE.BufferAttribute(attributes.tangent, 3))
+  geometry.setAttribute('aSign', new THREE.BufferAttribute(attributes.sign, 1))
   geometry.setIndex(new THREE.BufferAttribute(attributes.index, 1))
   geometry.computeBoundingSphere()
   return geometry
@@ -2974,11 +3040,24 @@ function conformRunToSkin(points) {
   const cached = conformCache.get(key)
   if (cached) return cached
   const dense = densifyPath(points.map((point) => toArray(point)), step)
-  const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide))
+  // Two passes: nearest-point first, only to learn a stable normal per sample,
+  // then drop each sample along that normal so the drawn line keeps the
+  // authored route instead of sliding toward whichever crease wall is nearer.
+  const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point))
+  const guides = smoothPathNormals(estimate.normals, 2)
+  const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide), { guides })
   const run = {
-    points: conformed.points,
+    points: conformed.points.map((point, index) => (
+      // A sample neither pass could place stays where the nearest-point pass
+      // left it — on the skin — rather than at its authored height.
+      conformed.resolved[index] ? point : estimate.points[index]
+    )),
     normals: smoothPathNormals(conformed.normals, 2),
-    unresolved: conformed.unresolved,
+    unresolved: conformed.resolved.reduce(
+      (total, ok, index) => (ok || estimate.resolved[index] ? total : total + 1),
+      0,
+    ),
+    tangentWindow: tangentWindow(step),
   }
   conformCache.set(key, run)
   trimCache(conformCache, 400)
@@ -3022,11 +3101,11 @@ function raycastSkinRibbon(raycaster, intersects) {
 function createMeridianLine(points, color) {
   const run = conformRunToSkin(points)
   const mesh = new THREE.Mesh(
-    skinDecalGeometry(buildRibbonAttributes(run.points, run.normals)),
+    skinDecalGeometry(buildRibbonAttributes(run.points, run.normals, run.tangentWindow)),
     createSkinDecalMaterial(color, {
       widthWorld: ribbonWidthWorld(),
       minPixels: RIBBON_MIN_PIXELS,
-      depthOffset: -2,
+      depthOffset: -4,
     }),
   )
   mesh.renderOrder = 2
@@ -3142,7 +3221,7 @@ function createAcupointDot(point, { selected = false } = {}) {
     opacity: selected ? 1 : 0.92,
     widthWorld: 0,
     minPixels: 0,
-    depthOffset: -4,
+    depthOffset: -8,
   })
   material.userData.type = 'acupoint'
   const mesh = new THREE.Mesh(

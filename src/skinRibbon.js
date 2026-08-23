@@ -14,8 +14,14 @@
 /** Stature the mm-based UI settings assume when converting to world units. */
 export const REFERENCE_BODY_HEIGHT_M = 1.75
 
-/** 方案 A ships with no lift; the slider stays for A/B comparison. */
-export const DEFAULT_SKIN_LIFT_MM = 0
+/**
+ * A hair of lift, not a stand-off. A chord between 2 mm samples, and a dot's
+ * conformed rim, still dip a couple of tenths of a millimetre below the skin;
+ * without this they lose the depth test in patches and the line breaks up.
+ * 0.4 mm on a 1.75 m body is ~1/13 of the old offset and under a pixel until
+ * very high zoom. Set the slider to 0 for a strictly coplanar comparison.
+ */
+export const DEFAULT_SKIN_LIFT_MM = 0.4
 export const MAX_SKIN_LIFT_MM = 5
 
 export const DEFAULT_RIBBON_WIDTH_MM = 3.5
@@ -119,10 +125,12 @@ export function densifyPath(points = [], maxStep = FINE_SAMPLE_STEP, {
 export function conformPath(points = [], project, {
   maxPull = MAX_CONFORM_PULL,
   minNormalDot = 0.2,
+  guides = null,
 } = {}) {
   const path = points.map(asPoint)
   const outPoints = []
   const outNormals = []
+  const resolved = []
   let unresolved = 0
   let maxMoved = 0
   let guide = null
@@ -130,6 +138,9 @@ export function conformPath(points = [], project, {
 
   for (let index = 0; index < path.length; index += 1) {
     const point = path[index]
+    // A supplied guide cannot go stale: a refused sample would otherwise leave
+    // the running normal behind and make the next cast miss as well.
+    if (guides && guides[index]) guide = normalize3(guides[index])
     const hit = typeof project === 'function' ? project(point, guide) : null
     const position = hit && isFinitePoint(hit.position) ? asPoint(hit.position) : null
     const moved = position ? distance3(position, point) : Infinity
@@ -140,17 +151,19 @@ export function conformPath(points = [], project, {
       const normal = isFinitePoint(hit.normal) ? normalize3(hit.normal) : (guide || [0, 1, 0])
       outPoints.push(position)
       outNormals.push(normal)
-      guide = normal
+      resolved.push(true)
+      if (!guides) guide = normal
       if (moved > maxMoved) maxMoved = moved
       continue
     }
     unresolved += 1
     outPoints.push(point)
     outNormals.push(guide ? [...guide] : [0, 1, 0])
+    resolved.push(false)
   }
 
   backfillLeadingNormals(outNormals)
-  return { points: outPoints, normals: outNormals, maxMoved, unresolved }
+  return { points: outPoints, normals: outNormals, resolved, maxMoved, unresolved }
 }
 
 /** Leading samples projected before any normal was known inherit the first real one. */
@@ -180,26 +193,51 @@ export function smoothPathNormals(normals = [], passes = 1) {
   return current
 }
 
-/** Central-difference unit tangent at `index`. */
-export function pathTangent(points = [], index = 0) {
+/**
+ * Window over which a tangent is measured, in samples. A conformed path
+ * zigzags at mesh-triangle scale; a one-sample difference inherits that noise
+ * and makes the strip wobble, so average over roughly a centimetre of path.
+ */
+export const TANGENT_WINDOW_WORLD = 0.01
+
+export function tangentWindow(step = FINE_SAMPLE_STEP) {
+  return Math.max(1, Math.round(TANGENT_WINDOW_WORLD / Math.max(Number(step) || FINE_SAMPLE_STEP, 1e-5)))
+}
+
+/** Unit tangent at `index`, measured across `window` samples either side. */
+export function pathTangent(points = [], index = 0, window = 1) {
   if (points.length < 2) return [0, 1, 0]
   const at = Math.min(points.length - 1, Math.max(0, index))
-  const before = points[Math.max(0, at - 1)]
-  const after = points[Math.min(points.length - 1, at + 1)]
+  const reach = Math.max(1, Math.floor(Number(window) || 1))
+  const before = points[Math.max(0, at - reach)]
+  const after = points[Math.min(points.length - 1, at + reach)]
   const delta = [after[0] - before[0], after[1] - before[1], after[2] - before[2]]
   if (Math.hypot(...delta) < 1e-12) return [0, 1, 0]
   return normalize3(delta)
+}
+
+/** Consistently oriented, window-smoothed tangents along a path. */
+export function pathTangents(points = [], window = 1) {
+  const out = []
+  for (let index = 0; index < points.length; index += 1) {
+    let tangent = pathTangent(points, index, window)
+    const previous = out[out.length - 1]
+    if (previous && dot3(tangent, previous) < 0) tangent = [-tangent[0], -tangent[1], -tangent[2]]
+    out.push(tangent)
+  }
+  return out
 }
 
 /**
  * Unit side directions in the tangent plane. Consecutive frames are kept on
  * the same side so the strip cannot twist inside out at a sharp turn.
  */
-export function ribbonSideDirections(points = [], normals = []) {
+export function ribbonSideDirections(points = [], normals = [], window = 1) {
+  const tangents = pathTangents(points, window)
   const out = []
   for (let index = 0; index < points.length; index += 1) {
     const normal = normalize3(normals[index] || [0, 1, 0])
-    const tangent = pathTangent(points, index)
+    const tangent = tangents[index]
     let side = cross3(normal, tangent)
     if (Math.hypot(...side) < 1e-9) side = cross3(normal, [normal[1], normal[2], normal[0]])
     if (Math.hypot(...side) < 1e-9) side = [1, 0, 0]
@@ -219,41 +257,57 @@ export function ribbonSideDirections(points = [], normals = []) {
 }
 
 /**
- * Triangle-strip attributes. `position` is the on-skin centreline, `offset`
- * the signed tangent-plane direction the vertex shader widens along, and
- * `normal` the surface normal used for the silhouette fade.
+ * Triangle-strip attributes. `position` is the on-skin centreline and `normal`
+ * the surface normal, used both for the silhouette fade and the lift.
+ *
+ * The shader widens the strip across the view direction (`tangent` × view,
+ * signed by `sign`) so its screen width is stable; `offset` is the
+ * tangent-plane fallback for the stretch where the path runs at the camera.
+ * Widening across the view rather than inside the tangent plane keeps the
+ * strip from twisting into a sawtooth at a grazing angle, and the fade — not
+ * the orientation — is what stops it reaching past the silhouette.
  */
-export function buildRibbonAttributes(points = [], normals = []) {
+export function buildRibbonAttributes(points = [], normals = [], window = 1) {
   const count = points.length
   if (count < 2) {
     return {
       position: new Float32Array(0),
       offset: new Float32Array(0),
       normal: new Float32Array(0),
+      tangent: new Float32Array(0),
+      sign: new Float32Array(0),
       index: new Uint32Array(0),
       vertexCount: 0,
     }
   }
-  const sides = ribbonSideDirections(points, normals)
+  const tangents = pathTangents(points, window)
+  const sides = ribbonSideDirections(points, normals, window)
   const position = new Float32Array(count * 6)
   const offset = new Float32Array(count * 6)
   const normal = new Float32Array(count * 6)
+  const tangent = new Float32Array(count * 6)
+  const sign = new Float32Array(count * 2)
   for (let index = 0; index < count; index += 1) {
     const point = points[index]
     const surface = normalize3(normals[index] || [0, 1, 0])
     const side = sides[index]
+    const along = tangents[index]
     for (let lane = 0; lane < 2; lane += 1) {
       const base = (index * 2 + lane) * 3
-      const sign = lane === 0 ? -1 : 1
+      const laneSign = lane === 0 ? -1 : 1
       position[base] = point[0]
       position[base + 1] = point[1]
       position[base + 2] = point[2]
-      offset[base] = side[0] * sign
-      offset[base + 1] = side[1] * sign
-      offset[base + 2] = side[2] * sign
+      offset[base] = side[0] * laneSign
+      offset[base + 1] = side[1] * laneSign
+      offset[base + 2] = side[2] * laneSign
       normal[base] = surface[0]
       normal[base + 1] = surface[1]
       normal[base + 2] = surface[2]
+      tangent[base] = along[0]
+      tangent[base + 1] = along[1]
+      tangent[base + 2] = along[2]
+      sign[index * 2 + lane] = laneSign
     }
   }
   const index = new Uint32Array((count - 1) * 6)
@@ -267,7 +321,7 @@ export function buildRibbonAttributes(points = [], normals = []) {
     index[write + 4] = a + 3
     index[write + 5] = a + 2
   }
-  return { position, offset, normal, index, vertexCount: count * 2 }
+  return { position, offset, normal, tangent, sign, index, vertexCount: count * 2 }
 }
 
 /** World size of one pixel at `distance` (perspective) or in an ortho frustum. */
@@ -361,6 +415,8 @@ export function buildDiscAttributes(disc) {
       position: new Float32Array(0),
       offset: new Float32Array(0),
       normal: new Float32Array(0),
+      tangent: new Float32Array(0),
+      sign: new Float32Array(0),
       index: new Uint32Array(0),
       vertexCount: 0,
     }
@@ -393,6 +449,8 @@ export function buildDiscAttributes(disc) {
     position,
     offset: new Float32Array(vertexCount * 3),
     normal,
+    tangent: new Float32Array(vertexCount * 3),
+    sign: new Float32Array(vertexCount),
     index,
     vertexCount,
   }

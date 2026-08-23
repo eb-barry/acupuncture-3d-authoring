@@ -16,7 +16,9 @@ import {
   markerScreenScale,
   maxSurfaceDeviation,
   pathTangent,
+  pathTangents,
   perspectivePixelScale,
+  tangentWindow,
   ribbonRenderWidth,
   ribbonSideDirections,
   sampleStepForQuality,
@@ -49,8 +51,10 @@ function onSphere(angle, radius = SPHERE_RADIUS) {
 }
 
 describe('skin ribbon sampling', () => {
-  it('ships with no world-space lift and a curvature-justified fine step', () => {
-    expect(DEFAULT_SKIN_LIFT_MM).toBe(0)
+  it('ships with a sub-pixel lift and a curvature-justified fine step', () => {
+    // Enough to clear the chord sag, far below the offset it replaces.
+    expect(DEFAULT_SKIN_LIFT_MM).toBeGreaterThan(0)
+    expect(DEFAULT_SKIN_LIFT_MM).toBeLessThan(0.6)
     // Fingers are the tightest skin (radius ≈ 8 mm) and set the sampling bound.
     expect(curvatureSampleStep(0.008, SURFACE_TOLERANCE)).toBeGreaterThan(FINE_SAMPLE_STEP)
     expect(chordSagitta(FINE_SAMPLE_STEP, 0.008)).toBeLessThan(SURFACE_TOLERANCE)
@@ -146,12 +150,43 @@ describe('ribbon frame and geometry', () => {
     expect(tangent).toEqual([0, 1, 0])
   })
 
+  it('measures tangents over a window so mesh-scale zigzag cannot wobble the strip', () => {
+    expect(tangentWindow(FINE_SAMPLE_STEP)).toBe(5)
+    expect(tangentWindow(COARSE_SAMPLE_STEP)).toBe(1)
+    // A path along +Y with 1.5 mm lateral zigzag, as a conformed run picks up
+    // from the triangles it lands on: one-sample tangents swing sideways.
+    const lateral = [0.0015, -0.0015, 0]
+    const zigzag = []
+    for (let index = 0; index <= 20; index += 1) {
+      zigzag.push([lateral[index % 3], index * 0.002, 0])
+    }
+    const narrow = pathTangent(zigzag, 10, 1)
+    const wide = pathTangent(zigzag, 10, tangentWindow(FINE_SAMPLE_STEP))
+    expect(Math.abs(narrow[0])).toBeGreaterThan(0.3)
+    expect(Math.abs(wide[0])).toBeLessThan(0.1)
+    expect(wide[1]).toBeGreaterThan(0.99)
+  })
+
+  it('keeps consistently oriented tangents along the path', () => {
+    const tangents = pathTangents([[0, 0, 0], [0, 0.002, 0], [0, 0.004, 0], [0, 0.006, 0]], 1)
+    tangents.forEach((tangent, index) => {
+      if (index === 0) return
+      const previous = tangents[index - 1]
+      const agreement = tangent[0] * previous[0] + tangent[1] * previous[1] + tangent[2] * previous[2]
+      expect(agreement).toBeGreaterThan(0)
+    })
+  })
+
   it('builds a two-lane strip whose centreline is the on-skin path', () => {
     const points = [[0, 0, 0], [0, 0.01, 0], [0, 0.02, 0]]
     const normals = [[0, 0, 1], [0, 0, 1], [0, 0, 1]]
     const attributes = buildRibbonAttributes(points, normals)
     expect(attributes.vertexCount).toBe(6)
     expect(attributes.index.length).toBe(12)
+    // Lanes share a tangent and differ only in the side they widen toward.
+    expect([...attributes.tangent.slice(0, 3)]).toEqual([0, 1, 0])
+    expect([...attributes.tangent.slice(3, 6)]).toEqual([0, 1, 0])
+    expect([...attributes.sign.slice(0, 2)]).toEqual([-1, 1])
     // Both lanes carry the centreline; the shader widens along `offset`.
     expect([...attributes.position.slice(0, 3)]).toEqual([0, 0, 0])
     expect([...attributes.position.slice(3, 6)]).toEqual([0, 0, 0])
