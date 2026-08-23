@@ -15,6 +15,8 @@ import {
   isTeHelixPair,
   isTeTempleHandlePair,
   isSiXiaohaiJianzhenPair,
+  isSiXiaohaiJianzhenAxillaHollow,
+  isSiArmShoulderHandleOk,
   isSiArmShoulderHit,
   siArmShoulderOuterPoint,
   siArmShoulderWrapGuide,
@@ -255,5 +257,27 @@ describe('skin path wrapping', () => {
     expect(Math.abs(outer[0])).toBeGreaterThan(Math.abs(midChord[0]))
     expect(outer[2]).toBeLessThan(midChord[2])
     expect(isSiArmShoulderHit(midChord, xiaohai, jianzhen, 0.5)).toBe(false)
+  })
+
+  it('lets 小海–肩貞 locators leave the rest corridor without entering the axilla', () => {
+    const xiaohai = [0.32, 1.02, -0.04]
+    const jianzhen = [0.18, 1.32, -0.08]
+    const outer = siArmShoulderOuterPoint(xiaohai, jianzhen, 0.5)
+    const beside = [outer[0] + 0.05, outer[1], outer[2] - 0.07]
+    const innerPosterior = [0.16, 1.17, -0.10]
+    expect(isSiArmShoulderHandleOk(beside, xiaohai, jianzhen)).toBe(true)
+    expect(isSiArmShoulderHandleOk(outer, xiaohai, jianzhen)).toBe(true)
+    expect(isSiArmShoulderHandleOk(innerPosterior, xiaohai, jianzhen)).toBe(true)
+    expect(isSiArmShoulderHit(innerPosterior, xiaohai, jianzhen, 0.5)).toBe(false)
+    const midChord = [
+      (xiaohai[0] + jianzhen[0]) / 2,
+      (xiaohai[1] + jianzhen[1]) / 2,
+      (xiaohai[2] + jianzhen[2]) / 2,
+    ]
+    expect(isSiXiaohaiJianzhenAxillaHollow([0.06, 1.18, -0.04], xiaohai, jianzhen)).toBe(true)
+    expect(isSiArmShoulderHandleOk([0.06, 1.18, -0.04], xiaohai, jianzhen)).toBe(false)
+    expect(isSiArmShoulderHandleOk([-0.26, 1.16, -0.07], xiaohai, jianzhen)).toBe(false)
+    expect(isSiArmShoulderHandleOk([0.24, 1.16, 0.10], xiaohai, jianzhen)).toBe(false)
+    expect(isSiXiaohaiJianzhenAxillaHollow(midChord, xiaohai, jianzhen)).toBe(false)
   })
 })

@@ -38,6 +38,8 @@ import {
   isTeEarArcPair,
   isTeTempleHandlePair,
   isSiXiaohaiJianzhenPair,
+  isSiXiaohaiJianzhenAxillaHollow,
+  isSiArmShoulderHandleOk,
   isSiArmShoulderHit,
   siArmShoulderGuidePoints,
   siArmShoulderOuterPoint,
@@ -1122,7 +1124,19 @@ function handleSkinHit(event, drag) {
   const anchor = drag.anchor
   if (!rest?.length || !anchor) return null
   const sideX = restSideX(rest)
-  const accept = (hit) => hit && isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)
+  const route = state.meridians.find((item) => item.id === drag.routeId)
+  const pair = route && acupointPairs(route).find((item) =>
+    item.fromPointId === drag.fromPointId && item.toPointId === drag.toPointId)
+  const skipLimbGap = Boolean(pair && isSiXiaohaiJianzhenPair(
+    routeNodeCode(pair.fromNode),
+    routeNodeCode(pair.toNode),
+  ))
+  const accept = (hit) => hit && isProbeOnSameLimbSegment(
+    rest,
+    hit.position,
+    HANDLE_STRETCH_MAX_OFF_PATH,
+    { skipLimbGap },
+  )
   const direct = surfaceHit(event)
   if (accept(direct)) return direct
   const planePoint = cameraPlanePoint(event, new THREE.Vector3(...anchor.position))
@@ -2019,7 +2033,8 @@ function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
   const sanitized = ordered
     .map((record) => snapSiHandleToSkin(record, a, b, path))
     .filter(Boolean)
-  const samples = sanitized.length
+  const hasUserHandles = sanitized.length > 0
+  const samples = hasUserHandles
     ? catmullRomThrough(
       [a.position, ...sanitized.map((record) => record.position), b.position],
       16,
@@ -2028,7 +2043,11 @@ function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
   const points = []
   const previousRef = { current: null }
   const accept = (hit, t) => {
-    if (!hit || !isSiArmShoulderHit(hit.position, a.position, b.position, t)) return
+    if (!hit) return
+    const ok = hasUserHandles
+      ? isSiArmShoulderHandleOk(hit.position, a.position, b.position)
+      : isSiArmShoulderHit(hit.position, a.position, b.position, t)
+    if (!ok) return
     const lifted = new THREE.Vector3(...hit.position)
       .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
     appendSkinPoint(points, lifted, previousRef)
@@ -2039,12 +2058,30 @@ function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
     const outer = siArmShoulderOuterPoint(a.position, b.position, t)
     const sample = samples[index]
     const side = Math.sign(sideX) || 1
-    const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - 0.003
-    const tooAnterior = sample[2] > outer[2] + 0.006
-    const probe = (tooMedial || tooAnterior) ? outer : sample
+    let probe = sample
+    if (!hasUserHandles) {
+      const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - 0.003
+      const tooAnterior = sample[2] > outer[2] + 0.006
+      if (tooMedial || tooAnterior) probe = outer
+    }
     const guide = siArmShoulderWrapGuide(probe, side)
-    const hit = projectFromOutside(new THREE.Vector3(...probe), guide, 0.03)
-      || closestSkinHit(probe, { maxDistance: 0.04, sideX: side, guideNormal: guide })
+    let hit = projectFromOutside(new THREE.Vector3(...probe), guide, 0.03)
+      || closestSkinHit(probe, { maxDistance: hasUserHandles ? 0.22 : 0.04, sideX: side, guideNormal: guide })
+    if (hasUserHandles) {
+      hit = closestSkinHit(sample, { maxDistance: 0.22, sideX: side, guideNormal: guide })
+        || closestSkinHit(sample, { maxDistance: 0.38, sideX: side, guideNormal: guide })
+        || projectFromOutside(new THREE.Vector3(...sample), guide, 0.45)
+        || hit
+      if (hit && (
+        !isSiArmShoulderHandleOk(hit.position, a.position, b.position)
+        || isSiXiaohaiJianzhenAxillaHollow(hit.position, a.position, b.position)
+      )) {
+        const rescueGuide = siArmShoulderWrapGuide(outer, side)
+        const rescued = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, 0.03)
+          || closestSkinHit(outer, { maxDistance: 0.22, sideX: side, guideNormal: rescueGuide })
+        if (rescued) hit = rescued
+      }
+    }
     accept(hit, t)
   }
   accept({ position: b.position, normal: b.normal }, 1)
@@ -2053,27 +2090,34 @@ function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
 
 function snapSiHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   if (!placed?.position) return null
-  const sideX = (fromResolved.position[0] + toResolved.position[0]) / 2
+  const from = fromResolved.position
+  const to = toResolved.position
+  const sideX = (from[0] + to[0]) / 2
   const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
-  const guide = siArmShoulderWrapGuide(placed.position, sideX)
-  const outer = siArmShoulderOuterPoint(fromResolved.position, toResolved.position, t)
-  const tooMedial = Math.abs(placed.position[0]) < Math.abs(outer[0]) - 0.004
-  const probe = tooMedial || !isSiArmShoulderHit(placed.position, fromResolved.position, toResolved.position, t)
-    ? outer
-    : placed.position
-  const hit = projectFromOutside(new THREE.Vector3(...probe), guide, 0.03)
-    || closestSkinHit(probe, { maxDistance: 0.04, sideX, guideNormal: guide })
-  if (hit && isSiArmShoulderHit(hit.position, fromResolved.position, toResolved.position, t)) {
+  const guide = placed.normal || siArmShoulderWrapGuide(placed.position, sideX)
+  const hit = closestSkinHit(placed.position, {
+    maxDistance: 0.32,
+    sideX,
+    guideNormal: guide,
+  })
+    || closestSkinHit(placed.position, {
+      maxDistance: 0.5,
+      sideX,
+      guideNormal: guide,
+    })
+    || projectFromOutside(new THREE.Vector3(...placed.position), guide, 0.55)
+  if (hit && isSiArmShoulderHandleOk(hit.position, from, to)) {
     return { position: hit.position, normal: hit.normal }
   }
-  const fallback = rest.length >= 2
-    ? pointAtPolylineT(rest, clampHandleT(t))
-    : outer
-  const fbHit = closestSkinHit(fallback, { maxDistance: 0.035, sideX, guideNormal: guide })
-  if (fbHit && isSiArmShoulderHit(fbHit.position, fromResolved.position, toResolved.position, t)) {
-    return { position: fbHit.position, normal: fbHit.normal }
+  const outer = siArmShoulderOuterPoint(from, to, t)
+  const fallbackGuide = siArmShoulderWrapGuide(outer, sideX)
+  const fallback = closestSkinHit(outer, { maxDistance: 0.26, sideX, guideNormal: fallbackGuide })
+    || projectFromOutside(new THREE.Vector3(...outer), fallbackGuide, 0.4)
+  if (fallback && isSiArmShoulderHandleOk(fallback.position, from, to)) {
+    return { position: fallback.position, normal: fallback.normal }
   }
-  return { position: [...fallback], normal: [...(placed.normal || guide)] }
+  if (fallback) return { position: fallback.position, normal: fallback.normal }
+  return { position: [...outer], normal: [...(placed.normal || fallbackGuide)] }
 }
 
 function skinSegmentPoints(a, b, {
@@ -3387,7 +3431,10 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
   )
   const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
   const index = Math.min(Math.max(0, handleIndex), records.length - 1)
-  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH)) return state
+  const siPair = isSiXiaohaiJianzhenPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
+  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH, { skipLimbGap: siPair })) {
+    return state
+  }
   const tooClose = records.some((record, cursor) => {
     if (cursor === index) return false
     const gap = Math.hypot(
@@ -3398,7 +3445,7 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
     return gap < 0.01
   })
   if (tooClose) return state
-  const placed = isSiXiaohaiJianzhenPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
+  const placed = siPair
     ? snapSiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
     : hit
   records[index] = {
