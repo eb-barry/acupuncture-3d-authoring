@@ -430,6 +430,25 @@ body.app-view-mode #delete-selection {
   flex: 0 0 12px;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, .12);
 }
+.skin-fit-field {
+  display: grid;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #101816;
+}
+.skin-fit-field > .dual-field-label {
+  color: #c5d2cd;
+  font-size: 14px;
+}
+.skin-fit-field .checkbox-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
 .style-settings .dual-field {
   gap: 8px;
 }
