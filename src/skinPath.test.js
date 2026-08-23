@@ -28,7 +28,10 @@ import {
   isShoulderAxillaWrap,
   pathFollowsFacingChord,
   pickPairAlongPolyline,
+  isDuBackWrapPair,
+  posteriorWrapGuide,
   shouldFrontWrap,
+  shouldPosteriorWrap,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -108,6 +111,42 @@ describe('skin path wrapping', () => {
     expect(isHitOnWrapSide([0.13, 1.30, 0.07], jianjing, yuanye)).toBe(true)
     expect(isHitOnWrapSide([0.13, 1.30, -0.09], jianjing, yuanye)).toBe(false)
     expect(isHitOnWrapSide([-0.13, 1.30, 0.07], jianjing, yuanye)).toBe(false)
+  })
+
+  it('keeps 督脈 back spans on the posterior skin, not through the torso', () => {
+    expect(isDuBackWrapPair('GV15', 'GV14')).toBe(true)
+    expect(isDuBackWrapPair('GV13', 'GV12')).toBe(true)
+    expect(isDuBackWrapPair('GV11', 'GV10')).toBe(true)
+    expect(isDuBackWrapPair('GV3', 'GV2')).toBe(true)
+    expect(isDuBackWrapPair('CV4', 'CV3')).toBe(false)
+    expect(isDuBackWrapPair('BL12', 'BL13')).toBe(false)
+    const yamen = [0.008, 1.48, -0.05]
+    const dazhui = [-0.006, 1.38, -0.07]
+    const taodao = [0.01, 1.34, -0.08]
+    const shenzhu = [-0.01, 1.26, -0.09]
+    const shendao = [0.007, 1.20, -0.09]
+    const lingtai = [-0.005, 1.16, -0.09]
+    const yaoyangguan = [0.006, 0.98, -0.08]
+    const yaoshu = [-0.007, 0.90, -0.07]
+    for (const [from, to] of [
+      [yamen, dazhui],
+      [taodao, shenzhu],
+      [shendao, lingtai],
+      [yaoyangguan, yaoshu],
+    ]) {
+      expect(shouldPosteriorWrap(from, to)).toBe(true)
+      expect(shouldFrontWrap(from, to)).toBe(false)
+      const mid = [
+        (from[0] + to[0]) / 2,
+        (from[1] + to[1]) / 2,
+        Math.min(from[2], to[2]) - 0.02,
+      ]
+      expect(isHitOnWrapSide(mid, from, to)).toBe(true)
+      expect(isHitOnWrapSide([0, (from[1] + to[1]) / 2, 0.08], from, to)).toBe(false)
+    }
+    const guide = posteriorWrapGuide([0.01, 1.22, -0.04])
+    expect(guide[2]).toBeLessThan(-0.9)
+    expect(Math.abs(guide[0])).toBeLessThan(0.2)
   })
 
   it('wraps 少府→少衝 around the pinky tip instead of cutting through the finger', () => {

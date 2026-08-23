@@ -93,3 +93,14 @@ export function isOmittedSurfaceSpan(fromCode, toCode) {
   return OMITTED_SURFACE_SPANS.some(([left, right]) =>
     (a === left && b === right) || (a === right && b === left))
 }
+
+/** 任脈／督脈 stay connected even when adjacent clicks straddle x=0. */
+export function isRenDuCodePair(fromCode = '', toCode = '') {
+  const prefix = (code) => {
+    const match = /^([A-Z]+)\d+$/.exec(String(code || ''))
+    return match ? match[1] : ''
+  }
+  const a = prefix(fromCode)
+  const b = prefix(toCode)
+  return (a === 'CV' || a === 'GV') && (b === 'CV' || b === 'GV')
+}

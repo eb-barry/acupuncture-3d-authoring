@@ -9,7 +9,7 @@ import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, getTriangleHitPointInfo } from 'three-mesh-bvh'
-import { MERIDIANS, POINTS, POINT_BY_CODE, isOmittedSurfaceSpan, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
 import {
   BODY_MODELS,
   emptyDocument,
@@ -37,10 +37,12 @@ import {
   isOnDigitSkin,
   isTeEarArcPair,
   isTeTempleHandlePair,
+  isDuBackWrapPair,
   isSiXiaohaiJianzhenPair,
   isSiXiaohaiJianzhenAxillaHollow,
   isSiArmShoulderHandleOk,
   isSiArmShoulderHit,
+  posteriorWrapGuide,
   siArmShoulderGuidePoints,
   siArmShoulderOuterPoint,
   siArmShoulderWrapGuide,
@@ -55,6 +57,7 @@ import {
   pickPairAlongPolyline,
   pruneBacktracking,
   shouldFrontWrap,
+  shouldPosteriorWrap,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -1057,6 +1060,7 @@ function closestSkinHit(position, {
   maxDistance = HANDLE_SKIN_SNAP_RADIUS,
   sideX = null,
   guideNormal = null,
+  preferPosterior = false,
 } = {}) {
   if (!modelMeshes.length || !position) return null
   const target = new THREE.Vector3(...position)
@@ -1104,8 +1108,13 @@ function closestSkinHit(position, {
   }
   const pool = sameSide.length ? sameSide : any
   if (!pool.length) return null
-  pool.sort((a, b) => a.distance - b.distance)
-  return pool[0]
+  const chosen = preferPosterior
+    ? (pool.filter((hit) => hit.position[2] <= 0.02).length
+      ? pool.filter((hit) => hit.position[2] <= 0.02)
+      : pool)
+    : pool
+  chosen.sort((a, b) => a.distance - b.distance)
+  return chosen[0]
 }
 
 function projectHandleOnSkin(planePoint, guideNormal, radius, sideX = null) {
@@ -1514,6 +1523,16 @@ function chordDivesThroughSkin(a, b) {
 function sampleWrapGuide(a, b, chord, t) {
   const slerp = slerpUnitVectors(a.normal, b.normal, t)
   const dropY = Math.abs(a.position[1] - b.position[1])
+  if (shouldPosteriorWrap(a.position, b.position)) {
+    const wrap = posteriorWrapGuide(toArray(chord))
+    const mixed = [
+      slerp[0] * 0.25 + wrap[0] * 0.75,
+      slerp[1] * 0.25 + wrap[1] * 0.75,
+      slerp[2] * 0.25 + wrap[2] * 0.75,
+    ]
+    const length = Math.hypot(...mixed) || 1
+    return mixed.map((value) => value / length)
+  }
   const wrap = outwardWrapGuide(toArray(chord), (a.position[0] + b.position[0]) / 2, { dropY })
   if (dropY <= 0.1) return slerp
   const mixed = [
@@ -1525,9 +1544,14 @@ function sampleWrapGuide(a, b, chord, t) {
   return mixed.map((value) => value / length)
 }
 
-function wrapProbeGuides(guide, sideX, frontBias) {
+function wrapProbeGuides(guide, sideX, frontBias, backBias = false) {
   const lateral = Number.isFinite(sideX) && Math.abs(sideX) > 1e-6 ? Math.sign(sideX) : 1
   const guides = [guide]
+  if (backBias) {
+    guides.push([0, 0.08, -1])
+    guides.push(normalizeGuide([guide[0] * 0.25, 0.1, -1]))
+    return guides
+  }
   if (frontBias) {
     guides.push([0, 0, 1])
     guides.push(normalizeGuide([guide[0], Math.max(guide[1], 0.15), 1]))
@@ -1554,8 +1578,9 @@ function acceptWrapHit(hit, from, to, previous) {
 
 function hitFromWrapProbe(chord, guide, sideX, from, to, previous = null) {
   const frontBias = shouldFrontWrap(from, to)
-  const standoffs = frontBias ? [0.1, 0.16, 0.24, 0.34] : [0.14, 0.22]
-  for (const nextGuide of wrapProbeGuides(guide, sideX, frontBias)) {
+  const backBias = shouldPosteriorWrap(from, to)
+  const standoffs = frontBias ? [0.1, 0.16, 0.24, 0.34] : backBias ? [0.08, 0.14, 0.22] : [0.14, 0.22]
+  for (const nextGuide of wrapProbeGuides(guide, sideX, frontBias, backBias)) {
     for (const standoff of standoffs) {
       const pushed = chord.clone().addScaledVector(new THREE.Vector3(...nextGuide), standoff)
       const hit = projectFromOutside(pushed, nextGuide, standoff * 1.8)
@@ -1563,6 +1588,7 @@ function hitFromWrapProbe(chord, guide, sideX, from, to, previous = null) {
           maxDistance: 0.28,
           sideX,
           guideNormal: nextGuide,
+          preferPosterior: backBias,
         })
       if (acceptWrapHit(hit, from, to, previous)) return hit
     }
@@ -1605,7 +1631,11 @@ function keepOuterSkinPolyline(points, sideX, from, to) {
   const out = [points[0]]
   for (let index = 1; index < points.length - 1; index += 1) {
     const point = points[index]
-    const hit = closestSkinHit(toArray(point), { maxDistance: 0.14, sideX })
+    const hit = closestSkinHit(toArray(point), {
+      maxDistance: 0.14,
+      sideX,
+      preferPosterior: shouldPosteriorWrap(from, to),
+    })
     if (!hit || !isHitOnWrapSide(hit.position, from, to)) continue
     const lifted = new THREE.Vector3(...hit.position)
       .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
@@ -1622,7 +1652,9 @@ function wrapWaypointBetween(a, b, sideX, wrapFrom, wrapTo) {
   const from = wrapFrom || toArray(a)
   const to = wrapTo || toArray(b)
   const dropY = Math.abs(from[1] - to[1])
-  const guide = outwardWrapGuide(toArray(mid), sideX, { dropY })
+  const guide = shouldPosteriorWrap(from, to)
+    ? posteriorWrapGuide(toArray(mid))
+    : outwardWrapGuide(toArray(mid), sideX, { dropY })
   const hit = hitFromWrapProbe(mid, guide, sideX, from, to, a)
   if (!hit) return null
   return new THREE.Vector3(...hit.position)
@@ -1641,7 +1673,11 @@ function fillClippedSpans(points, sideX, wrapFrom, wrapTo, depth = 0) {
     const mid = a.clone().lerp(b, 0.5)
     const span = a.distanceTo(b)
     const snap = span > 0.014
-      ? closestSkinHit(toArray(mid), { maxDistance: 0.36, sideX })
+      ? closestSkinHit(toArray(mid), {
+        maxDistance: 0.36,
+        sideX,
+        preferPosterior: shouldPosteriorWrap(from, to),
+      })
       : null
     const clipped = snap && isPointBehindSurface(toArray(mid), snap.position, snap.normal)
     if (clipped) {
@@ -2136,6 +2172,7 @@ function skinSegmentPoints(a, b, {
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
+  const duBack = isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)
   if (siArmShoulder) {
     const wrapped = snapSiArmShoulderToSkin(a, b)
     if (wrapped?.length >= 3) return wrapped
@@ -2170,6 +2207,7 @@ function skinSegmentPoints(a, b, {
   }
   const wrapFirst = !siArmShoulder && !earArc && !teTemple && !facingLimb && !digitTip && (
     preferWrap
+    || duBack
     || isShoulderAxillaWrap(a.position, b.position)
     || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
   )
@@ -2177,14 +2215,14 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !siArmShoulder && !earArc && !teTemple && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
+  if (allowGeodesic && !duBack && !siArmShoulder && !earArc && !teTemple && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesicIsStable(geodesic)) return geodesic
   }
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !earArc && !teTemple && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !duBack && !earArc && !teTemple && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -2386,7 +2424,10 @@ function routeNodeCode(node) {
 }
 
 function isOmittedSurfacePair(pair) {
-  if (isOmittedSurfaceSpan(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))) return true
+  const fromCode = routeNodeCode(pair.fromNode)
+  const toCode = routeNodeCode(pair.toNode)
+  if (isOmittedSurfaceSpan(fromCode, toCode)) return true
+  if (isRenDuCodePair(fromCode, toCode)) return false
   return !sameSpatialSide(resolvedNode(pair.fromNode), resolvedNode(pair.toNode))
 }
 
@@ -2418,7 +2459,10 @@ function drawPairSkinSegment(route, pair, override = null) {
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   return pairDrawnSkinPoints(a, b, records, rest, {
     preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder,
-    preferWrap: !teTemple && !earArc && !siArmShoulder && isShoulderAxillaWrap(a.position, b.position),
+    preferWrap: !teTemple && !earArc && !siArmShoulder && (
+      (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position))
+      || isShoulderAxillaWrap(a.position, b.position)
+    ),
     earArc,
     teTemple,
     siArmShoulder,
@@ -2463,6 +2507,11 @@ function restPathArrays(fromNode, toNode) {
       if (isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.55 })) return false
       const mid = cached[Math.floor(cached.length / 2)]
       return Boolean(mid) && isSiArmShoulderHit(mid, a.position, b.position)
+    }
+    if (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)) {
+      const mid = cached[Math.floor(cached.length / 2)]
+      const ceiling = Math.max(a.position[2], b.position[2]) + 0.04
+      return Boolean(mid) && mid[2] <= ceiling
     }
     if (!isShoulderAxillaWrap(a.position, b.position)) return true
     return !isDisorderedPolyline(cached, [a.position, b.position])

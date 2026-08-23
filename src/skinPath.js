@@ -128,6 +128,31 @@ export function outwardWrapGuide(chordPoint = [0, 0, 0], sideX = 0, { dropY = 0 
   return normalize([gx, 0, gz])
 }
 
+/** 督脈 pairs on the posterior midline (啞門→大椎, 陶道→身柱, …). */
+export function isDuBackWrapPair(fromCode = '', toCode = '') {
+  return /^GV\d+$/.test(String(fromCode || '')) && /^GV\d+$/.test(String(toCode || ''))
+}
+
+/** Near-midline points that already sit on the back of the torso / neck. */
+export function shouldPosteriorWrap(from = [0, 0, 0], to = [0, 0, 0]) {
+  const ax = Number(from[0]) || 0
+  const az = Number(from[2]) || 0
+  const bx = Number(to[0]) || 0
+  const bz = Number(to[2]) || 0
+  const meanX = (ax + bx) / 2
+  const meanZ = (az + bz) / 2
+  const maxZ = Math.max(az, bz)
+  if (Math.abs(meanX) > 0.08) return false
+  if (maxZ > 0.025) return false
+  return meanZ < 0.008
+}
+
+/** Push a through-spine chord out onto the back skin (−Z). */
+export function posteriorWrapGuide(chordPoint = [0, 0, 0]) {
+  const x = Number(chordPoint[0]) || 0
+  return normalize([x * 0.2, 0.08, -1])
+}
+
 /** 肩井→淵腋 and front-chest locators should wrap on the anterior skin. */
 export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   const dropY = Math.abs((Number(from[1]) || 0) - (Number(to[1]) || 0))
@@ -672,6 +697,12 @@ export function isHitOnWrapSide(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0
   if (!Number.isFinite(hitX) || !Number.isFinite(hitZ)) return false
   const side = Math.sign(((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2) || Math.sign(hitX) || 1
   if (side * hitX < 0 && Math.abs(hitX) > 0.04) return false
+  if (shouldPosteriorWrap(from, to)) {
+    const maxZ = Math.max(Number(from[2]) || 0, Number(to[2]) || 0)
+    const meanZ = ((Number(from[2]) || 0) + (Number(to[2]) || 0)) / 2
+    const ceiling = Math.max(maxZ, meanZ) + 0.035
+    return hitZ <= ceiling
+  }
   if (!shouldFrontWrap(from, to)) return true
   const minZ = Math.min(Number(from[2]) || 0, Number(to[2]) || 0)
   const meanZ = ((Number(from[2]) || 0) + (Number(to[2]) || 0)) / 2
