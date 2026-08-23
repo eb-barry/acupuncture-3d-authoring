@@ -363,6 +363,19 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(gbHead, [-0.12, 1.57, 0.02], 0.36)).toBe(false)
   })
 
+  it('lets 小海–肩貞 locators stretch beside the arm rest path', () => {
+    const rest = [
+      [0.32, 1.02, -0.04],
+      [0.30, 1.16, -0.09],
+      [0.18, 1.32, -0.08],
+    ]
+    const mid = rest[1]
+    const beside = [mid[0] + 0.22, mid[1], mid[2] - 0.18]
+    expect(isProbeOnSameLimbSegment(rest, beside, 0.36)).toBe(false)
+    expect(isProbeOnSameLimbSegment(rest, beside, 0.36, { skipLimbGap: true })).toBe(true)
+    expect(isProbeOnSameLimbSegment(rest, [-0.22, 1.16, -0.09], 0.36, { skipLimbGap: true })).toBe(false)
+  })
+
   it('lets 肩井–淵腋 locators move onto the front of the chest', () => {
     const shoulder = [[0.12, 1.42, -0.02], [0.15, 1.18, 0.01]]
     const frontChest = [0.11, 1.28, 0.08]

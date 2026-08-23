@@ -499,6 +499,42 @@ export function siArmShoulderAbsXFloor(from = [0, 0, 0], to = [0, 0, 0], t = 0.5
   return Math.max(inner + 0.02, eased - 0.01)
 }
 
+/**
+ * Deep axillary hollow / anterior chest — not merely off the rest corridor.
+ * Locators may sit beside the default 小海–肩貞 path; only this is rejected.
+ */
+export function isSiXiaohaiJianzhenAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const y0 = Math.min(a[1], b[1])
+  const y1 = Math.max(a[1], b[1])
+  const midSpan = p[1] > y0 + 0.035 && p[1] < y1 - 0.035
+  const minAbsX = Math.min(Math.abs(a[0]), Math.abs(b[0]))
+  const zBack = Math.min(a[2], b[2])
+  const zFront = Math.max(a[2], b[2])
+  const deepMedial = Math.abs(p[0]) < Math.max(0.10, minAbsX - 0.08)
+  const throughAxilla = midSpan && deepMedial && p[2] > zBack + 0.02
+  const onChest = p[2] > zFront + 0.07
+  return throughAxilla || onChest
+}
+
+/**
+ * User locators may leave the posterior-lateral corridor to reshape the span.
+ * Only the opposite side, a y jump, or the axillary hollow / chest is rejected.
+ */
+export function isSiArmShoulderHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  if (p[0] * side < 0 && Math.abs(p[0]) > 0.03) return false
+  const yMin = Math.min(a[1], b[1]) - 0.10
+  const yMax = Math.max(a[1], b[1]) + 0.10
+  if (p[1] < yMin || p[1] > yMax) return false
+  return !isSiXiaohaiJianzhenAxillaHollow(p, a, b)
+}
+
 /** Reject samples that fell into the armpit crease or jumped onto the chest. */
 export function isSiArmShoulderHit(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = null) {
   const p = asPathPoint(point)

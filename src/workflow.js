@@ -473,7 +473,12 @@ export function isCloserToMirroredPolyline(points = [], probe = [0, 0, 0]) {
 }
 
 /** Allow sideways stretch on the same limb; reject the opposite leg/torso. */
-export function isProbeOnSameLimbSegment(rest = [], probe = [0, 0, 0], maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH) {
+export function isProbeOnSameLimbSegment(
+  rest = [],
+  probe = [0, 0, 0],
+  maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH,
+  options = {},
+) {
   if (!rest.length || !probe) return false
   const ys = rest.map((point) => point[1])
   const yMin = Math.min(...ys) - 0.22
@@ -488,6 +493,8 @@ export function isProbeOnSameLimbSegment(rest = [], probe = [0, 0, 0], maxOffPat
   if (Math.abs(restX) > 0.035 && restX * probeX < 0) return false
   // Near the groin the other thigh is close; don't collapse into the inter-leg gap.
   // Skip that cap on the head/torso so temple locators can sit on skin.
+  // 小海–肩貞 also skips it so locators can leave the arm rest path sideways.
+  if (options?.skipLimbGap) return true
   return off <= limbGapMaxOffPath(restX, maxOffPath)
 }
 
