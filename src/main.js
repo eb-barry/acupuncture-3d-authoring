@@ -6,7 +6,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, getTriangleHitPointInfo } from 'three-mesh-bvh'
-import { MERIDIANS, POINTS, POINT_BY_CODE, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, pointsForMeridian } from './catalog.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, acupointMarkerColor, pointsForMeridian } from './catalog.js'
 import {
   BODY_MODELS,
   emptyDocument,
@@ -154,6 +154,7 @@ const PALETTE = [
   ['#ef4444', '紅色'],
   ['#3b82f6', '藍色'],
   ['#22c55e', '綠色'],
+  ['#111111', '黑色'],
 ]
 const colorOptions = (selected) => PALETTE
   .map(([value, name]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${name}</option>`)
@@ -237,7 +238,7 @@ $('#app').innerHTML = `
             <li><i style="background:#3b82f6"></i>任督二脈 · 藍 · 線寬 3px</li>
             <li><i style="background:#22c55e"></i>陰經 · 綠 · 線寬 3px</li>
             <li><i style="background:#ef4444"></i>陽經 · 紅 · 線寬 3px</li>
-            <li><i style="background:#ef4444"></i>穴位直徑 · 固定 10px</li>
+            <li><i style="background:#111111"></i>陽經穴位 · 黑 · 直徑 10px</li>
           </ul>
         </div>
         <label>模型表面<select name="surfaceFinish">
@@ -291,7 +292,7 @@ $('#app').innerHTML = `
             <input name="modelZoomInput" type="number" min="0.25" max="20" step="0.01" value="1" inputmode="decimal" title="可直接輸入放大倍數">
           </div>
         </label>
-        <p class="form-help">經脈與穴位貼合皮膚繪製：線寬與圓點以實際毫米計，離皮位移預設 0，旋轉縮放都不會浮起。經脈顏色：任督藍、陰經綠、陽經紅。編輯模式可改穴位顏色；檢視模式為唯讀。貼皮渲染與格線只影響畫面，不寫入 JSON。</p>
+        <p class="form-help">經脈與穴位貼合皮膚繪製：線寬與圓點以實際毫米計，離皮位移預設 0，旋轉縮放都不會浮起。經脈顏色：任督藍、陰經綠、陽經紅；陽經穴位固定為黑，其餘穴位可改顏色。檢視模式為唯讀。貼皮渲染與格線只影響畫面，不寫入 JSON。</p>
       </form>
     </section>
   </aside>
@@ -3286,7 +3287,7 @@ function createGizmoMaterial(color, { selected = false } = {}) {
 }
 
 function createAcupointDot(point, { selected = false } = {}) {
-  const material = createSkinDecalMaterial(point.color, {
+  const material = createSkinDecalMaterial(acupointMarkerColor(point.meridianId, point.color), {
     opacity: selected ? 1 : 0.92,
     widthWorld: 0,
     minPixels: 0,
@@ -3698,7 +3699,7 @@ function renderObjects() {
         const selectedHere = selected?.type === 'acupoint'
           && group.some((item) => item.id === selected.id || (selected.pairId && item.pairId === selected.pairId))
         return `<button data-type="acupoint" data-id="${primary.id}" class="${selectedHere ? 'selected' : ''}">
-          <i class="point-dot" style="background:${primary.color}"></i>
+          <i class="point-dot" style="background:${acupointMarkerColor(primary.meridianId, primary.color)}"></i>
           <span><b>${escapeHtml(catalog.code)} · ${escapeHtml(catalog.name)}</b><small>${sides}</small></span>
         </button>`
       })
@@ -3734,9 +3735,13 @@ function syncStyleSettings() {
   const form = $('#style-settings')
   if (!form) return
   let markerColor = state.settings.markerColor
+  let yangPoint = false
   if (selected?.type === 'acupoint') {
     const point = state.acupoints.find((entry) => entry.id === selected.id)
-    if (point) markerColor = point.color
+    if (point) {
+      markerColor = acupointMarkerColor(point.meridianId, point.color)
+      yangPoint = meridianById(point.meridianId)?.group === 'yang'
+    }
   }
   form.markerColor.innerHTML = colorOptions(markerColor)
   if (form.surfaceFinish) form.surfaceFinish.value = surfaceFinish
@@ -3757,9 +3762,9 @@ function syncStyleSettings() {
     field.dataset.disabled = gridEnabled ? 'false' : 'true'
   })
   form.querySelectorAll('.doc-style-field').forEach((field) => {
-    field.dataset.disabled = appMode === 'edit' ? 'false' : 'true'
+    field.dataset.disabled = appMode === 'edit' && !yangPoint ? 'false' : 'true'
   })
-  if (form.markerColor) form.markerColor.disabled = appMode !== 'edit'
+  if (form.markerColor) form.markerColor.disabled = appMode !== 'edit' || yangPoint
   syncZoomUI()
 }
 
@@ -3778,7 +3783,9 @@ function applyStyleSettings(data) {
     if (!current) return
     const acupoints = state.acupoints.map((item) => {
       const matches = item.id === current.id || (current.pairId && item.pairId === current.pairId)
-      return matches ? { ...item, color: markerColor, size: FIXED_MARKER_SIZE } : item
+      return matches
+        ? { ...item, color: acupointMarkerColor(item.meridianId, markerColor), size: FIXED_MARKER_SIZE }
+        : item
     })
     commit({ ...state, settings, acupoints }, '穴位顏色已套用至左右配對')
     return
@@ -3914,6 +3921,7 @@ function normalizeFixedStyles(documentState) {
   const acupoints = (documentState.acupoints || []).map((point) => ({
     ...normalizePlacedPointSide(point),
     size: FIXED_MARKER_SIZE,
+    color: acupointMarkerColor(point.meridianId, point.color),
   }))
   const meridians = repairExistingMeridianRoutes(
     (documentState.meridians || []).map((route) => ({
@@ -3946,7 +3954,7 @@ function makePoint(catalog, side, pairId, hit) {
     meridianName: catalog.meridianName,
     sequence: catalog.sequence,
     side,
-    color: state.settings.markerColor,
+    color: acupointMarkerColor(catalog.meridianId, state.settings.markerColor),
     size: FIXED_MARKER_SIZE,
     position: hit.position,
     normal: hit.normal,

@@ -51,7 +51,8 @@ const vector = {
   maxItems: 3,
 }
 
-const palette = { enum: ['#ef4444', '#3b82f6', '#22c55e'] }
+const meridianPalette = { enum: ['#ef4444', '#3b82f6', '#22c55e'] }
+const acupointPalette = { enum: ['#ef4444', '#3b82f6', '#22c55e', '#111111'] }
 
 export const documentSchema = {
   type: 'object',
@@ -76,8 +77,8 @@ export const documentSchema = {
       required: ['markerSize', 'markerColor', 'lineColor', 'lineWidth'],
       properties: {
         markerSize: { type: 'integer', minimum: 5, maximum: 30 },
-        markerColor: palette,
-        lineColor: palette,
+        markerColor: acupointPalette,
+        lineColor: meridianPalette,
         lineWidth: { type: 'integer', minimum: 1, maximum: 10 },
       },
     },
@@ -92,7 +93,7 @@ export const documentSchema = {
           pairId: { type: ['string', 'null'] },
           meridianId: { type: 'string', minLength: 2 },
           name: { type: 'string', minLength: 1 },
-          color: palette,
+          color: meridianPalette,
           width: { type: 'integer', minimum: 1, maximum: 10 },
           side: { enum: ['left', 'right', 'midline'] },
           nodes: {
@@ -132,7 +133,7 @@ export const documentSchema = {
           meridianName: { type: 'string', minLength: 1 },
           sequence: { type: 'integer', minimum: 1 },
           side: { enum: ['left', 'right', 'midline'] },
-          color: palette,
+          color: acupointPalette,
           size: { type: 'integer', minimum: 5, maximum: 30 },
           position: vector,
           normal: vector,

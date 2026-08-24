@@ -46,6 +46,43 @@ describe('acupuncture document schema', () => {
     expect(validateDocument(document).valid).toBe(true)
   })
 
+  it('accepts black acupoint color for yang meridians', () => {
+    const document = {
+      ...emptyDocument(),
+      acupoints: [{
+        id: 'p1',
+        pairId: null,
+        name: '商陽',
+        code: 'LI1',
+        meridianId: 'LI',
+        meridianName: '手陽明大腸經',
+        sequence: 1,
+        side: 'left',
+        color: '#111111',
+        size: 10,
+        position: [0, 1, 0],
+        normal: [0, 0, 1],
+      }],
+    }
+    expect(validateDocument(document).valid).toBe(true)
+    expect(validateDocument({
+      ...document,
+      meridians: [{
+        id: 'm1',
+        pairId: null,
+        meridianId: 'LI',
+        name: '手陽明大腸經',
+        color: '#111111',
+        width: 3,
+        side: 'left',
+        nodes: [
+          { type: 'acupoint', pointId: 'p1', position: [0, 1, 0], normal: [0, 0, 1] },
+          { type: 'control', pointId: null, position: [0, 2, 0], normal: [0, 0, 1] },
+        ],
+      }],
+    }).valid).toBe(false)
+  })
+
   it('reports malformed and invalid JSON', () => {
     expect(parseDocument('{broken').valid).toBe(false)
     const result = validateDocument({ ...emptyDocument(), format: 'unknown' })
