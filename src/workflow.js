@@ -58,7 +58,9 @@ export function locatorOnPairLimb(from, to, locator, rest = []) {
   const locPos = locator?.position
   if (!Array.isArray(locPos) || locPos.length < 3) return false
   if (!sameSpatialSide(from, locator) || !sameSpatialSide(to, locator)) return false
-  if (rest.length >= 2 && isCloserToMirroredPolyline(rest, locPos)) return false
+  if (rest.length >= 2 && restPathUsesLimbMirrorGuard(rest) && isCloserToMirroredPolyline(rest, locPos)) {
+    return false
+  }
   return true
 }
 
@@ -483,9 +485,24 @@ export const HANDLE_SKIN_SNAP_RADIUS = 0.4
  * dragging onto the chest (肩井→淵腋) or temple from a through-body chord.
  */
 export const LIMB_GAP_MIN_ABS_X = 0.16
+/** World gap below which two locators are treated as overlapping on commit. */
+export const HANDLE_COMMIT_MIN_GAP = 0.01
+/** Ear/temple locators sit much closer than limb locators. */
+export const TE_HEAD_HANDLE_MIN_GAP = 0.002
 /** @deprecated use HANDLE_STRETCH_MAX_OFF_PATH */
 export const HANDLE_DRAG_MAX_OFF_PATH = HANDLE_STRETCH_MAX_OFF_PATH
 export const HANDLE_PROJECT_RADIUS = HANDLE_STRETCH_PROJECT_RADIUS
+
+/**
+ * Opposite-limb mirroring is for arms/legs. Head rest paths sit near x=0,
+ * so the mirrored ear/temple is close enough to steal a same-side locator.
+ */
+export function restPathUsesLimbMirrorGuard(rest = []) {
+  if (!Array.isArray(rest) || rest.length < 2) return false
+  let sum = 0
+  for (const point of rest) sum += Math.abs(Number(point?.[0]) || 0)
+  return sum / rest.length >= LIMB_GAP_MIN_ABS_X
+}
 
 /** How far a probe may leave the rest path on this segment. */
 export function limbGapMaxOffPath(restX, maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH) {
@@ -515,7 +532,7 @@ export function isProbeOnSameLimbSegment(
   const yMin = Math.min(...ys) - 0.22
   const yMax = Math.max(...ys) + 0.22
   if (probe[1] < yMin || probe[1] > yMax) return false
-  if (isCloserToMirroredPolyline(rest, probe)) return false
+  if (restPathUsesLimbMirrorGuard(rest) && isCloserToMirroredPolyline(rest, probe)) return false
   const closest = pointAtPolylineT(rest, closestTOnPolyline(rest, probe))
   const off = dist3(probe, closest)
   if (off > maxOffPath) return false

@@ -576,6 +576,14 @@ export function isSiXiaohaiJianzhenPair(fromCode = '', toCode = '') {
   return codes.has('SI8') && codes.has('SI9')
 }
 
+/**
+ * Locators on these pairs ARE the path. Do not re-anchor them to the rest
+ * polyline or drop them with the opposite-limb filter after mouse-up.
+ */
+export function pairKeepsOffPathLocators(fromCode = '', toCode = '') {
+  return isSiXiaohaiJianzhenPair(fromCode, toCode) || isTeHeadPair(fromCode, toCode)
+}
+
 /** Stay on the back of the arm/shoulder — not into the axilla or chest. */
 export function siArmShoulderWrapGuide(chordPoint = [0, 0, 0], sideX = 0) {
   const side = Math.sign(Number(sideX) || Number(chordPoint[0]) || 1) || 1

@@ -30,6 +30,7 @@ import {
   pointAtPolylineT,
   polylineArcLength,
   locatorSpans,
+  restPathUsesLimbMirrorGuard,
   polylineSlice,
   polylineTangent,
   primaryBendStyle,
@@ -209,6 +210,23 @@ describe('meridian authoring workflow', () => {
       .toEqual(rest)
   })
 
+  it('keeps 三焦經 ear locators that leave the default helix rest path', () => {
+    const from = { position: [0.075, 1.642, -0.052] }
+    const to = { position: [0.074, 1.668, -0.038] }
+    const rest = [from.position, [0.0745, 1.655, -0.045], to.position]
+    const pulled = { type: 'control', style: 'along', position: [0.095, 1.656, -0.018] }
+    expect(restPathUsesLimbMirrorGuard(rest)).toBe(false)
+    expect(locatorOnPairLimb(from, to, pulled, rest)).toBe(true)
+    expect(keepLocatorsOnPairLimb(from, to, [pulled], rest)).toEqual([pulled])
+    expect(pairControlPolyline(from.position, to.position, [pulled], rest)).toEqual([
+      from.position,
+      pulled.position,
+      to.position,
+    ])
+    expect(isProbeOnSameLimbSegment(rest, pulled.position, 0.36)).toBe(true)
+    expect(isProbeOnSameLimbSegment(rest, [-0.095, 1.656, -0.018], 0.36)).toBe(false)
+  })
+
   it('re-links routes and keeps two styled controls between a pair', () => {
     const previous = [
       { type: 'acupoint', pointId: 'a2' },
@@ -369,6 +387,8 @@ describe('meridian authoring workflow', () => {
     expect(limbGapMaxOffPath(-0.21, 0.36)).toBeLessThan(0.2)
     expect(isProbeOnSameLimbSegment(gbHead, temple, 0.36)).toBe(true)
     expect(isProbeOnSameLimbSegment(gbHead, [-0.12, 1.57, 0.02], 0.36)).toBe(false)
+    expect(restPathUsesLimbMirrorGuard(gbHead)).toBe(false)
+    expect(restPathUsesLimbMirrorGuard([[-0.22, 1.0, 0.05], [-0.20, 0.8, 0.04]])).toBe(true)
   })
 
   it('lets 小海–肩貞 locators stretch beside the arm rest path', () => {
