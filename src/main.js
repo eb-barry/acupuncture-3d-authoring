@@ -33,7 +33,11 @@ import {
   isDigitTipWrap,
   isOnDigitSkin,
   isTeEarArcPair,
+  isTeHeadPair,
   isTeTempleHandlePair,
+  isTeTempleRunPair,
+  teEarCenter,
+  teHeadArcPoints,
   isDuBackWrapPair,
   isJianjingYuanyePair,
   isSiXiaohaiJianzhenPair,
@@ -2184,15 +2188,15 @@ function sameHeadSideHit(hit, sideX) {
 }
 
 function densifyHeadSkin(points, sideX, depth = 0) {
-  if (!points || points.length < 2 || depth > 5) return points
+  if (!points || points.length < 2 || depth > 6) return points
   const out = [points[0]]
   for (let index = 1; index < points.length; index += 1) {
     const a = points[index - 1]
     const b = points[index]
     const span = a.distanceTo(b)
-    if (span > 0.008 && span <= 0.024) {
+    if (span > 0.004 && span <= 0.03) {
       const mid = a.clone().lerp(b, 0.5)
-      const hit = closestSkinHit(toArray(mid), { maxDistance: 0.016, sideX })
+      const hit = closestSkinHit(toArray(mid), { maxDistance: 0.022, sideX })
       if (hit && sameHeadSideHit(hit, sideX)) {
         const lifted = new THREE.Vector3(...hit.position)
           .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
@@ -2208,8 +2212,10 @@ function densifyHeadSkin(points, sideX, depth = 0) {
   return out
 }
 
-function snapCurveSamplesToHeadSkin(samples, a, b) {
+function snapTeHeadSamplesToSkin(samples, a, b, fromCode = '', toCode = '') {
   const sideX = (a.position[0] + b.position[0]) / 2
+  const temple = isTeTempleRunPair(fromCode, toCode)
+  const center = teEarCenter(a.position, b.position)
   const points = []
   const previousRef = { current: null }
   const accept = (hit) => {
@@ -2221,10 +2227,28 @@ function snapCurveSamplesToHeadSkin(samples, a, b) {
   accept({ position: a.position, normal: a.normal })
   for (let index = 1; index < samples.length - 1; index += 1) {
     const t = index / Math.max(1, samples.length - 1)
-    const guide = slerpUnitVectors(a.normal, b.normal, t)
     const sample = samples[index]
-    const hit = closestSkinHit(sample, { maxDistance: 0.05, sideX, guideNormal: guide })
-      || projectFromOutside(new THREE.Vector3(...sample), guide, 0.028)
+    const slerp = slerpUnitVectors(a.normal, b.normal, t)
+    let guide = slerp
+    if (!temple) {
+      const radial = [
+        sample[0] - center[0],
+        sample[1] - center[1],
+        sample[2] - center[2],
+      ]
+      const len = Math.hypot(...radial)
+      if (len > 1e-6) {
+        guide = [
+          radial[0] / len * 0.7 + slerp[0] * 0.3,
+          radial[1] / len * 0.7 + slerp[1] * 0.3,
+          radial[2] / len * 0.7 + slerp[2] * 0.3,
+        ]
+      }
+    }
+    const origin = new THREE.Vector3(...sample)
+    const hit = projectFromOutside(origin, guide, temple ? 0.022 : 0.016)
+      || closestSkinHit(sample, { maxDistance: temple ? 0.09 : 0.06, sideX, guideNormal: guide })
+      || projectFromOutside(origin, slerp, 0.04)
     accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
@@ -2232,13 +2256,57 @@ function snapCurveSamplesToHeadSkin(samples, a, b) {
   return densifyHeadSkin(points, sideX)
 }
 
+function tautTeHeadOnSkin(points, a, b) {
+  if (!points || points.length < 4) return points
+  const arrays = arraysFromSkin(points)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const normals = arrays.map((_, index) => (
+    slerpUnitVectors(a.normal, b.normal, index / Math.max(1, arrays.length - 1))
+  ))
+  const taut = tautOnSurfacePolyline(arrays, normals, {
+    iterations: 18,
+    strength: 0.72,
+    maxStep: 0.0028,
+    corridor: arrays,
+    corridorRadius: 0.016,
+    minNormalDot: 0.05,
+    project: (point, normal) => {
+      const hit = closestSkinHit(point, { maxDistance: 0.016, sideX, guideNormal: normal })
+      return hit && sameHeadSideHit(hit, sideX)
+        ? { position: hit.position, normal: hit.normal }
+        : null
+    },
+  })
+  return taut.points.map((point, index) => (
+    new THREE.Vector3(...point).addScaledVector(
+      new THREE.Vector3(...(taut.normals[index] || [0, 1, 0])),
+      SKIN_LIFT,
+    )
+  ))
+}
+
+function snapTeHeadArcToSkin(a, b, fromCode, toCode, records = []) {
+  const samples = records.length
+    ? catmullRomThrough(
+      [a.position, ...records.map((record) => record.position), b.position],
+      16,
+    )
+    : teHeadArcPoints(fromCode, toCode, a.position, b.position)
+  const snapped = snapTeHeadSamplesToSkin(samples, a, b, fromCode, toCode)
+  if (snapped?.length >= 4) return tautTeHeadOnSkin(snapped, a, b)
+  return snapped
+}
+
+function snapCurveSamplesToHeadSkin(samples, a, b) {
+  return snapTeHeadSamplesToSkin(samples, a, b)
+}
+
 function snapTeTempleCurveToSkin(a, b, records, rest = []) {
   const path = rest.length >= 2 ? rest : [a.position, b.position]
   const ordered = [...records].sort((left, right) => (
     closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
   ))
-  const controls = [a.position, ...ordered.map((record) => record.position), b.position]
-  return snapCurveSamplesToHeadSkin(catmullRomThrough(controls, 14), a, b)
+  return snapTeHeadArcToSkin(a, b, 'TE22', 'TE23', ordered)
 }
 
 function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
@@ -2354,13 +2422,14 @@ function skinSegmentPoints(a, b, {
   const sideX = (a.position[0] + b.position[0]) / 2
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   const duBack = isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)
+  const teHead = isTeHeadPair(fromCode, toCode)
   if (siArmShoulder) {
     const wrapped = snapSiArmShoulderToSkin(a, b)
     if (wrapped?.length >= 3) return wrapped
   }
-  if (teTemple && allowGeodesic) {
-    const geodesic = geodesicOnSkin(a, b)
-    if (geodesic?.length >= 2) return geodesic
+  if (teHead) {
+    const arced = snapTeHeadArcToSkin(a, b, fromCode, toCode)
+    if (arced?.length >= 3) return arced
   }
   const digitTip = isDigitTipWrap(a.position, b.position, normalDot)
   if (digitTip) {
@@ -2376,7 +2445,7 @@ function skinSegmentPoints(a, b, {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
   }
-  const mustWrap = !siArmShoulder && !teTemple && !facingLimb && !digitTip && (
+  const mustWrap = !siArmShoulder && !teHead && !facingLimb && !digitTip && (
     preferWrap
     || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
@@ -2384,7 +2453,7 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !teTemple && !facingLimb && !digitTip) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !teHead && !facingLimb && !digitTip) {
     const geodesic = geodesicOnSkin(a, b)
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
@@ -2394,7 +2463,7 @@ function skinSegmentPoints(a, b, {
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !duBack && !earArc && !teTemple && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !duBack && !teHead && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -2561,6 +2630,20 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
     fromCode,
     toCode,
   })
+  const teHead = isTeHeadPair(fromCode, toCode)
+  if (teHead) {
+    const curved = records.length
+      ? snapTeHeadArcToSkin(fromResolved, toResolved, fromCode, toCode, keepLocatorsOnPairLimb(
+        fromResolved,
+        toResolved,
+        records,
+        restArrays,
+      ))
+      : null
+    if (curved?.length >= 3) return curved
+    const arced = snapTeHeadArcToSkin(fromResolved, toResolved, fromCode, toCode)
+    if (arced?.length >= 3) return arced
+  }
   if (teTemple && records.length) {
     const curved = snapTeTempleCurveToSkin(fromResolved, toResolved, records, restArrays)
     if (curved?.length >= 3) return curved

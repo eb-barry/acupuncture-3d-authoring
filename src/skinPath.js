@@ -188,7 +188,7 @@ export function isShoulderAxillaWrap(from = [0, 0, 0], to = [0, 0, 0]) {
  * 肩井→淵腋 is code-gated; geometry is only a fallback.
  */
 export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
-  if (isTeTempleHandlePair(fromCode, toCode) || isSiXiaohaiJianzhenPair(fromCode, toCode)) {
+  if (isTeHeadPair(fromCode, toCode) || isSiXiaohaiJianzhenPair(fromCode, toCode)) {
     return false
   }
   if (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(from, to)) return true
@@ -359,6 +359,7 @@ export function maxPolylineEdge(points = []) {
 }
 
 const TE_EAR_ARC_CODES = new Set(['TE17', 'TE18', 'TE19', 'TE20', 'TE21'])
+const TE_HEAD_CODES = new Set(['TE17', 'TE18', 'TE19', 'TE20', 'TE21', 'TE22', 'TE23'])
 
 function teSequence(code) {
   const match = /^TE(\d+)$/.exec(String(code || ''))
@@ -371,10 +372,20 @@ function asPathPoint(point) {
   return [Number(point[0]) || 0, Number(point[1]) || 0, Number(point[2]) || 0]
 }
 
+function sub3(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
 /** 絲竹空 TE23 ↔ 耳和髎 TE22 only. */
 export function isTeTempleHandlePair(fromCode = '', toCode = '') {
   const codes = new Set([String(fromCode || ''), String(toCode || '')])
   return codes.has('TE22') && codes.has('TE23')
+}
+
+/** 耳門 TE21 ↔ 耳和髎 TE22, or 耳和髎 TE22 ↔ 絲竹空 TE23. */
+export function isTeTempleRunPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return (codes.has('TE21') && codes.has('TE22')) || (codes.has('TE22') && codes.has('TE23'))
 }
 
 /** 翳風 TE17 … 耳門 TE21 consecutive pairs. */
@@ -382,6 +393,14 @@ export function isTeEarArcPair(fromCode = '', toCode = '') {
   const a = String(fromCode || '')
   const b = String(toCode || '')
   if (!TE_EAR_ARC_CODES.has(a) || !TE_EAR_ARC_CODES.has(b)) return false
+  return Math.abs(teSequence(a) - teSequence(b)) === 1
+}
+
+/** Consecutive 三焦經 head pairs 翳風 TE17 … 絲竹空 TE23. */
+export function isTeHeadPair(fromCode = '', toCode = '') {
+  const a = String(fromCode || '')
+  const b = String(toCode || '')
+  if (!TE_HEAD_CODES.has(a) || !TE_HEAD_CODES.has(b)) return false
   return Math.abs(teSequence(a) - teSequence(b)) === 1
 }
 
@@ -398,12 +417,36 @@ export const TE_EAR_GEODESIC_STABLE = Object.freeze({
   maxTurningPerPoint: 0.32,
 })
 
-export function teEarArcGuide(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+/**
+ * Approximate ear-canal centre so a short slerp around it traces the pinna
+ * instead of the chord through the helix.
+ */
+export function teEarCenter(from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const side = Math.sign((a[0] + b[0]) / 2) || 1
+  const surface = Math.min(Math.abs(a[0]), Math.abs(b[0]))
+  return [
+    side * Math.max(0.038, surface - 0.02),
+    (a[1] + b[1]) * 0.5 * 0.45 + 1.658 * 0.55,
+    (a[2] + b[2]) * 0.5 * 0.45 + -0.032 * 0.55,
+  ]
+}
+
+export function teEarArcHint(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
   const side = Math.sign(((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2) || 1
-  if (isTeHelixPair(fromCode, toCode)) {
-    return normalize([side * 0.4, 0.72, 0.55])
+  if (isTeHelixPair(fromCode, toCode) || (String(fromCode) === 'TE19' && String(toCode) === 'TE20')
+    || (String(fromCode) === 'TE20' && String(toCode) === 'TE19')) {
+    return normalize([side * 0.2, 0.85, 0.45])
   }
-  return normalize([side * 0.5, 0.2, -0.84])
+  if (isTeTempleRunPair(fromCode, toCode)) {
+    return normalize([side * 0.55, 0.2, 0.8])
+  }
+  return normalize([side * 0.25, 0.2, -0.95])
+}
+
+export function teEarArcGuide(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+  return teEarArcHint(fromCode, toCode, from, to)
 }
 
 export function quadraticArcPoints(from = [0, 0, 0], to = [0, 0, 0], guide = [1, 0, 0], {
@@ -431,27 +474,63 @@ export function quadraticArcPoints(from = [0, 0, 0], to = [0, 0, 0], guide = [1,
   return out
 }
 
-/** Target polyline along the ear root; samples are later snapped to skin. */
-export function teEarArcPoints(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+/** Smooth circumference around the pinna: slerp on a sphere about the canal. */
+export function teEarCircumferenceArc(from = [0, 0, 0], to = [0, 0, 0], fromCode = '', toCode = '') {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
-  const guide = teEarArcGuide(fromCode, toCode, a, b)
-  const span = length3([b[0] - a[0], b[1] - a[1], b[2] - a[2]])
-  const samples = Math.max(16, Math.ceil(span / 0.004))
-  if (!isTeHelixPair(fromCode, toCode)) {
-    return quadraticArcPoints(a, b, guide, { bulge: 0.28, samples })
+  const center = teEarCenter(a, b)
+  const va = sub3(a, center)
+  const vb = sub3(b, center)
+  const ra = length3(va)
+  const rb = length3(vb)
+  if (ra < 1e-5 || rb < 1e-5) return quadraticArcPoints(a, b, teEarArcHint(fromCode, toCode, a, b), { bulge: 0.2, samples: 18 })
+  const na = normalize(va)
+  const nb = normalize(vb)
+  const hint = teEarArcHint(fromCode, toCode, a, b)
+  const span = length3(sub3(b, a))
+  const count = Math.max(18, Math.ceil(span / 0.003))
+  const out = []
+  for (let index = 0; index <= count; index += 1) {
+    const t = index / count
+    const dir = slerpUnitVectors(na, nb, t, hint)
+    const radius = (ra * (1 - t) + rb * t) * 1.035
+    out.push([
+      center[0] + dir[0] * radius,
+      center[1] + dir[1] * radius,
+      center[2] + dir[2] * radius,
+    ])
   }
-  const side = Math.sign((a[0] + b[0]) / 2) || 1
-  const high = a[1] >= b[1] ? a : b
-  const front = a[2] >= b[2] ? a : b
-  const waypoint = [
-    side * (Math.max(Math.abs(high[0]), Math.abs(front[0])) + 0.006),
-    Math.max(high[1], front[1]) + 0.004,
-    high[2] * 0.4 + front[2] * 0.6 + 0.008,
-  ]
-  const first = quadraticArcPoints(a, waypoint, guide, { bulge: 0.18, samples: 14 })
-  const second = quadraticArcPoints(waypoint, b, guide, { bulge: 0.16, samples: 14 })
-  return first.slice(0, -1).concat(second)
+  out[0] = [...a]
+  out[count] = [...b]
+  return out
+}
+
+/** 耳門→和髎→絲竹空: stay on the temple, not through the orbit or the helix. */
+export function teTempleArcPoints(from = [0, 0, 0], to = [0, 0, 0], fromCode = '', toCode = '') {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const hint = teEarArcHint(fromCode, toCode, a, b)
+  const span = length3(sub3(b, a))
+  const samples = Math.max(14, Math.ceil(span / 0.003))
+  const shortFront = (String(fromCode) === 'TE21' && String(toCode) === 'TE22')
+    || (String(fromCode) === 'TE22' && String(toCode) === 'TE21')
+  return quadraticArcPoints(a, b, hint, {
+    bulge: shortFront ? 0.1 : 0.16,
+    samples,
+  })
+}
+
+/** Geometric target for any consecutive TE17–TE23 pair. Later snapped to skin. */
+export function teHeadArcPoints(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+  if (isTeTempleRunPair(fromCode, toCode)) {
+    return teTempleArcPoints(from, to, fromCode, toCode)
+  }
+  return teEarCircumferenceArc(from, to, fromCode, toCode)
+}
+
+/** Target polyline along the ear root; samples are later snapped to skin. */
+export function teEarArcPoints(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+  return teHeadArcPoints(fromCode, toCode, from, to)
 }
 
 function uniformCatmullRom(p0, p1, p2, p3, t) {

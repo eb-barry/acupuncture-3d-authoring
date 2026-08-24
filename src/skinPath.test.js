@@ -12,8 +12,13 @@ import {
   isDigitTipWrap,
   isOnDigitSkin,
   isTeEarArcPair,
+  isTeHeadPair,
   isTeHelixPair,
   isTeTempleHandlePair,
+  isTeTempleRunPair,
+  teEarCircumferenceArc,
+  teHeadArcPoints,
+  teTempleArcPoints,
   isSiXiaohaiJianzhenPair,
   isSiXiaohaiJianzhenAxillaHollow,
   isSiArmShoulderHandleOk,
@@ -22,7 +27,7 @@ import {
   siArmShoulderWrapGuide,
   maxPolylineEdge,
   teEarArcGuide,
-  teEarArcPoints,
+  teEarCircumferenceArc,
   TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
   isJianjingYuanyePair,
@@ -226,11 +231,17 @@ describe('skin path wrapping', () => {
     expect(isTeTempleHandlePair('TE22', 'TE23')).toBe(true)
     expect(isTeTempleHandlePair('GB1', 'GB2')).toBe(false)
     expect(isTeTempleHandlePair('TE21', 'TE22')).toBe(false)
+    expect(isTeTempleRunPair('TE21', 'TE22')).toBe(true)
+    expect(isTeTempleRunPair('TE22', 'TE23')).toBe(true)
+    expect(isTeTempleRunPair('TE20', 'TE21')).toBe(false)
     expect(isTeEarArcPair('TE17', 'TE18')).toBe(true)
     expect(isTeEarArcPair('TE20', 'TE21')).toBe(true)
     expect(isTeEarArcPair('TE17', 'TE19')).toBe(false)
     expect(isTeEarArcPair('TE22', 'TE23')).toBe(false)
-    expect(isTeEarArcPair('SI19', 'SI18')).toBe(false)
+    expect(isTeHeadPair('TE17', 'TE18')).toBe(true)
+    expect(isTeHeadPair('TE21', 'TE22')).toBe(true)
+    expect(isTeHeadPair('TE22', 'TE23')).toBe(true)
+    expect(isTeHeadPair('TE16', 'TE17')).toBe(false)
     expect(isTeHelixPair('TE20', 'TE21')).toBe(true)
     expect(isTeHelixPair('TE18', 'TE19')).toBe(false)
   })
@@ -254,23 +265,37 @@ describe('skin path wrapping', () => {
     expect(mid[1]).toBeGreaterThan(to[1])
   })
 
-  it('bulges 翳風–角孫 behind the ear and 角孫–耳門 over the helix', () => {
-    const yifeng = [0.09, 1.40, -0.01]
-    const chima = [0.09, 1.44, -0.02]
-    const jiaosun = [0.09, 1.56, 0.01]
-    const ermen = [0.085, 1.46, 0.05]
+  it('traces a smooth circumference behind the ear and over the helix', () => {
+    const yifeng = [0.0654, 1.6266, -0.0382]
+    const chima = [0.0694, 1.6389, -0.0545]
+    const luxi = [0.0773, 1.6744, -0.0605]
+    const jiaosun = [0.0782, 1.6937, -0.0412]
+    const ermen = [0.0749, 1.6659, -0.0123]
+    const erheliao = [0.0757, 1.6857, -0.0133]
+    const sizhukong = [0.0584, 1.6802, 0.0544]
     const behind = teEarArcGuide('TE17', 'TE18', yifeng, chima)
     expect(behind[2]).toBeLessThan(0)
     expect(behind[0]).toBeGreaterThan(0)
     const helix = teEarArcGuide('TE20', 'TE21', jiaosun, ermen)
     expect(helix[1]).toBeGreaterThan(0.4)
-    expect(helix[2]).toBeGreaterThan(0)
-    const behindArc = teEarArcPoints('TE18', 'TE19', chima, [0.09, 1.50, -0.015])
-    const behindMid = behindArc[Math.floor(behindArc.length / 2)]
-    expect(behindMid[2]).toBeLessThan(Math.min(chima[2], -0.015))
-    const helixArc = teEarArcPoints('TE20', 'TE21', jiaosun, ermen)
+    const mastoid = teEarCircumferenceArc(chima, luxi, 'TE18', 'TE19')
+    expect(mastoid[0]).toEqual(chima)
+    expect(mastoid.at(-1)).toEqual(luxi)
+    expect(mastoid.length).toBeGreaterThan(12)
+    const mastoidMid = mastoid[Math.floor(mastoid.length / 2)]
+    expect(mastoidMid[2]).toBeLessThan((chima[2] + luxi[2]) / 2 + 0.004)
+    const helixArc = teHeadArcPoints('TE20', 'TE21', jiaosun, ermen)
     const helixHigh = Math.max(...helixArc.map((point) => point[1]))
-    expect(helixHigh).toBeGreaterThan(jiaosun[1] - 0.002)
+    expect(helixHigh).toBeGreaterThan(jiaosun[1] - 0.004)
+    const temple = teTempleArcPoints(erheliao, sizhukong, 'TE22', 'TE23')
+    expect(temple[0]).toEqual(erheliao)
+    expect(temple.at(-1)).toEqual(sizhukong)
+    const templeMid = temple[Math.floor(temple.length / 2)]
+    expect(templeMid[2]).toBeGreaterThan((erheliao[2] + sizhukong[2]) / 2 - 0.002)
+    const front = teHeadArcPoints('TE21', 'TE22', ermen, erheliao)
+    expect(front.length).toBeGreaterThan(8)
+    expect(front[0]).toEqual(ermen)
+    expect(front.at(-1)).toEqual(erheliao)
   })
 
   it('keeps a high-curvature ear polyline that the default geodesic gate would drop', () => {
