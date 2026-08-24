@@ -136,10 +136,9 @@ describe('geodesic-first problem spans on the male mesh', () => {
         maxExplored: 300000,
       })
       expect(found?.points?.length).toBeGreaterThan(2)
-      const points = [from, ...found.points, to]
       return {
-        spikes: countChordSpikes(points),
-        maxStep: maxPolylineStep(points),
+        spikes: countChordSpikes(found.points),
+        maxStep: maxPolylineStep(found.points),
         stable: geodesicIsStable(found.points, { maxLengthRatio: 3.8, maxEdge: 0.055, maxTurningPerPoint: 0.32 }),
       }
     }
