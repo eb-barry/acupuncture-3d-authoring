@@ -25,7 +25,9 @@ import {
   teEarArcPoints,
   TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
+  isJianjingYuanyePair,
   isShoulderAxillaWrap,
+  pairPrefersWrap,
   pathFollowsFacingChord,
   pickPairAlongPolyline,
   isDuBackWrapPair,
@@ -176,7 +178,6 @@ describe('skin path wrapping', () => {
     const lingdao = [-0.24, 0.78, 0.01]
     expect(isFacingLimbSpan(shaohai, lingdao, 0.86)).toBe(true)
     expect(isShoulderAxillaWrap(shaohai, lingdao)).toBe(false)
-    expect(isFacingLimbSpan([0.12, 1.42, -0.02], [0.15, 1.18, 0.03], 0.4)).toBe(false)
     expect(isFacingLimbSpan([-0.08, 0.49, -0.08], [-0.03, 0.90, 0.08], 0.5)).toBe(false)
     expect(pathFollowsFacingChord([
       shaohai,
@@ -190,14 +191,27 @@ describe('skin path wrapping', () => {
     ], shaohai, lingdao)).toBe(false)
   })
 
-  it('wraps 肩井→淵腋 without a geodesic, but keeps 陰谷→橫骨 on the thigh', () => {
-    const jianjing = [0.12, 1.42, -0.02]
-    const yuanye = [0.15, 1.18, 0.03]
+  it('wraps 肩井→淵腋 without a geodesic, but keeps 雲門→天府 and 食竇→腹哀 on the geodesic', () => {
+    const jianjing = [0.1192, 1.5029, -0.0947]
+    const yuanye = [0.1886, 1.3039, -0.0628]
+    const yunmen = [0.1493, 1.4351, -0.0112]
+    const tianfu = [0.2855, 1.3200, -0.0179]
+    const shidou = [0.1422, 1.2398, 0.0338]
+    const fuai = [0.1264, 1.1307, 0.0317]
     const ki10 = [-0.08, 0.49, -0.08]
     const ki11 = [-0.03, 0.90, 0.08]
+    expect(isJianjingYuanyePair('GB21', 'GB22')).toBe(true)
+    expect(isJianjingYuanyePair('GB22', 'GB21')).toBe(true)
+    expect(isJianjingYuanyePair('LU2', 'LU3')).toBe(false)
     expect(isShoulderAxillaWrap(jianjing, yuanye)).toBe(true)
-    expect(isShoulderAxillaWrap(jianjing, [0.13, 1.10, 0.04])).toBe(true)
+    expect(isShoulderAxillaWrap(yunmen, tianfu)).toBe(false)
+    expect(isShoulderAxillaWrap(shidou, fuai)).toBe(false)
     expect(isShoulderAxillaWrap(ki10, ki11)).toBe(false)
+    expect(pairPrefersWrap('GB21', 'GB22', jianjing, yuanye)).toBe(true)
+    expect(pairPrefersWrap('LU2', 'LU3', yunmen, tianfu)).toBe(false)
+    expect(pairPrefersWrap('SP17', 'SP16', shidou, fuai)).toBe(false)
+    expect(pairPrefersWrap('TE20', 'TE21', [0.078, 1.694, -0.041], [0.075, 1.666, -0.012])).toBe(false)
+    expect(isFacingLimbSpan(jianjing, yuanye, 0.4)).toBe(false)
   })
 
   it('picks the tightest polyline span that contains the click', () => {

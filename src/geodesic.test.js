@@ -4,6 +4,8 @@ import {
   buildAdjacency,
   buildCombinedSurfaceGraph,
   collapseOppositeWallSpikes,
+  collapseSharpChordSpikes,
+  countChordSpikes,
   densifyPolyline,
   dist3,
   distanceToSegment3,
@@ -326,6 +328,29 @@ describe('taut on-surface polyline', () => {
     expect(cleaned.points.some((point) => point[0] === 0)).toBe(false)
     expect(cleaned.points[0]).toEqual(points[0])
     expect(cleaned.points[cleaned.points.length - 1]).toEqual(points[points.length - 1])
+  })
+
+  it('counts and drops sharp chord spikes without flattening a smooth arc', () => {
+    const boxy = [
+      [0, 0, 0],
+      [0.01, 0, 0],
+      [0.01, 0.02, 0],
+      [0.02, 0.02, 0],
+      [0.02, 0, 0],
+      [0.03, 0, 0],
+    ]
+    expect(countChordSpikes(boxy)).toBeGreaterThan(0)
+    const cleaned = collapseSharpChordSpikes(boxy)
+    expect(countChordSpikes(cleaned.points)).toBe(0)
+    expect(cleaned.points[0]).toEqual(boxy[0])
+    expect(cleaned.points.at(-1)).toEqual(boxy.at(-1))
+    const arc = []
+    for (let index = 0; index <= 12; index += 1) {
+      const t = index / 12
+      arc.push([Math.cos(t), Math.sin(t), 0])
+    }
+    expect(countChordSpikes(arc)).toBe(0)
+    expect(collapseSharpChordSpikes(arc).points).toHaveLength(arc.length)
   })
 
   it('does not snap a crease chord onto the opposite wall', () => {

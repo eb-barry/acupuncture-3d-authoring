@@ -259,4 +259,71 @@ describe('acupuncture document schema', () => {
     })
     expect(validateDocument(result.value).valid).toBe(true)
   })
+
+  it('drops 翳風–耳門 consecutive locators that the retired ear-arc drawer used', () => {
+    const document = {
+      ...emptyDocument(),
+      meridians: [{
+        id: 'm1',
+        pairId: null,
+        meridianId: 'TE',
+        name: '手少陽三焦經',
+        color: '#ef4444',
+        width: 3,
+        side: 'right',
+        nodes: [
+          { type: 'acupoint', pointId: 'te20', position: [0.08, 1.69, -0.04], normal: [1, 0, 0] },
+          { type: 'control', pointId: null, position: [0.08, 1.68, -0.03], normal: [1, 0, 0], style: 'along' },
+          { type: 'control', pointId: null, position: [0.08, 1.67, -0.02], normal: [1, 0, 0], style: 'along' },
+          { type: 'acupoint', pointId: 'te21', position: [0.07, 1.66, -0.01], normal: [1, 0, 0] },
+          { type: 'control', pointId: null, position: [0.07, 1.67, 0.01], normal: [1, 0, 0], style: 'along' },
+          { type: 'acupoint', pointId: 'te22', position: [0.07, 1.68, -0.01], normal: [1, 0, 0] },
+        ],
+      }],
+      acupoints: [{
+        id: 'te20',
+        pairId: null,
+        name: '角孫',
+        code: 'TE20',
+        meridianId: 'TE',
+        meridianName: '手少陽三焦經',
+        sequence: 20,
+        side: 'right',
+        color: '#ef4444',
+        size: 10,
+        position: [0.08, 1.69, -0.04],
+        normal: [1, 0, 0],
+      }, {
+        id: 'te21',
+        pairId: null,
+        name: '耳門',
+        code: 'TE21',
+        meridianId: 'TE',
+        meridianName: '手少陽三焦經',
+        sequence: 21,
+        side: 'right',
+        color: '#ef4444',
+        size: 10,
+        position: [0.07, 1.66, -0.01],
+        normal: [1, 0, 0],
+      }, {
+        id: 'te22',
+        pairId: null,
+        name: '耳和髎',
+        code: 'TE22',
+        meridianId: 'TE',
+        meridianName: '手少陽三焦經',
+        sequence: 22,
+        side: 'right',
+        color: '#ef4444',
+        size: 10,
+        position: [0.07, 1.68, -0.01],
+        normal: [1, 0, 0],
+      }],
+    }
+    const result = parseDocument(JSON.stringify(document))
+    expect(result.valid).toBe(true)
+    expect(result.value.meridians[0].nodes.map((node) => node.pointId || 'control'))
+      .toEqual(['te20', 'te21', 'control', 'te22'])
+  })
 })

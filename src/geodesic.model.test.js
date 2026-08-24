@@ -5,7 +5,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import {
   buildCombinedSurfaceGraph,
+  countChordSpikes,
   dist3,
+  geodesicIsStable,
+  maxPolylineStep,
   shortestSurfacePath,
 } from './geodesic.js'
 
@@ -104,4 +107,53 @@ describe('陰谷–橫骨 on the built-in body meshes', () => {
     ))
     expect(cleft).toHaveLength(0)
   })
+})
+
+describe('geodesic-first problem spans on the male mesh', () => {
+  it('keeps 雲門→天府, 食竇→腹哀, 隱白→大都 and 角孫→耳門 spike-free', async () => {
+    const { graph } = await loadFramedChunks('models/male_character.glb')
+    const nearest = (hint) => {
+      let best = -1
+      let bestD = Infinity
+      for (let index = 0; index < graph.positions.length; index += 1) {
+        const distance = dist3(graph.positions[index], hint)
+        if (distance < bestD) {
+          bestD = distance
+          best = index
+        }
+      }
+      return graph.remap[best]
+    }
+    const solve = (from, to) => {
+      const start = nearest(from)
+      const goal = nearest(to)
+      const found = shortestSurfacePath({
+        adjacency: graph.adjacency,
+        positions: graph.positions,
+        startSeeds: [{ id: start, cost: 0 }],
+        goalIds: [goal],
+        goalPoint: graph.positions[goal],
+        maxExplored: 300000,
+      })
+      expect(found?.points?.length).toBeGreaterThan(2)
+      return {
+        spikes: countChordSpikes(found.points),
+        maxStep: maxPolylineStep(found.points),
+        stable: geodesicIsStable(found.points, { maxLengthRatio: 3.8, maxEdge: 0.055, maxTurningPerPoint: 0.32 }),
+      }
+    }
+    const lu = solve([0.1493, 1.4351, -0.0112], [0.2855, 1.3200, -0.0179])
+    expect(lu.spikes).toBe(0)
+    expect(lu.maxStep).toBeLessThan(0.012)
+    expect(lu.stable).toBe(true)
+    const spRib = solve([0.1422, 1.2398, 0.0338], [0.1264, 1.1307, 0.0317])
+    expect(spRib.spikes).toBe(0)
+    expect(spRib.stable).toBe(true)
+    const spToe = solve([0.1095, 0.0210, 0.1422], [0.1064, 0.0242, 0.1086])
+    expect(spToe.spikes).toBe(0)
+    expect(spToe.stable).toBe(true)
+    const te = solve([0.0782, 1.6937, -0.0412], [0.0749, 1.6659, -0.0123])
+    expect(te.spikes).toBe(0)
+    expect(te.stable).toBe(true)
+  }, 60000)
 })

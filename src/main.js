@@ -35,6 +35,7 @@ import {
   isTeEarArcPair,
   isTeTempleHandlePair,
   isDuBackWrapPair,
+  isJianjingYuanyePair,
   isSiXiaohaiJianzhenPair,
   isSiXiaohaiJianzhenAxillaHollow,
   isSiArmShoulderHandleOk,
@@ -44,10 +45,10 @@ import {
   siArmShoulderOuterPoint,
   siArmShoulderWrapGuide,
   maxPolylineEdge,
-  teEarArcPoints,
   TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
   isShoulderAxillaWrap,
+  pairPrefersWrap,
   marchStandoff,
   pathFollowsFacingChord,
   outwardWrapGuide,
@@ -86,6 +87,7 @@ import {
 import {
   buildCombinedSurfaceGraph,
   collapseOppositeWallSpikes,
+  collapseSharpChordSpikes,
   densifyPolylineWithNormals,
   dist3,
   distanceToSegment3,
@@ -101,6 +103,7 @@ import {
   HANDLE_STRETCH_MAX_OFF_PATH,
   HANDLE_STRETCH_PROJECT_RADIUS,
   HANDLE_PICK_RADIUS_PX,
+  MAX_PAIR_HANDLES,
   buildRouteNodesFromPlaced,
   clampHandleT,
   closestTOnPolyline,
@@ -117,6 +120,7 @@ import {
   locatorOnPairLimb,
   mergeControlsIntoRoute,
   nearestScreenIndex,
+  nextHandleInsertT,
   normalizePlacedPointSide,
   orderRouteAcupointsForDrawing,
   placedPointSide,
@@ -164,6 +168,8 @@ $('#app').innerHTML = `
       <button id="face-back" class="tool" type="button" title="自動將身體背面朝向螢幕，方便定位督脈">▦ <span>背面朝向</span></button>
       <button id="lock-orbit" class="tool" type="button" aria-pressed="false" title="鎖定旋轉：可上下左右平移，視角朝向不變，仍可編輯">🔒 <span>鎖定旋轉</span></button>
       <button id="redraw-segment" class="tool finish" type="button" disabled title="依目前黑點，沿皮膚重繪這兩個穴位之間的經脈">⟳ <span>重繪經脈</span></button>
+      <button id="add-locator" class="tool" type="button" disabled title="在選取的兩穴之間新增一個定位點">＋ <span>增加定位點</span></button>
+      <button id="remove-locator" class="tool" type="button" disabled title="刪除選取線段上的一個定位點">－ <span>刪除定位點</span></button>
       <button id="undo-step" class="tool" type="button" title="回復上一步（Ctrl／⌘+Z）">↩ <span>回復上一步</span></button>
       <button id="delete-selection" class="tool danger-tool" type="button" disabled title="刪除選取的穴位或經脈路線">⌫ <span>刪除</span></button>
     </nav>
@@ -182,7 +188,7 @@ $('#app').innerHTML = `
     <div class="placement">
       <label id="side-control">先定位側別<select id="point-side"><option value="left">左側 L</option><option value="right">右側 R</option></select></label>
       <div id="placement-progress" class="placement-progress"></div>
-      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現黑點（短段一顆，長段三顆）。拖黑點時經脈會跟著走；也可按「重繪經脈」依目前黑點重畫這一段。任督二脈沒有黑點。拉錯可按「回復上一步」。</p>
+      <p>編輯模式：點皮膚定位穴位。點兩個穴位之間的經脈可出現黑點（短於約 25 mm 預設沒有，之後約每 40 mm 一顆，最多五顆）。可用「增加定位點／刪除定位點」增減；拖黑點時經脈會跟著走。任督二脈沒有黑點。拉錯可按「回復上一步」。</p>
     </div>
   </aside>
   <section class="stage">
@@ -494,11 +500,12 @@ function selectedSegmentReady() {
 }
 
 function syncRedrawButton() {
-  const button = $('#redraw-segment')
-  if (!button) return
   const enabled = selectedSegmentReady()
     && !isRenDuMeridian(state.meridians.find((item) => item.id === selected.id)?.meridianId)
-  button.disabled = !enabled
+  ;['redraw-segment', 'add-locator', 'remove-locator'].forEach((id) => {
+    const button = $(`#${id}`)
+    if (button) button.disabled = !enabled
+  })
 }
 
 function syncMeridianDragButtons() {
@@ -1594,9 +1601,10 @@ function liftGeodesicPolyline(points, normals) {
     minNormalDot: 0.25,
     maxJump: 0.014,
   })
-  return snapped.points.map((point, index) => (
+  const guarded = collapseSharpChordSpikes(snapped.points, snapped.normals)
+  return guarded.points.map((point, index) => (
     new THREE.Vector3(...point).addScaledVector(
-      new THREE.Vector3(...(snapped.normals[index] || [0, 1, 0])),
+      new THREE.Vector3(...(guarded.normals[index] || [0, 1, 0])),
       SKIN_LIFT,
     )
   ))
@@ -2233,42 +2241,6 @@ function snapTeTempleCurveToSkin(a, b, records, rest = []) {
   return snapCurveSamplesToHeadSkin(catmullRomThrough(controls, 14), a, b)
 }
 
-function tautTeEarOnSkin(points, a, b) {
-  if (!points || points.length < 4) return points
-  const arrays = arraysFromSkin(points)
-  const sideX = (a.position[0] + b.position[0]) / 2
-  const normals = arrays.map((_, index) => (
-    slerpUnitVectors(a.normal, b.normal, index / Math.max(1, arrays.length - 1))
-  ))
-  const taut = tautOnSurfacePolyline(arrays, normals, {
-    iterations: 22,
-    strength: 0.82,
-    maxStep: 0.0035,
-    corridor: arrays,
-    corridorRadius: 0.02,
-    minNormalDot: 0.08,
-    project: (point, normal) => {
-      const hit = closestSkinHit(point, { maxDistance: 0.018, sideX, guideNormal: normal })
-      return hit && sameHeadSideHit(hit, sideX)
-        ? { position: hit.position, normal: hit.normal }
-        : null
-    },
-  })
-  return taut.points.map((point, index) => (
-    new THREE.Vector3(...point).addScaledVector(
-      new THREE.Vector3(...(taut.normals[index] || [0, 1, 0])),
-      SKIN_LIFT,
-    )
-  ))
-}
-
-function snapTeEarArcToSkin(a, b, fromCode, toCode) {
-  const samples = teEarArcPoints(fromCode, toCode, a.position, b.position)
-  const snapped = snapCurveSamplesToHeadSkin(samples, a, b)
-  if (snapped?.length >= 4) return tautTeEarOnSkin(snapped, a, b)
-  return snapped
-}
-
 function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
   const sideX = (a.position[0] + b.position[0]) / 2
   const path = rest.length >= 2 ? rest : siArmShoulderGuidePoints(a.position, b.position)
@@ -2386,16 +2358,6 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapSiArmShoulderToSkin(a, b)
     if (wrapped?.length >= 3) return wrapped
   }
-  if (earArc) {
-    const arced = snapTeEarArcToSkin(a, b, fromCode, toCode)
-    if (arced?.length >= 3) return arced
-    if (allowGeodesic) {
-      const geodesic = geodesicOnSkin(a, b)
-      if (geodesic && (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic.length >= 6)) {
-        return tautTeEarOnSkin(geodesic, a, b)
-      }
-    }
-  }
   if (teTemple && allowGeodesic) {
     const geodesic = geodesicOnSkin(a, b)
     if (geodesic?.length >= 2) return geodesic
@@ -2414,19 +2376,20 @@ function skinSegmentPoints(a, b, {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
   }
-  const wrapFirst = !siArmShoulder && !earArc && !teTemple && !facingLimb && !digitTip && (
+  const mustWrap = !siArmShoulder && !teTemple && !facingLimb && !digitTip && (
     preferWrap
-    || duBack
-    || isShoulderAxillaWrap(a.position, b.position)
-    || (shouldFrontWrap(a.position, b.position) && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b))
+    || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
-  if (wrapFirst) {
+  if (mustWrap) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !duBack && !siArmShoulder && !earArc && !teTemple && !preferWrap && !isShoulderAxillaWrap(a.position, b.position) && !facingLimb && !digitTip) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !teTemple && !facingLimb && !digitTip) {
     const geodesic = geodesicOnSkin(a, b)
-    if (geodesicIsStable(geodesic)) return geodesic
+    const stable = earArc
+      ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
+      : geodesicIsStable(geodesic)
+    if (geodesic && stable) return geodesic
   }
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
@@ -2523,8 +2486,12 @@ function joinOnSkin(anchors) {
   for (let index = 0; index < anchors.length - 1; index += 1) {
     const from = resolvedNode(anchors[index])
     const to = resolvedNode(anchors[index + 1])
-    const skipGeodesic = isShoulderAxillaWrap(from.position, to.position)
-      || isDigitTipWrap(
+    const skipGeodesic = pairPrefersWrap(
+      '',
+      '',
+      from.position,
+      to.position,
+    ) || isDigitTipWrap(
         from.position,
         to.position,
         new THREE.Vector3(...from.normal).normalize().dot(new THREE.Vector3(...to.normal).normalize()),
@@ -2611,19 +2578,16 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
     ? keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
     : keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays))
   const spans = locatorSpans(restArrays, fromResolved, toResolved, usable)
-  const pieces = spans.map((span) => {
-    if (span.restSlice?.length >= 2) return vectorsFromArrays(span.restSlice)
-    return drawSpan(
-      {
-        position: span.from.position,
-        normal: span.from.normal || fromResolved.normal,
-      },
-      {
-        position: span.to.position,
-        normal: span.to.normal || toResolved.normal,
-      },
-    )
-  })
+  const pieces = spans.map((span) => drawSpan(
+    {
+      position: span.from.position,
+      normal: span.from.normal || fromResolved.normal,
+    },
+    {
+      position: span.to.position,
+      normal: span.to.normal || toResolved.normal,
+    },
+  ))
   return concatSkinPieces(pieces) || drawSpan(fromResolved, toResolved)
 }
 
@@ -2668,10 +2632,7 @@ function drawPairSkinSegment(route, pair, override = null) {
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   return pairDrawnSkinPoints(a, b, records, rest, {
     preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder,
-    preferWrap: !teTemple && !earArc && !siArmShoulder && (
-      (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position))
-      || isShoulderAxillaWrap(a.position, b.position)
-    ),
+    preferWrap: pairPrefersWrap(fromCode, toCode, a.position, b.position),
     earArc,
     teTemple,
     siArmShoulder,
@@ -2722,7 +2683,7 @@ function restPathArrays(fromNode, toNode) {
       const ceiling = Math.max(a.position[2], b.position[2]) + 0.04
       return Boolean(mid) && mid[2] <= ceiling
     }
-    if (!isShoulderAxillaWrap(a.position, b.position)) return true
+    if (!isJianjingYuanyePair(fromCode, toCode) && !isShoulderAxillaWrap(a.position, b.position)) return true
     return !isDisorderedPolyline(cached, [a.position, b.position])
   }
   if (restPathCache.has(key) && usableCached(restPathCache.get(key))) {
@@ -3753,8 +3714,8 @@ function syncAppModeUI() {
     return
   }
   const dragHint = selectedSegmentReady()
-    ? '可拖黑點改走向 · 放開或按「重繪經脈」後沿皮膚重畫這一段'
-    : '點兩穴之間的經脈出現黑點（短段一顆，長段三顆），再拖到皮膚上的新位置'
+    ? '可拖黑點改走向 · 「增加／刪除定位點」調整中繼點 · 放開或按「重繪經脈」後沿皮膚重畫這一段'
+    : '點兩穴之間的經脈出現黑點（短段可為 0 顆，長段約每 40 mm 一顆），再拖到皮膚上的新位置'
   $('#stage-help').textContent = selectedCatalog
     ? `編輯 · 點皮膚定位 ${selectedCatalog.code} ${selectedCatalog.name} · ${dragHint}${midlineHint}`
     : `編輯 · 點兩穴之間的經脈出現黑點 · ${dragHint} · 拉錯按「回復上一步」`
@@ -4087,6 +4048,74 @@ function redrawSelectedSegment({ announce = true } = {}) {
     setStatus('已依定位點沿皮膚重繪這段經脈（可按「回復上一步」還原）')
     toast('已重繪這段經脈')
   }
+}
+
+function selectedPairEditContext() {
+  if (!selectedSegmentReady()) return null
+  const route = state.meridians.find((item) => item.id === selected.id)
+  if (!route || isRenDuMeridian(route.meridianId)) return null
+  const pair = acupointPairs(route).find((item) =>
+    item.fromPointId === selected.fromPointId && item.toPointId === selected.toPointId)
+  if (!pair) return null
+  const rest = restPathArrays(pair.fromNode, pair.toNode)
+  const count = visibleHandleCount(
+    polylineArcLength(rest),
+    shortSegmentReferenceArc(route.side),
+    pair.handles.length,
+  )
+  const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
+  return { route, pair, rest, records }
+}
+
+function commitPairHandles(route, pair, records, message) {
+  invalidatePairPathCache(pair.fromNode, pair.toNode)
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(restPathArrays(pair.fromNode, pair.toNode), left.position)
+    - closestTOnPolyline(restPathArrays(pair.fromNode, pair.toNode), right.position)
+  ))
+  const next = writePairHandles(route.id, pair.fromPointId, pair.toPointId, ordered)
+  state = history.commit(next)
+  persistState()
+  rebuildAnnotations()
+  updateUI()
+  setStatus(message)
+  toast(message)
+}
+
+function addLocatorToSelectedPair() {
+  if (appMode !== 'edit') return toast('檢視模式為唯讀，請切換編輯後再增加定位點', 'warn')
+  const ctx = selectedPairEditContext()
+  if (!ctx) return toast('請先點選兩個穴位之間的經脈', 'warn')
+  if (ctx.records.length >= MAX_PAIR_HANDLES) {
+    return toast(`這一段最多 ${MAX_PAIR_HANDLES} 個定位點`, 'warn')
+  }
+  const t = nextHandleInsertT(ctx.records, ctx.rest)
+  const placed = restPathAnchor(ctx.pair.fromNode, ctx.pair.toNode, ctx.rest, t)
+  const records = [
+    ...ctx.records,
+    {
+      type: 'control',
+      pointId: null,
+      position: [...placed.position],
+      normal: [...placed.normal],
+      style: 'along',
+    },
+  ]
+  commitPairHandles(ctx.route, ctx.pair, records, `已增加定位點（目前 ${records.length} 個）`)
+}
+
+function removeLocatorFromSelectedPair() {
+  if (appMode !== 'edit') return toast('檢視模式為唯讀，請切換編輯後再刪除定位點', 'warn')
+  const ctx = selectedPairEditContext()
+  if (!ctx) return toast('請先點選兩個穴位之間的經脈', 'warn')
+  if (!ctx.records.length) return toast('這一段沒有定位點可刪', 'warn')
+  const records = ctx.records.slice(0, -1)
+  commitPairHandles(
+    ctx.route,
+    ctx.pair,
+    records,
+    records.length ? `已刪除定位點（剩下 ${records.length} 個）` : '已刪除定位點，改走兩穴之間的測地線',
+  )
 }
 
 function placeAt(event) {
@@ -4884,6 +4913,8 @@ $('#lock-orbit').addEventListener('click', () => {
   syncAppModeUI()
 })
 $('#redraw-segment')?.addEventListener('click', () => redrawSelectedSegment())
+$('#add-locator')?.addEventListener('click', () => addLocatorToSelectedPair())
+$('#remove-locator')?.addEventListener('click', () => removeLocatorFromSelectedPair())
 
 function undoLastStep() {
   applyHistory(history.undo(), '已回復上一步')

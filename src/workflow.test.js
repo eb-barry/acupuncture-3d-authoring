@@ -23,6 +23,7 @@ import {
   orderRouteAcupointsForDrawing,
   placedPointSide,
   nextExpectedPoint,
+  nextHandleInsertT,
   orderedPlacedPointsForSide,
   pairControlPolyline,
   placementProgress,
@@ -267,18 +268,21 @@ describe('meridian authoring workflow', () => {
     expect(polylineSlice(line, 0.2, 0.5, 4).at(-1)).toEqual([5, 0, 0])
   })
 
-  it('gives long rest-path segments three locators against the LU3–LU4 reference', () => {
-    expect(segmentHandleCount(0.032, 0.033)).toBe(1)
-    expect(segmentHandleCount(0.178, 0.033)).toBe(3)
-    expect(segmentHandleCount(0.178, null)).toBe(3)
-    expect(segmentHandleCount(0.03, null)).toBe(1)
-    expect(visibleHandleCount(0.03, 0.033, 0)).toBe(1)
-    expect(visibleHandleCount(0.18, 0.033, 0)).toBe(3)
-    expect(visibleHandleCount(0.03, 0.033, 2)).toBe(2)
-    expect(visibleHandleCount(0.18, 0.033, 2)).toBe(3)
+  it('picks locator count from millimetres, not a LU3–LU4 reference arc', () => {
+    expect(segmentHandleCount(0.020, 0.033)).toBe(0)
+    expect(segmentHandleCount(0.024, null)).toBe(0)
+    expect(segmentHandleCount(0.034, null)).toBe(1)
+    expect(segmentHandleCount(0.041, null)).toBe(1)
+    expect(segmentHandleCount(0.082, null)).toBe(2)
+    expect(segmentHandleCount(0.178, null)).toBe(4)
+    expect(segmentHandleCount(0.25, null)).toBe(5)
+    expect(visibleHandleCount(0.02, 0.033, 0)).toBe(0)
+    expect(visibleHandleCount(0.178, 0.033, 0)).toBe(4)
+    expect(visibleHandleCount(0.02, 0.033, 3)).toBe(3)
+    expect(visibleHandleCount(0.178, 0.033, 3)).toBe(3)
   })
 
-  it('keeps up to three styled locators and fills default slots', () => {
+  it('keeps up to five styled locators and fills default slots', () => {
     const along = { type: 'control', style: 'along', position: [3, 0, 0] }
     const curve = { type: 'control', style: 'curve', position: [7, 0, 0] }
     const third = { type: 'control', style: 'along', position: [9, 0, 0] }
@@ -286,9 +290,11 @@ describe('meridian authoring workflow', () => {
     expect(keepPairHandles([{ type: 'control', position: [1, 0, 0] }, { type: 'control', position: [2, 0, 0] }]))
       .toEqual([])
     expect(keepPairHandles([along, curve, third]).map((node) => node.position[0])).toEqual([3, 7, 9])
+    expect(defaultHandleTs(0)).toEqual([])
     expect(defaultHandleTs(1)).toEqual([0.5])
     expect(defaultHandleTs(2)).toEqual([1 / 3, 2 / 3])
     expect(defaultHandleTs(3)).toEqual([0.25, 0.5, 0.75])
+    expect(defaultHandleTs(4)).toEqual([0.2, 0.4, 0.6, 0.8])
     expect(resolveHandleSlots([], 2, line)).toEqual([null, null])
     expect(resolveHandleSlots([along], 2, line)[0]).toBe(along)
     expect(resolveHandleSlots([along], 2, line)[1]).toBeNull()
@@ -298,9 +304,11 @@ describe('meridian authoring workflow', () => {
     expect(resolveHandleSlots([along], 3, line)[0]).toBe(along)
     expect(resolveHandleSlots([curve], 3, line)[2]).toBe(curve)
     expect(clampPairedHandleT(0.5, 0, 0.67, 2)).toBeCloseTo(0.5)
-    expect(clampPairedHandleT(0.8, 0, 0.67, 2)).toBeCloseTo(0.55)
-    expect(clampPairedHandleT(0.1, 1, 0.33, 2)).toBeCloseTo(0.45)
-    expect(clampPairedHandleT(0.9, 1, [0.25, 0.75], 3)).toBeCloseTo(0.63)
+    expect(clampPairedHandleT(0.8, 0, 0.67, 2)).toBeCloseTo(0.59)
+    expect(clampPairedHandleT(0.1, 1, 0.33, 2)).toBeCloseTo(0.41)
+    expect(clampPairedHandleT(0.9, 1, [0.25, 0.75], 3)).toBeCloseTo(0.67)
+    expect(nextHandleInsertT([], line)).toBeCloseTo(0.5)
+    expect(nextHandleInsertT([along], line)).toBeCloseTo(0.65)
   })
 
   it('samples a circular arc through three points and a straight chord', () => {
