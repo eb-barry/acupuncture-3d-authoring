@@ -35,6 +35,7 @@ import {
   isTeEarArcPair,
   isTeHeadPair,
   isTeTempleHandlePair,
+  pairKeepsOffPathLocators,
   isTeTempleRunPair,
   teEarCenter,
   teHeadArcPoints,
@@ -103,8 +104,10 @@ import {
 } from './geodesic.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
+  HANDLE_COMMIT_MIN_GAP,
   HANDLE_SKIN_SNAP_RADIUS,
   HANDLE_STRETCH_MAX_OFF_PATH,
+  TE_HEAD_HANDLE_MIN_GAP,
   HANDLE_STRETCH_PROJECT_RADIUS,
   HANDLE_PICK_RADIUS_PX,
   MAX_PAIR_HANDLES,
@@ -1353,7 +1356,7 @@ function handleSkinHit(event, drag) {
   const route = state.meridians.find((item) => item.id === drag.routeId)
   const pair = route && acupointPairs(route).find((item) =>
     item.fromPointId === drag.fromPointId && item.toPointId === drag.toPointId)
-  const skipLimbGap = Boolean(pair && isSiXiaohaiJianzhenPair(
+  const skipLimbGap = Boolean(pair && pairKeepsOffPathLocators(
     routeNodeCode(pair.fromNode),
     routeNodeCode(pair.toNode),
   ))
@@ -2212,7 +2215,9 @@ function densifyHeadSkin(points, sideX, depth = 0) {
   return out
 }
 
-function snapTeHeadSamplesToSkin(samples, a, b, fromCode = '', toCode = '') {
+function snapTeHeadSamplesToSkin(samples, a, b, fromCode = '', toCode = '', {
+  followLocators = false,
+} = {}) {
   const sideX = (a.position[0] + b.position[0]) / 2
   const temple = isTeTempleRunPair(fromCode, toCode)
   const center = teEarCenter(a.position, b.position)
@@ -2230,7 +2235,7 @@ function snapTeHeadSamplesToSkin(samples, a, b, fromCode = '', toCode = '') {
     const sample = samples[index]
     const slerp = slerpUnitVectors(a.normal, b.normal, t)
     let guide = slerp
-    if (!temple) {
+    if (!temple && !followLocators) {
       const radial = [
         sample[0] - center[0],
         sample[1] - center[1],
@@ -2246,9 +2251,13 @@ function snapTeHeadSamplesToSkin(samples, a, b, fromCode = '', toCode = '') {
       }
     }
     const origin = new THREE.Vector3(...sample)
-    const hit = projectFromOutside(origin, guide, temple ? 0.022 : 0.016)
-      || closestSkinHit(sample, { maxDistance: temple ? 0.09 : 0.06, sideX, guideNormal: guide })
-      || projectFromOutside(origin, slerp, 0.04)
+    const hit = projectFromOutside(origin, guide, followLocators ? 0.028 : (temple ? 0.022 : 0.016))
+      || closestSkinHit(sample, {
+        maxDistance: followLocators ? 0.12 : (temple ? 0.09 : 0.06),
+        sideX,
+        guideNormal: guide,
+      })
+      || projectFromOutside(origin, slerp, followLocators ? 0.06 : 0.04)
     accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
@@ -2256,7 +2265,7 @@ function snapTeHeadSamplesToSkin(samples, a, b, fromCode = '', toCode = '') {
   return densifyHeadSkin(points, sideX)
 }
 
-function tautTeHeadOnSkin(points, a, b) {
+function tautTeHeadOnSkin(points, a, b, { followLocators = false } = {}) {
   if (!points || points.length < 4) return points
   const arrays = arraysFromSkin(points)
   const sideX = (a.position[0] + b.position[0]) / 2
@@ -2264,14 +2273,18 @@ function tautTeHeadOnSkin(points, a, b) {
     slerpUnitVectors(a.normal, b.normal, index / Math.max(1, arrays.length - 1))
   ))
   const taut = tautOnSurfacePolyline(arrays, normals, {
-    iterations: 18,
-    strength: 0.72,
-    maxStep: 0.0028,
+    iterations: followLocators ? 8 : 18,
+    strength: followLocators ? 0.4 : 0.72,
+    maxStep: followLocators ? 0.002 : 0.0028,
     corridor: arrays,
-    corridorRadius: 0.016,
+    corridorRadius: followLocators ? 0.045 : 0.016,
     minNormalDot: 0.05,
     project: (point, normal) => {
-      const hit = closestSkinHit(point, { maxDistance: 0.016, sideX, guideNormal: normal })
+      const hit = closestSkinHit(point, {
+        maxDistance: followLocators ? 0.028 : 0.016,
+        sideX,
+        guideNormal: normal,
+      })
       return hit && sameHeadSideHit(hit, sideX)
         ? { position: hit.position, normal: hit.normal }
         : null
@@ -2285,15 +2298,20 @@ function tautTeHeadOnSkin(points, a, b) {
   ))
 }
 
-function snapTeHeadArcToSkin(a, b, fromCode, toCode, records = []) {
-  const samples = records.length
+function snapTeHeadArcToSkin(a, b, fromCode, toCode, records = [], rest = []) {
+  const path = rest.length >= 2 ? rest : [a.position, b.position]
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
+  ))
+  const followLocators = ordered.length > 0
+  const samples = followLocators
     ? catmullRomThrough(
-      [a.position, ...records.map((record) => record.position), b.position],
+      [a.position, ...ordered.map((record) => record.position), b.position],
       16,
     )
     : teHeadArcPoints(fromCode, toCode, a.position, b.position)
-  const snapped = snapTeHeadSamplesToSkin(samples, a, b, fromCode, toCode)
-  if (snapped?.length >= 4) return tautTeHeadOnSkin(snapped, a, b)
+  const snapped = snapTeHeadSamplesToSkin(samples, a, b, fromCode, toCode, { followLocators })
+  if (snapped?.length >= 4) return tautTeHeadOnSkin(snapped, a, b, { followLocators })
   return snapped
 }
 
@@ -2306,7 +2324,7 @@ function snapTeTempleCurveToSkin(a, b, records, rest = []) {
   const ordered = [...records].sort((left, right) => (
     closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
   ))
-  return snapTeHeadArcToSkin(a, b, 'TE22', 'TE23', ordered)
+  return snapTeHeadArcToSkin(a, b, 'TE22', 'TE23', ordered, rest)
 }
 
 function snapSiArmShoulderToSkin(a, b, records = [], rest = []) {
@@ -2632,15 +2650,22 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
   })
   const teHead = isTeHeadPair(fromCode, toCode)
   if (teHead) {
-    const curved = records.length
-      ? snapTeHeadArcToSkin(fromResolved, toResolved, fromCode, toCode, keepLocatorsOnPairLimb(
+    const usable = keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
+    if (usable.length) {
+      const curved = snapTeHeadArcToSkin(
         fromResolved,
         toResolved,
-        records,
+        fromCode,
+        toCode,
+        usable,
         restArrays,
+      )
+      if (curved?.length >= 3) return curved
+      return vectorsFromArrays(catmullRomThrough(
+        [fromResolved.position, ...usable.map((record) => record.position), toResolved.position],
+        16,
       ))
-      : null
-    if (curved?.length >= 3) return curved
+    }
     const arced = snapTeHeadArcToSkin(fromResolved, toResolved, fromCode, toCode)
     if (arced?.length >= 3) return arced
   }
@@ -2657,7 +2682,7 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
       ? vectorsFromArrays(restArrays)
       : drawSpan(fromResolved, toResolved)
   }
-  const usable = (siArmShoulder
+  const usable = (siArmShoulder || teHead
     ? keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
     : keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays))
   const spans = locatorSpans(restArrays, fromResolved, toResolved, usable)
@@ -2850,8 +2875,8 @@ function restPathAnchor(fromNode, toNode, rest, t) {
 function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(fromNode, toNode)) {
   const from = resolvedNode(fromNode)
   const to = resolvedNode(toNode)
-  const siPair = isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))
-  if (handle?.position && (siPair || locatorOnPairLimb(from, to, handle, rest))) {
+  const trustsLocators = pairKeepsOffPathLocators(routeNodeCode(fromNode), routeNodeCode(toNode))
+  if (handle?.position && (trustsLocators || locatorOnPairLimb(from, to, handle, rest))) {
     return snapHandleToSkin({ position: handle.position, normal: handle.normal }, fromNode, toNode)
   }
   const t = 0.5
@@ -2859,7 +2884,7 @@ function segmentHandlePosition(fromNode, toNode, handle, rest = restPathArrays(f
 }
 
 function pairWaypoints(fromNode, toNode, handles, count, rest) {
-  const ignoreMirror = isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))
+  const ignoreMirror = pairKeepsOffPathLocators(routeNodeCode(fromNode), routeNodeCode(toNode))
   const slots = resolveHandleSlots(
     keepLocatorsOnPairLimb(
       resolvedNode(fromNode),
@@ -2880,7 +2905,7 @@ function pairWaypoints(fromNode, toNode, handles, count, rest) {
 function pairHandleRecords(fromNode, toNode, handles, count, rest) {
   const from = resolvedNode(fromNode)
   const to = resolvedNode(toNode)
-  const ignoreMirror = isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))
+  const ignoreMirror = pairKeepsOffPathLocators(routeNodeCode(fromNode), routeNodeCode(toNode))
   const slots = resolveHandleSlots(
     keepLocatorsOnPairLimb(from, to, handles, ignoreMirror ? [] : rest),
     count,
@@ -3976,8 +4001,10 @@ function placeAcupoint(hit) {
 function replacePairHandles(nodes, fromPointId, toPointId, controls) {
   const fromIndex = nodes.findIndex((node) => node.type === 'acupoint' && node.pointId === fromPointId)
   const toIndex = nodes.findIndex((node) => node.type === 'acupoint' && node.pointId === toPointId)
-  if (fromIndex < 0 || toIndex <= fromIndex) return nodes
-  return [...nodes.slice(0, fromIndex + 1), ...controls, ...nodes.slice(toIndex)]
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return nodes
+  const lo = Math.min(fromIndex, toIndex)
+  const hi = Math.max(fromIndex, toIndex)
+  return [...nodes.slice(0, lo + 1), ...controls, ...nodes.slice(hi)]
 }
 
 function writePairHandles(routeId, fromPointId, toPointId, controls) {
@@ -4016,11 +4043,14 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
     pair.handles.length,
   )
   const records = pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
-  const index = Math.min(Math.max(0, handleIndex), records.length - 1)
-  const siPair = isSiXiaohaiJianzhenPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
-  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH, { skipLimbGap: siPair })) {
+  const index = Math.min(Math.max(0, handleIndex), Math.max(0, records.length - 1))
+  const fromCode = routeNodeCode(pair.fromNode)
+  const toCode = routeNodeCode(pair.toNode)
+  const trustsLocators = pairKeepsOffPathLocators(fromCode, toCode)
+  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH, { skipLimbGap: trustsLocators })) {
     return state
   }
+  const minGap = isTeHeadPair(fromCode, toCode) ? TE_HEAD_HANDLE_MIN_GAP : HANDLE_COMMIT_MIN_GAP
   const tooClose = records.some((record, cursor) => {
     if (cursor === index) return false
     const gap = Math.hypot(
@@ -4028,19 +4058,30 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
       hit.position[1] - record.position[1],
       hit.position[2] - record.position[2],
     )
-    return gap < 0.01
+    return gap < minGap
   })
   if (tooClose) return state
-  const placed = siPair
+  const placed = isSiXiaohaiJianzhenPair(fromCode, toCode)
     ? snapSiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
     : hit
-  records[index] = {
-    type: 'control',
-    pointId: null,
-    position: [...placed.position],
-    normal: [...placed.normal],
-    style: 'along',
+  if (!records.length) {
+    records.push({
+      type: 'control',
+      pointId: null,
+      position: [...placed.position],
+      normal: [...placed.normal],
+      style: 'along',
+    })
+  } else {
+    records[index] = {
+      type: 'control',
+      pointId: null,
+      position: [...placed.position],
+      normal: [...placed.normal],
+      style: 'along',
+    }
   }
+  invalidatePairPathCache(pair.fromNode, pair.toNode)
   return writePairHandles(routeId, fromPointId, toPointId, records)
 }
 

@@ -1,6 +1,5 @@
 import Ajv from 'ajv'
 import { keepPairHandles, HANDLE_STYLES } from './workflow.js'
-import { isTeEarArcPair } from './skinPath.js'
 
 export const BODY_MODELS = {
   male: {
@@ -168,9 +167,8 @@ export function parseDocument(text) {
   return { ...result, value: result.valid ? migrated : undefined }
 }
 
-function migrateRouteNodes(nodes = [], acupoints = []) {
+function migrateRouteNodes(nodes = []) {
   const list = nodes || []
-  const codeById = new Map((acupoints || []).map((point) => [point.id, point.code]))
   const acupointIndexes = list
     .map((node, index) => (node.type === 'acupoint' ? index : -1))
     .filter((index) => index >= 0)
@@ -181,9 +179,6 @@ function migrateRouteNodes(nodes = [], acupoints = []) {
     if (pair >= acupointIndexes.length - 1) break
     const fromIndex = acupointIndexes[pair]
     const toIndex = acupointIndexes[pair + 1]
-    const fromCode = codeById.get(list[fromIndex]?.pointId)
-    const toCode = codeById.get(list[toIndex]?.pointId)
-    if (isTeEarArcPair(fromCode, toCode)) continue
     const controls = list.slice(fromIndex + 1, toIndex).filter((node) => node.type === 'control')
     result.push(...keepPairHandles(controls).map(sanitizeRouteNode))
   }
@@ -262,7 +257,7 @@ export function migrateDocument(value) {
       },
       meridians: (value.meridians || []).map((route) => ({
         ...route,
-        nodes: migrateRouteNodes(route.nodes, value.acupoints),
+        nodes: migrateRouteNodes(route.nodes),
       })),
     }
   }

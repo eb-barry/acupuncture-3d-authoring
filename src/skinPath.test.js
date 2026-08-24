@@ -16,6 +16,7 @@ import {
   isTeHelixPair,
   isTeTempleHandlePair,
   isTeTempleRunPair,
+  pairKeepsOffPathLocators,
   teEarCircumferenceArc,
   teHeadArcPoints,
   teTempleArcPoints,
@@ -316,6 +317,11 @@ describe('skin path wrapping', () => {
     expect(isSiXiaohaiJianzhenPair('SI9', 'SI8')).toBe(true)
     expect(isSiXiaohaiJianzhenPair('SI7', 'SI8')).toBe(false)
     expect(isSiXiaohaiJianzhenPair('TE14', 'TE13')).toBe(false)
+    expect(pairKeepsOffPathLocators('SI8', 'SI9')).toBe(true)
+    expect(pairKeepsOffPathLocators('TE18', 'TE19')).toBe(true)
+    expect(pairKeepsOffPathLocators('TE21', 'TE22')).toBe(true)
+    expect(pairKeepsOffPathLocators('TE16', 'TE17')).toBe(false)
+    expect(pairKeepsOffPathLocators('LU2', 'LU3')).toBe(false)
     const xiaohai = [0.32, 1.02, -0.04]
     const jianzhen = [0.18, 1.32, -0.08]
     const guide = siArmShoulderWrapGuide([0.25, 1.17, -0.06], 0.25)

@@ -260,7 +260,7 @@ describe('acupuncture document schema', () => {
     expect(validateDocument(result.value).valid).toBe(true)
   })
 
-  it('drops 翳風–耳門 consecutive locators that the retired ear-arc drawer used', () => {
+  it('keeps authored 翳風–耳門 locators so ear edits survive import', () => {
     const document = {
       ...emptyDocument(),
       meridians: [{
@@ -324,6 +324,6 @@ describe('acupuncture document schema', () => {
     const result = parseDocument(JSON.stringify(document))
     expect(result.valid).toBe(true)
     expect(result.value.meridians[0].nodes.map((node) => node.pointId || 'control'))
-      .toEqual(['te20', 'te21', 'control', 'te22'])
+      .toEqual(['te20', 'control', 'control', 'te21', 'control', 'te22'])
   })
 })
