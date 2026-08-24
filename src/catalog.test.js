@@ -6,6 +6,8 @@ import {
   isOmittedSurfaceSpan,
   isRenDuCodePair,
   meridianLineColor,
+  acupointMarkerColor,
+  YANG_ACUPOINT_COLOR,
   pointsForMeridian,
 } from './catalog.js'
 
@@ -67,5 +69,12 @@ describe('authorized acupuncture catalog', () => {
     expect(meridianLineColor('GV')).toBe('#3b82f6')
     expect(meridianLineColor('LU')).toBe('#22c55e')
     expect(meridianLineColor('LI')).toBe('#ef4444')
+    expect(acupointMarkerColor('LI')).toBe(YANG_ACUPOINT_COLOR)
+    expect(acupointMarkerColor('ST')).toBe('#111111')
+    expect(acupointMarkerColor('TE', '#ef4444')).toBe('#111111')
+    expect(acupointMarkerColor('LU')).toBe('#ef4444')
+    expect(acupointMarkerColor('LU', '#22c55e')).toBe('#22c55e')
+    expect(acupointMarkerColor('CV', '#3b82f6')).toBe('#3b82f6')
+    expect(acupointMarkerColor('GV')).toBe('#ef4444')
   })
 })

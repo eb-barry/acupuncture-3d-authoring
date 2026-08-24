@@ -24,9 +24,19 @@ export const MERIDIAN_LINE_COLORS = {
   yang: '#ef4444',
 }
 
+/** Yang lines are red; their acupoints are black so the two stay distinct. */
+export const YANG_ACUPOINT_COLOR = '#111111'
+
 export function meridianLineColor(meridianId) {
   const meridian = meridianById(meridianId)
   return MERIDIAN_LINE_COLORS[meridian?.group] || MERIDIAN_LINE_COLORS.yang
+}
+
+/** Display / stored color for a placed acupoint. Yang meridians always use black. */
+export function acupointMarkerColor(meridianId, fallback = '#ef4444') {
+  const meridian = meridianById(meridianId)
+  if (meridian?.group === 'yang') return YANG_ACUPOINT_COLOR
+  return fallback || '#ef4444'
 }
 
 const meridianByName = new Map(MERIDIANS.map((item) => [item.name, item]))
