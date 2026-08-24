@@ -163,18 +163,37 @@ export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   return dropY > 0.1 && Math.abs(meanX) > 0.09 && meanZ > -0.035
 }
 
+/** 肩井 GB21 ↔ 淵腋 GB22 only. A* through the armpit crease freezes the tab. */
+export function isJianjingYuanyePair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('GB21') && codes.has('GB22')
+}
+
 /**
- * 肩井→淵腋 lives in the upper torso. A* through the armpit crease
- * freezes the tab; wrap the chord onto the front skin instead.
- * 陰谷→橫骨 is lower on the thigh and must keep the geodesic.
+ * Geometry fallback for 肩井→淵腋 when codes are missing.
+ * Upper-torso, moderate laterality, descending. Must not match 雲門→天府
+ * (more lateral, lower) or 食竇→腹哀 (ribs, lower still).
  */
 export function isShoulderAxillaWrap(from = [0, 0, 0], to = [0, 0, 0]) {
-  if (!shouldFrontWrap(from, to)) return false
   const minY = Math.min(Number(from[1]) || 0, Number(to[1]) || 0)
   const maxY = Math.max(Number(from[1]) || 0, Number(to[1]) || 0)
   const dropY = Math.abs((Number(from[1]) || 0) - (Number(to[1]) || 0))
   const meanX = ((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2
-  return minY > 0.88 && maxY > 1.08 && dropY > 0.04 && Math.abs(meanX) > 0.07
+  return minY > 1.20 && maxY > 1.47 && dropY > 0.12
+    && Math.abs(meanX) > 0.07 && Math.abs(meanX) < 0.20
+}
+
+/**
+ * Pairs that must wrap instead of trying a geodesic first.
+ * 肩井→淵腋 is code-gated; geometry is only a fallback.
+ */
+export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+  if (isTeTempleHandlePair(fromCode, toCode) || isSiXiaohaiJianzhenPair(fromCode, toCode)) {
+    return false
+  }
+  if (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(from, to)) return true
+  if (isJianjingYuanyePair(fromCode, toCode) || isShoulderAxillaWrap(from, to)) return true
+  return false
 }
 
 /**

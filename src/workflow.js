@@ -129,40 +129,71 @@ export const FALLBACK_SHORT_SEGMENT_ARC = 0.034
 export const DEFAULT_SINGLE_HANDLE_T = 0.5
 export const DEFAULT_PAIR_HANDLE_TS = [1 / 3, 2 / 3]
 export const DEFAULT_TRIPLE_HANDLE_TS = [0.25, 0.5, 0.75]
-export const MAX_PAIR_HANDLES = 3
-export const MIN_HANDLE_GAP = 0.12
+export const MAX_PAIR_HANDLES = 5
+/** World-unit thresholds (male body ~1.79 tall ≈ 1 mm per 0.001 world). */
+export const HANDLE_MIN_ARC = 0.0255
+export const HANDLE_SPACING = 0.0409
+export const MIN_HANDLE_GAP = 0.08
 export const HANDLE_END_MARGIN = 0.1
 
 export function isStyledHandle(node) {
   return node?.type === 'control' && HANDLE_STYLES.includes(node.style)
 }
 
-/** Keep 1–3 styled handles; drop unstyled legacy piles. */
+/** Keep 1–5 styled handles; drop unstyled legacy piles. */
 export function keepPairHandles(controls = []) {
   return (controls || []).filter(isStyledHandle).slice(0, MAX_PAIR_HANDLES)
 }
 
 export function defaultHandleTs(count) {
-  if (count >= 3) return [...DEFAULT_TRIPLE_HANDLE_TS]
-  if (count === 2) return [...DEFAULT_PAIR_HANDLE_TS]
-  return [DEFAULT_SINGLE_HANDLE_T]
+  const slots = Math.max(0, Math.floor(Number(count) || 0))
+  if (slots <= 0) return []
+  if (slots === 1) return [DEFAULT_SINGLE_HANDLE_T]
+  if (slots === 2) return [...DEFAULT_PAIR_HANDLE_TS]
+  if (slots === 3) return [...DEFAULT_TRIPLE_HANDLE_TS]
+  return Array.from({ length: slots }, (_, index) => (index + 1) / (slots + 1))
 }
 
-/** Long rest paths get three black locators; short ones get one. */
-export function segmentHandleCount(restArcLength, referenceArcLength) {
+/**
+ * Adaptive locator count from rest-path millimetres: 0 below 25 mm,
+ * then about one per 40 mm, capped at 5.
+ */
+export function segmentHandleCount(restArcLength, _referenceArcLength) {
   const rest = Number(restArcLength)
-  if (!Number.isFinite(rest) || rest <= 0) return 1
-  const reference = Number.isFinite(referenceArcLength) && referenceArcLength > 1e-4
-    ? referenceArcLength
-    : FALLBACK_SHORT_SEGMENT_ARC
-  return rest > reference ? MAX_PAIR_HANDLES : 1
+  if (!Number.isFinite(rest) || rest < HANDLE_MIN_ARC) return 0
+  return Math.min(MAX_PAIR_HANDLES, Math.max(1, Math.round(rest / HANDLE_SPACING)))
 }
 
-/** Rest-path length wins; already-saved handles are never hidden. */
+/**
+ * Saved locators win so a short ear pair is not force-filled, and a long
+ * pair the user already thinned is not auto-upgraded. Empty pairs use the
+ * adaptive default (including 0).
+ */
 export function visibleHandleCount(restArcLength, referenceArcLength, storedCount = 0) {
-  const byLength = segmentHandleCount(restArcLength, referenceArcLength)
   const stored = Math.min(MAX_PAIR_HANDLES, Math.max(0, Number(storedCount) || 0))
-  return Math.min(MAX_PAIR_HANDLES, Math.max(byLength, stored))
+  if (stored > 0) return stored
+  return segmentHandleCount(restArcLength, referenceArcLength)
+}
+
+/** t along `rest` where a new locator should sit (largest remaining gap). */
+export function nextHandleInsertT(handles = [], rest = []) {
+  const stored = keepPairHandles(handles)
+  if (!Array.isArray(rest) || rest.length < 2) return DEFAULT_SINGLE_HANDLE_T
+  const ts = stored
+    .map((handle) => closestTOnPolyline(rest, handle.position))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b)
+  const bounds = [0, ...ts, 1]
+  let bestT = DEFAULT_SINGLE_HANDLE_T
+  let bestGap = -1
+  for (let index = 0; index < bounds.length - 1; index += 1) {
+    const gap = bounds[index + 1] - bounds[index]
+    if (gap > bestGap) {
+      bestGap = gap
+      bestT = (bounds[index] + bounds[index + 1]) / 2
+    }
+  }
+  return clampHandleT(bestT)
 }
 
 /**
@@ -248,7 +279,7 @@ export function primaryBendStyle(handles = []) {
   return null
 }
 
-/** Reinsert up to three styled controls between surviving acupoint pairs. */
+/** Reinsert up to five styled controls between surviving acupoint pairs. */
 export function mergeControlsIntoRoute(previousNodes, nextAcupointNodes) {
   if (!nextAcupointNodes.length) return []
   if (!previousNodes?.length) return [...nextAcupointNodes]

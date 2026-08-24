@@ -309,6 +309,91 @@ export function geodesicIsStable(points = [], {
   return polylineTurningEnergy(arrays) <= Math.max(2.8, arrays.length * maxTurningPerPoint)
 }
 
+/** Interior vertices farther than this from the local chord count as spikes (~1.5 mm). */
+export const CHORD_SPIKE_THRESHOLD = 0.0015
+
+function asPoint3(point) {
+  if (!point) return [0, 0, 0]
+  if (point.isVector3) return [point.x, point.y, point.z]
+  return [Number(point[0]) || 0, Number(point[1]) || 0, Number(point[2]) || 0]
+}
+
+/** Distance from `points[index]` to the chord of its neighbours. */
+export function localChordDeviation(points = [], index = 0) {
+  if (index <= 0 || index >= points.length - 1) return 0
+  return distanceToSegment3(asPoint3(points[index]), asPoint3(points[index - 1]), asPoint3(points[index + 1]))
+}
+
+/** Count sharp ⊐ / V spikes that leave the local chord. Smooth arcs are not counted. */
+export function countChordSpikes(points = [], threshold = CHORD_SPIKE_THRESHOLD) {
+  const arrays = (points || []).map(asPoint3)
+  const limit = Number(threshold)
+  if (!Number.isFinite(limit) || arrays.length < 3) return 0
+  let count = 0
+  for (let index = 1; index < arrays.length - 1; index += 1) {
+    if (isSharpChordSpike(arrays, index, limit)) count += 1
+  }
+  return count
+}
+
+export function maxPolylineStep(points = []) {
+  const arrays = (points || []).map(asPoint3)
+  let max = 0
+  for (let index = 1; index < arrays.length; index += 1) {
+    const span = dist3(arrays[index - 1], arrays[index])
+    if (span > max) max = span
+  }
+  return max
+}
+
+function isSharpChordSpike(arrays, index, threshold) {
+  const prev = arrays[index - 1]
+  const curr = arrays[index]
+  const next = arrays[index + 1]
+  if (distanceToSegment3(curr, prev, next) <= threshold) return false
+  const toCurr = [curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2]]
+  const toNext = [next[0] - curr[0], next[1] - curr[1], next[2] - curr[2]]
+  const len1 = Math.hypot(toCurr[0], toCurr[1], toCurr[2])
+  const len2 = Math.hypot(toNext[0], toNext[1], toNext[2])
+  if (len1 < 1e-8 || len2 < 1e-8) return false
+  const dot = (toCurr[0] * toNext[0] + toCurr[1] * toNext[1] + toCurr[2] * toNext[2]) / (len1 * len2)
+  return dot < 0.2
+}
+
+/**
+ * Drop interior vertices that make a sharp spike off the local chord.
+ * Smooth high-curvature arcs (ear root, finger pad) stay intact.
+ */
+export function collapseSharpChordSpikes(points = [], normals = [], threshold = CHORD_SPIKE_THRESHOLD) {
+  const fallback = [0, 1, 0]
+  const limit = Number.isFinite(Number(threshold)) ? Number(threshold) : CHORD_SPIKE_THRESHOLD
+  let currentPoints = (points || []).map(asPoint3)
+  let currentNormals = currentPoints.map((_, index) => [...(normals[index] || fallback)])
+  if (currentPoints.length < 4) {
+    return { points: currentPoints, normals: currentNormals }
+  }
+  for (let pass = 0; pass < 4; pass += 1) {
+    const nextPoints = [currentPoints[0]]
+    const nextNormals = [currentNormals[0]]
+    let dropped = false
+    for (let index = 1; index < currentPoints.length - 1; index += 1) {
+      const probe = [...nextPoints.slice(-1), currentPoints[index], currentPoints[index + 1]]
+      if (isSharpChordSpike(probe, 1, limit)) {
+        dropped = true
+        continue
+      }
+      nextPoints.push(currentPoints[index])
+      nextNormals.push(currentNormals[index])
+    }
+    nextPoints.push(currentPoints[currentPoints.length - 1])
+    nextNormals.push(currentNormals[currentNormals.length - 1])
+    currentPoints = nextPoints
+    currentNormals = nextNormals
+    if (!dropped) break
+  }
+  return { points: currentPoints, normals: currentNormals }
+}
+
 export function distanceToSegment3(point, a, b) {
   const span = dist3(a, b)
   if (span < 1e-12) return dist3(point, a)
