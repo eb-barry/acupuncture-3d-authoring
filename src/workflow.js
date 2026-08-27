@@ -497,27 +497,29 @@ export const HANDLE_PROJECT_RADIUS = HANDLE_STRETCH_PROJECT_RADIUS
  * Opposite-limb mirroring is for arms/legs. Head rest paths sit near x=0,
  * so the mirrored ear/temple is close enough to steal a same-side locator.
  */
-export function restPathUsesLimbMirrorGuard(rest = []) {
+export function restPathUsesLimbMirrorGuard(rest = [], worldScale = 1) {
   if (!Array.isArray(rest) || rest.length < 2) return false
+  const scale = Number(worldScale) > 0 ? Number(worldScale) : 1
   let sum = 0
   for (const point of rest) sum += Math.abs(Number(point?.[0]) || 0)
-  return sum / rest.length >= LIMB_GAP_MIN_ABS_X
+  return sum / rest.length >= LIMB_GAP_MIN_ABS_X * scale
 }
 
 /** How far a probe may leave the rest path on this segment. */
-export function limbGapMaxOffPath(restX, maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH) {
+export function limbGapMaxOffPath(restX, maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH, worldScale = 1) {
   const cap = Number.isFinite(Number(maxOffPath)) ? Number(maxOffPath) : HANDLE_STRETCH_MAX_OFF_PATH
-  if (!Number.isFinite(Number(restX)) || Math.abs(restX) < LIMB_GAP_MIN_ABS_X) return cap
+  const scale = Number(worldScale) > 0 ? Number(worldScale) : 1
+  if (!Number.isFinite(Number(restX)) || Math.abs(restX) < LIMB_GAP_MIN_ABS_X * scale) return cap
   const sep = Math.abs(restX) * 2
-  return Math.min(cap, Math.max(0.05, sep * 0.42))
+  return Math.min(cap, Math.max(0.05 * scale, sep * 0.42))
 }
 
-export function isCloserToMirroredPolyline(points = [], probe = [0, 0, 0]) {
+export function isCloserToMirroredPolyline(points = [], probe = [0, 0, 0], margin = 0.03) {
   if (!points.length) return false
   const mirrored = points.map((point) => [-point[0], point[1], point[2]])
   const offThis = distanceToPolyline(points, probe)
   const offMirror = distanceToPolyline(mirrored, probe)
-  return offMirror + 0.03 < offThis
+  return offMirror + margin < offThis
 }
 
 /** Allow sideways stretch on the same limb; reject the opposite leg/torso. */
@@ -528,22 +530,25 @@ export function isProbeOnSameLimbSegment(
   options = {},
 ) {
   if (!rest.length || !probe) return false
+  const scale = Number(options.worldScale) > 0 ? Number(options.worldScale) : 1
   const ys = rest.map((point) => point[1])
-  const yMin = Math.min(...ys) - 0.22
-  const yMax = Math.max(...ys) + 0.22
+  const yMin = Math.min(...ys) - 0.22 * scale
+  const yMax = Math.max(...ys) + 0.22 * scale
   if (probe[1] < yMin || probe[1] > yMax) return false
-  if (restPathUsesLimbMirrorGuard(rest) && isCloserToMirroredPolyline(rest, probe)) return false
+  if (restPathUsesLimbMirrorGuard(rest, scale) && isCloserToMirroredPolyline(rest, probe, 0.03 * scale)) {
+    return false
+  }
   const closest = pointAtPolylineT(rest, closestTOnPolyline(rest, probe))
   const off = dist3(probe, closest)
   if (off > maxOffPath) return false
   const restX = closest[0]
   const probeX = probe[0]
-  if (Math.abs(restX) > 0.035 && restX * probeX < 0) return false
+  if (Math.abs(restX) > 0.035 * scale && restX * probeX < 0) return false
   // Near the groin the other thigh is close; don't collapse into the inter-leg gap.
   // Skip that cap on the head/torso so temple locators can sit on skin.
   // 小海–肩貞 also skips it so locators can leave the arm rest path sideways.
   if (options?.skipLimbGap) return true
-  return off <= limbGapMaxOffPath(restX, maxOffPath)
+  return off <= limbGapMaxOffPath(restX, maxOffPath, scale)
 }
 
 /** Slice a polyline between two normalized arc-length values. */
