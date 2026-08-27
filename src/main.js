@@ -4749,7 +4749,7 @@ async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
   try {
     $('#model-status').textContent = `正在載入${preset.label}模型…`
     const modelUrl = new URL(`../models/${preset.fileName}`, import.meta.url)
-    modelUrl.searchParams.set('v', 'body-1')
+    modelUrl.searchParams.set('v', 'body-2')
     const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
       if (event.total) {
         $('#model-status').textContent = `正在載入${preset.label}模型 ${Math.round(event.loaded / event.total * 100)}%`

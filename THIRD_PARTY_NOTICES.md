@@ -11,20 +11,23 @@
 
 ## Female body model (`female-character.glb`)
 
+- Title: [`Female`](https://sketchfab.com/3d-models/female-15ee49542e3d4cc3aa9dec99ea3f46be)
+- Creator: [yuzutarou](https://sketchfab.com/yuzuponponpon)
+- License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/female-character.glb`
-- SHA-256: `0bceb4684f2f27b2571f6cbd2f39dae67dc00d1469433e369e7fccee66e12061`
-- Source: provided by the project owner for acupuncture authoring
-- Notes: repaired from an open multi-shell export that had visible cracks at the
-  wrist, neck/shoulders, hip, and ankle plus lumpy toe caps. Duplicate vertices
-  were welded, mismatched borders snapped, remaining holes filled, and
-  surface-preserving / Taubin smoothing applied on filled patches and the
-  forefoot only. An additional weighted Taubin pass flattens the jaw/neck ridge
-  left by welding the front/back head shells. The repaired mesh is a single
-  watertight manifold component with full-precision float32 vertex normals
-  exported in the GLB (matched to the original authoring normals where vertices
-  coincide) so studio lighting stays smoothly shaded instead of faceted.
-  Overall silhouette is unchanged (extent delta < 3e-4; sampled surface
-  deviation p99 ≈ 0.003). Reproducible via `scripts/repair_female_character_glb.py`.
+- SHA-256: `07a207b8310e99d3a366c669fdeccc5d00f49af9a3f1137048f9fcffa8d869e9`
+- Notes: the Sketchfab GLB is a single body split into 47 unindexed chunks
+  (~3.07M triangle corners, ~82MB) because of the 16-bit vertex limit. This
+  project welds bitwise-identical positions into one indexed watertight
+  manifold (511,021 vertices, 1,022,030 triangles, ~24MB) so acupuncture
+  geodesics and skin projection can share real mesh edges. Triangle count and
+  vertex positions are unchanged. Normals stay full-precision float32 (values
+  at a shared position are averaged, then renormalized). No mesh simplification,
+  Draco, Meshopt, or KHR_mesh_quantization — the same constraint as
+  `male_character.glb`, which avoids spiral shading artifacts under studio
+  lighting. Reproducible via `scripts/compress_female_character_glb.py`.
+  The earlier seam-repair script `scripts/repair_female_character_glb.py`
+  applied only to the previous 7.2MB female mesh and is not used on this asset.
 
 ## Alternate body model (`human_glb`)
 
