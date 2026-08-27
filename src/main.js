@@ -17,6 +17,7 @@ import {
   validateDocument,
 } from './document.js'
 import { bindDocumentToBody, mapDocumentAnnotations, scalePosition } from './retarget.js'
+import { handleLimitsForBody } from './handleLimits.js'
 import {
   IDLE_SHADOW_MAP_SIZE,
   ORBIT_SHADOW_MAP_SIZE,
@@ -95,7 +96,6 @@ import {
   smoothPathNormals,
   tangentWindow,
   worldPerMillimetre,
-  REFERENCE_BODY_HEIGHT_M,
 } from './skinRibbon.js'
 import {
   buildCombinedSurfaceGraph,
@@ -112,11 +112,7 @@ import {
 } from './geodesic.js'
 import {
   FALLBACK_SHORT_SEGMENT_ARC,
-  HANDLE_COMMIT_MIN_GAP,
   HANDLE_SKIN_SNAP_RADIUS,
-  HANDLE_STRETCH_MAX_OFF_PATH,
-  TE_HEAD_HANDLE_MIN_GAP,
-  HANDLE_STRETCH_PROJECT_RADIUS,
   HANDLE_PICK_RADIUS_PX,
   MAX_PAIR_HANDLES,
   buildRouteNodesFromPlaced,
@@ -454,15 +450,8 @@ let xrayEdit = false
 let bodyHeightWorld = 0
 const framedHeightByBody = { male: 0, female: 0 }
 
-/** Male-authored world lengths × this = current body (female GLB is ~200× taller). */
-function statureScale() {
-  const height = Number(bodyHeightWorld)
-  if (!(height > 0)) return 1
-  return height / REFERENCE_BODY_HEIGHT_M
-}
-
-function statureWorld(maleWorld) {
-  return Number(maleWorld) * statureScale()
+function activeHandleLimits() {
+  return handleLimitsForBody(activeBody)
 }
 const skinDecalMaterials = new Set()
 const conformCache = new Map()
@@ -1389,15 +1378,12 @@ function handleSkinHit(event, drag) {
     routeNodeCode(pair.fromNode),
     routeNodeCode(pair.toNode),
   ))
-  const scale = statureScale()
-  const maxOffPath = statureWorld(HANDLE_STRETCH_MAX_OFF_PATH)
-  const snapRadius = statureWorld(HANDLE_SKIN_SNAP_RADIUS)
-  const projectRadius = statureWorld(Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7))
+  const limits = activeHandleLimits()
   const accept = (hit) => hit && isProbeOnSameLimbSegment(
     rest,
     hit.position,
-    maxOffPath,
-    { skipLimbGap, worldScale: scale },
+    limits.stretchMaxOffPath,
+    { skipLimbGap, ...limits },
   )
   const direct = surfaceHit(event)
   if (accept(direct)) return direct
@@ -1406,14 +1392,14 @@ function handleSkinHit(event, drag) {
     const projected = projectHandleOnSkin(
       planePoint,
       anchor.normal,
-      projectRadius,
+      limits.projectRadius,
       sideX,
     )
     if (accept(projected)) return projected
   }
   if (direct) {
     const snapped = closestSkinHit(direct.position, {
-      maxDistance: snapRadius,
+      maxDistance: limits.snapRadius,
       sideX,
       guideNormal: direct.normal,
     })
@@ -2887,11 +2873,12 @@ function snapHandleToSkin(placed, fromNode, toNode) {
     return snapSiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode)) || placed
   }
   const sideX = pairSideX(fromNode, toNode)
+  const limits = activeHandleLimits()
   return closestSkinHit(placed.position, {
-    maxDistance: statureWorld(HANDLE_SKIN_SNAP_RADIUS),
+    maxDistance: limits.snapRadius,
     sideX,
     guideNormal: placed.normal,
-  }) || projectNearSurface(placed.position, placed.normal, statureWorld(HANDLE_SKIN_SNAP_RADIUS)) || placed
+  }) || projectNearSurface(placed.position, placed.normal, limits.snapRadius) || placed
 }
 
 function restPathAnchor(fromNode, toNode, rest, t) {
@@ -4088,13 +4075,14 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
   const fromCode = routeNodeCode(pair.fromNode)
   const toCode = routeNodeCode(pair.toNode)
   const trustsLocators = pairKeepsOffPathLocators(fromCode, toCode)
-  if (!isProbeOnSameLimbSegment(rest, hit.position, statureWorld(HANDLE_STRETCH_MAX_OFF_PATH), {
+  const limits = activeHandleLimits()
+  if (!isProbeOnSameLimbSegment(rest, hit.position, limits.stretchMaxOffPath, {
     skipLimbGap: trustsLocators,
-    worldScale: statureScale(),
+    ...limits,
   })) {
     return state
   }
-  const minGap = statureWorld(isTeHeadPair(fromCode, toCode) ? TE_HEAD_HANDLE_MIN_GAP : HANDLE_COMMIT_MIN_GAP)
+  const minGap = isTeHeadPair(fromCode, toCode) ? limits.teHeadMinGap : limits.commitMinGap
   const tooClose = records.some((record, cursor) => {
     if (cursor === index) return false
     const gap = Math.hypot(

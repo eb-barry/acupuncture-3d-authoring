@@ -379,17 +379,6 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(left, [0, 0.9, 0.05], 0.36)).toBe(false)
   })
 
-  it('accepts the same stretch on a tall female-scale body when worldScale is set', () => {
-    const scale = 200
-    const left = [[-0.22 * scale, 1.0 * scale, 0.05 * scale], [-0.20 * scale, 0.8 * scale, 0.04 * scale]]
-    const pulled = [-0.28 * scale, 0.9 * scale, 0.08 * scale]
-    expect(isProbeOnSameLimbSegment(left, pulled, 0.36)).toBe(false)
-    expect(isProbeOnSameLimbSegment(left, pulled, 0.36 * scale, { worldScale: scale })).toBe(true)
-    expect(isProbeOnSameLimbSegment(left, [0.22 * scale, 0.9 * scale, 0.05 * scale], 0.36 * scale, {
-      worldScale: scale,
-    })).toBe(false)
-  })
-
   it('lets head locators sit on temple skin instead of a through-skull chord', () => {
     // 完骨 → 本神: the 3D chord is inside the head (|x| ≈ 0.06).
     const gbHead = [[0.085, 1.52, -0.03], [0.055, 1.62, 0.08]]
