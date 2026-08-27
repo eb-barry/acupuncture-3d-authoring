@@ -16,6 +16,7 @@ import {
   sanitizeRouteNode,
   validateDocument,
 } from './document.js'
+import { bindDocumentToBody, mapDocumentAnnotations, scalePosition } from './retarget.js'
 import { History } from './history.js'
 import {
   cameraPoseFacingAxis,
@@ -166,7 +167,7 @@ $('#app').innerHTML = `
   <div class="topbar-center">
     <div class="file-actions">
       <label class="button primary">載入 GLB<input id="model-file" type="file" accept=".glb,model/gltf-binary" hidden></label>
-      <label class="button">匯入 JSON<input id="json-file" type="file" accept=".json,application/json" hidden></label>
+      <label class="button" title="匯入到目前選擇的人體模型。男性 JSON 也可對應到女性模型（依身高貼膚，再請微調）。">匯入 JSON<input id="json-file" type="file" accept=".json,application/json" hidden></label>
       <button id="validate">驗證</button><button id="export">匯出</button>
     </div>
     <nav class="tools" aria-label="模式與工具">
@@ -210,7 +211,7 @@ $('#app').innerHTML = `
     <div class="panel-heading"><span>場景物件</span><b id="object-count">0</b></div>
     <div class="object-filters">
       <label class="scene-meridian-field">人體模型
-        <select id="body-model-filter">
+        <select id="body-model-filter" title="匯入 JSON 會套用到此處目前選擇的模型，不再依檔案內的 male/female 欄位切換人體。">
           <option value="male" selected>男性 · male_character</option>
           <option value="female">女性 · female-character</option>
         </select>
@@ -436,6 +437,7 @@ let markerDiameterMm = DEFAULT_MARKER_DIAMETER_MM
 let xrayEdit = false
 /** Framed model height, so the millimetre settings mean the same on any GLB. */
 let bodyHeightWorld = 0
+const framedHeightByBody = { male: 0, female: 0 }
 const skinDecalMaterials = new Set()
 const conformCache = new Map()
 const discCache = new Map()
@@ -4374,18 +4376,55 @@ function exportJSON() {
 async function importJSON(file) {
   const result = parseDocument(await file.text())
   if (!result.valid) return toast(`匯入失敗：${result.errors[0]}`, 'error')
-  const body = inferBodyModel(result.value.model)
-  const preset = BODY_MODELS[body]
+  const sourceBody = inferBodyModel(result.value.model)
+  const targetBody = BODY_MODELS[activeBody] ? activeBody : 'male'
+  const preset = BODY_MODELS[targetBody]
+  let next = bindDocumentToBody(result.value, targetBody)
+  const needsRetarget = sourceBody !== targetBody
+  let retargetMissed = 0
+
+  if (needsRetarget) {
+    if (!modelMeshes.length) {
+      const loaded = await loadBodyModel(targetBody, { keepDocument: true })
+      if (!loaded) return
+    }
+    $('#model-status').textContent = `正在將${BODY_MODELS[sourceBody].label}穴位對應到${preset.label}模型…`
+    try {
+      const sourceHeight = await measureFramedHeight(sourceBody)
+      const targetHeight = bodyHeightWorld || await measureFramedHeight(targetBody)
+      let missed = 0
+      next = mapDocumentAnnotations(next, (point) => {
+        const scaled = scalePosition(point.position, sourceHeight, targetHeight)
+        const sideX = point.side === 'left' ? -1 : point.side === 'right' ? 1 : scaled[0]
+        const preferPosterior = point.meridianId === 'GV' || scaled[2] < -0.02 * targetHeight
+        const hit = closestSkinHit(scaled, {
+          maxDistance: Math.max(targetHeight * 0.25, HANDLE_SKIN_SNAP_RADIUS),
+          sideX,
+          guideNormal: point.normal,
+          preferPosterior,
+        })
+        if (!hit) {
+          missed += 1
+          return { position: scaled, normal: point.normal }
+        }
+        return { position: hit.position, normal: hit.normal }
+      })
+      retargetMissed = missed
+    } catch (error) {
+      return toast(`對應到${preset.label}模型失敗：${error.message}`, 'error')
+    }
+  }
+
   state = normalizeFixedStyles({
-    ...result.value,
+    ...next,
     model: {
-      ...result.value.model,
-      body,
-      name: result.value.model?.name || preset.fileName,
+      ...next.model,
+      body: targetBody,
+      name: next.model?.name || preset.fileName,
     },
   })
-  activeBody = body
-  documentsByBody[body] = structuredClone(state)
+  activeBody = targetBody
+  documentsByBody[targetBody] = structuredClone(state)
   history.replace(state)
   selected = null
   if (orbitLocked) detachOrbitLock({ restorePerspective: true })
@@ -4396,10 +4435,42 @@ async function importJSON(file) {
   autoEnsureCompletedMeridians()
   persistState()
   syncBodyModelSelect()
-  await loadBodyModel(body, { keepDocument: true })
+  if (!modelMeshes.length) {
+    await loadBodyModel(targetBody, { keepDocument: true })
+  }
   rebuildAnnotations()
   updateUI()
-  toast(`已匯入 ${preset.label}穴位：${state.meridians.length} 條路線、${state.acupoints.length} 個定位點`)
+  const mappedNote = needsRetarget
+    ? `（已從${BODY_MODELS[sourceBody].label}依身高貼到皮膚${retargetMissed ? `，${retargetMissed} 點未貼上` : ''}，請再微調）`
+    : ''
+  toast(`已匯入 ${preset.label}穴位：${state.meridians.length} 條路線、${state.acupoints.length} 個定位點${mappedNote}`)
+}
+
+function rememberFramedHeight(body, height) {
+  if (!BODY_MODELS[body] || !(height > 0)) return
+  framedHeightByBody[body] = height
+}
+
+async function measureFramedHeight(bodyId) {
+  const body = BODY_MODELS[bodyId] ? bodyId : 'male'
+  if (framedHeightByBody[body] > 0) return framedHeightByBody[body]
+  if (body === activeBody && bodyHeightWorld > 0) {
+    rememberFramedHeight(body, bodyHeightWorld)
+    return bodyHeightWorld
+  }
+  const preset = BODY_MODELS[body]
+  const modelUrl = new URL(`../models/${preset.fileName}`, import.meta.url)
+  const gltf = await createModelLoader().loadAsync(modelUrl.href)
+  const root = gltf.scene
+  const box = new THREE.Box3().setFromObject(root)
+  const center = box.getCenter(new THREE.Vector3())
+  root.position.x += -center.x
+  root.position.z += -center.z
+  root.position.y += -box.min.y
+  root.updateMatrixWorld(true)
+  const height = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).y
+  rememberFramedHeight(body, height)
+  return height
 }
 
 function applyModel(gltf, name, hash = null) {
@@ -4485,6 +4556,7 @@ function applyModel(gltf, name, hash = null) {
   syncControlsEnabled()
 
   const body = inferBodyModel({ ...state.model, name, body: activeBody })
+  rememberFramedHeight(body, bodyHeightWorld)
   state = {
     ...state,
     model: {
@@ -4785,7 +4857,7 @@ async function setActiveBodyModel(bodyId) {
   autoEnsureCompletedMeridians()
   rebuildAnnotations()
   updateUI()
-  toast(`已切換為${BODY_MODELS[body].label}模型（穴位資料各自獨立）`)
+  toast(`已切換為${BODY_MODELS[body].label}模型（穴位資料各自獨立；匯入 JSON 套用到目前模型）`)
 }
 
 async function loadDefaultModel() {
@@ -5178,7 +5250,11 @@ $('#validate').addEventListener('click', () => {
 })
 $('#export').addEventListener('click', exportJSON)
 $('#model-file').addEventListener('change', (event) => loadModel(event.target.files[0]))
-$('#json-file').addEventListener('change', (event) => importJSON(event.target.files[0]))
+$('#json-file').addEventListener('change', (event) => {
+  const file = event.target.files[0]
+  event.target.value = ''
+  if (file) importJSON(file)
+})
 
 window.addEventListener('keydown', (event) => {
   const editing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)
