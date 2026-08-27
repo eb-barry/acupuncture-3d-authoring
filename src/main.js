@@ -17,6 +17,12 @@ import {
   validateDocument,
 } from './document.js'
 import { bindDocumentToBody, mapDocumentAnnotations, scalePosition } from './retarget.js'
+import {
+  IDLE_SHADOW_MAP_SIZE,
+  ORBIT_SHADOW_MAP_SIZE,
+  clampPixelRatio,
+  shouldUseFastOrbitView,
+} from './orbitView.js'
 import { History } from './history.js'
 import {
   cameraPoseFacingAxis,
@@ -310,12 +316,14 @@ const orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 2000
 let camera = perspectiveCamera
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+renderer.setPixelRatio(clampPixelRatio(devicePixelRatio, false))
 renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 0.88
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
+renderer.shadowMap.autoUpdate = false
+renderer.shadowMap.needsUpdate = true
 viewport.append(renderer.domElement)
 
 const labelRenderer = new CSS2DRenderer()
@@ -383,6 +391,12 @@ controls.mouseButtons = {
 }
 controls.minDistance = 0.05
 controls.maxDistance = 500
+
+let orbitPointerDown = false
+let orbitFastView = false
+let lastOrbitChangeAt = 0
+let idleSkinMaterial = null
+let orbitSkinMaterial = null
 
 const modelGroup = new THREE.Group()
 const annotationGroup = new THREE.Group()
@@ -3533,7 +3547,7 @@ function rebuildAnnotations() {
   updateMarkerScales()
 }
 
-function updateMarkerScales() {
+function updateMarkerScales({ labels = !orbitFastView } = {}) {
   updateSkinDecalUniforms()
   const viewportHeight = Math.max(viewport.clientHeight, 1)
   const dotDiameter = markerDiameterWorld()
@@ -3549,7 +3563,7 @@ function updateMarkerScales() {
       : perspectivePixelScale(camera.fov || 45, viewportHeight) * distance
     // Inflate only when an on-skin dot would otherwise fall below a few pixels.
     mesh.scale.setScalar(markerScreenScale(dotDiameter, pixel, MARKER_MIN_PIXELS))
-    if (label?.element) {
+    if (labels && label?.element) {
       label.element.style.setProperty('--marker-size', `${FIXED_MARKER_SIZE}px`)
       applyLabelPlacement(label.element, point)
     }
@@ -3591,8 +3605,9 @@ function isPointSelected(point) {
     && (selected.id === point.id || (point.pairId && selected.pairId === point.pairId))
 }
 
-function updateLabelVisibility(time) {
-  if (time - lastLabelCheck < 50) return
+function updateLabelVisibility(time, { force = false } = {}) {
+  if (orbitFastView && !force) return
+  if (!force && time - lastLabelCheck < 50) return
   lastLabelCheck = time
   const cam = toArray(camera.position)
 
@@ -4515,6 +4530,7 @@ function applyModel(gltf, name, hash = null) {
   if (!keyLight.target.parent) scene.add(keyLight.target)
   keyLight.target.position.set(0, maxDim * 0.15, 0)
   shadowCam.updateProjectionMatrix()
+  renderer.shadowMap.needsUpdate = true
 
   root.traverse((object) => {
     if (!object.isMesh) return
@@ -4753,6 +4769,79 @@ function createSkinMaterial() {
   })
 }
 
+function getIdleSkinMaterial() {
+  if (!idleSkinMaterial) idleSkinMaterial = createSkinMaterial()
+  return idleSkinMaterial
+}
+
+function getOrbitSkinMaterial() {
+  if (!orbitSkinMaterial) {
+    orbitSkinMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd4a88a,
+      roughness: 0.52,
+      metalness: 0,
+      envMapIntensity: 0.16,
+      flatShading: false,
+    })
+  }
+  return orbitSkinMaterial
+}
+
+function applyAuthoringPixelRatio(moving) {
+  renderer.setPixelRatio(clampPixelRatio(devicePixelRatio, moving))
+  const { clientWidth, clientHeight } = viewport
+  renderer.setSize(Math.max(clientWidth, 1), Math.max(clientHeight, 1), false)
+}
+
+function setLabelLayerEnabled(enabled) {
+  labelRenderer.domElement.style.visibility = enabled ? '' : 'hidden'
+}
+
+function setShadowQuality(moving) {
+  const size = moving ? ORBIT_SHADOW_MAP_SIZE : IDLE_SHADOW_MAP_SIZE
+  const type = moving ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap
+  if (renderer.shadowMap.type !== type) renderer.shadowMap.type = type
+  if (keyLight.shadow.mapSize.x !== size || keyLight.shadow.mapSize.y !== size) {
+    keyLight.shadow.mapSize.set(size, size)
+    if (keyLight.shadow.map) {
+      keyLight.shadow.map.dispose()
+      keyLight.shadow.map = null
+    }
+  }
+  renderer.shadowMap.needsUpdate = true
+}
+
+function applyBodySkinPreview(moving) {
+  if (surfaceFinish !== 'skin') return
+  const material = moving ? getOrbitSkinMaterial() : getIdleSkinMaterial()
+  modelGroup.traverse((object) => {
+    if (!object.isMesh || isNailMesh(object)) return
+    object.material = material
+  })
+}
+
+function setOrbitFastView(active) {
+  if (orbitFastView === active) return
+  orbitFastView = active
+  applyAuthoringPixelRatio(active)
+  setShadowQuality(active)
+  setLabelLayerEnabled(!active)
+  applyBodySkinPreview(active)
+  if (!active) {
+    lastLabelCheck = 0
+    updateMarkerScales({ labels: true })
+    updateLabelVisibility(performance.now(), { force: true })
+  }
+}
+
+function syncOrbitFastView(now = performance.now()) {
+  setOrbitFastView(shouldUseFastOrbitView({
+    pointerDown: orbitPointerDown,
+    lastChangeAt: lastOrbitChangeAt,
+    now,
+  }))
+}
+
 function prepareModelMaterials(gltf) {
   // Preserve author materials for toggling; only restyle nail landmark meshes.
   gltf.scene.traverse((object) => {
@@ -4795,7 +4884,7 @@ function applySurfaceFinish(root = modelGroup) {
   root.traverse((object) => {
     if (!object.isMesh || isNailMesh(object)) return
     if (surfaceFinish === 'skin') {
-      object.material = createSkinMaterial()
+      object.material = orbitFastView ? getOrbitSkinMaterial() : getIdleSkinMaterial()
       return
     }
     const original = object.userData.originalMaterial
@@ -4896,7 +4985,7 @@ function resize() {
     orthographicCamera.updateProjectionMatrix()
   }
   camera.updateProjectionMatrix()
-  renderer.setSize(clientWidth, clientHeight, false)
+  applyAuthoringPixelRatio(orbitFastView)
   labelRenderer.setSize(clientWidth, clientHeight)
   updateSkinDecalUniforms()
 }
@@ -4904,10 +4993,11 @@ new ResizeObserver(resize).observe(viewport)
 renderer.setAnimationLoop((time) => {
   controls.update()
   enforceLockedView()
-  updateMarkerScales()
-  updateLabelVisibility(time)
+  syncOrbitFastView(time)
+  updateMarkerScales({ labels: !orbitFastView })
+  if (!orbitFastView) updateLabelVisibility(time)
   renderer.render(scene, camera)
-  labelRenderer.render(scene, camera)
+  if (!orbitFastView) labelRenderer.render(scene, camera)
 })
 
 $('#meridian-filter').addEventListener('change', () => {
@@ -5293,7 +5383,13 @@ applyViewportGrid()
 syncZoomUI({ force: true })
 resize()
 let lastZoomForUi = getZoomFactor()
+controls.addEventListener('start', () => {
+  orbitPointerDown = true
+  lastOrbitChangeAt = performance.now()
+  syncOrbitFastView()
+})
 controls.addEventListener('change', () => {
+  if (orbitPointerDown || orbitFastView) lastOrbitChangeAt = performance.now()
   const zoom = getZoomFactor()
   if (Math.abs(zoom - lastZoomForUi) < 0.0008) return
   lastZoomForUi = zoom
@@ -5303,6 +5399,8 @@ controls.addEventListener('change', () => {
   updateSkinDecalUniforms()
 })
 controls.addEventListener('end', () => {
+  orbitPointerDown = false
+  lastOrbitChangeAt = performance.now()
   lastZoomForUi = getZoomFactor()
   syncZoomUI({ force: true })
 })
