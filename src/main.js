@@ -95,6 +95,7 @@ import {
   smoothPathNormals,
   tangentWindow,
   worldPerMillimetre,
+  REFERENCE_BODY_HEIGHT_M,
 } from './skinRibbon.js'
 import {
   buildCombinedSurfaceGraph,
@@ -452,6 +453,17 @@ let xrayEdit = false
 /** Framed model height, so the millimetre settings mean the same on any GLB. */
 let bodyHeightWorld = 0
 const framedHeightByBody = { male: 0, female: 0 }
+
+/** Male-authored world lengths × this = current body (female GLB is ~200× taller). */
+function statureScale() {
+  const height = Number(bodyHeightWorld)
+  if (!(height > 0)) return 1
+  return height / REFERENCE_BODY_HEIGHT_M
+}
+
+function statureWorld(maleWorld) {
+  return Number(maleWorld) * statureScale()
+}
 const skinDecalMaterials = new Set()
 const conformCache = new Map()
 const discCache = new Map()
@@ -1377,11 +1389,15 @@ function handleSkinHit(event, drag) {
     routeNodeCode(pair.fromNode),
     routeNodeCode(pair.toNode),
   ))
+  const scale = statureScale()
+  const maxOffPath = statureWorld(HANDLE_STRETCH_MAX_OFF_PATH)
+  const snapRadius = statureWorld(HANDLE_SKIN_SNAP_RADIUS)
+  const projectRadius = statureWorld(Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7))
   const accept = (hit) => hit && isProbeOnSameLimbSegment(
     rest,
     hit.position,
-    HANDLE_STRETCH_MAX_OFF_PATH,
-    { skipLimbGap },
+    maxOffPath,
+    { skipLimbGap, worldScale: scale },
   )
   const direct = surfaceHit(event)
   if (accept(direct)) return direct
@@ -1390,14 +1406,14 @@ function handleSkinHit(event, drag) {
     const projected = projectHandleOnSkin(
       planePoint,
       anchor.normal,
-      Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7),
+      projectRadius,
       sideX,
     )
     if (accept(projected)) return projected
   }
   if (direct) {
     const snapped = closestSkinHit(direct.position, {
-      maxDistance: HANDLE_SKIN_SNAP_RADIUS,
+      maxDistance: snapRadius,
       sideX,
       guideNormal: direct.normal,
     })
@@ -2872,10 +2888,10 @@ function snapHandleToSkin(placed, fromNode, toNode) {
   }
   const sideX = pairSideX(fromNode, toNode)
   return closestSkinHit(placed.position, {
-    maxDistance: HANDLE_SKIN_SNAP_RADIUS,
+    maxDistance: statureWorld(HANDLE_SKIN_SNAP_RADIUS),
     sideX,
     guideNormal: placed.normal,
-  }) || projectNearSurface(placed.position, placed.normal) || placed
+  }) || projectNearSurface(placed.position, placed.normal, statureWorld(HANDLE_SKIN_SNAP_RADIUS)) || placed
 }
 
 function restPathAnchor(fromNode, toNode, rest, t) {
@@ -4072,10 +4088,13 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
   const fromCode = routeNodeCode(pair.fromNode)
   const toCode = routeNodeCode(pair.toNode)
   const trustsLocators = pairKeepsOffPathLocators(fromCode, toCode)
-  if (!isProbeOnSameLimbSegment(rest, hit.position, HANDLE_STRETCH_MAX_OFF_PATH, { skipLimbGap: trustsLocators })) {
+  if (!isProbeOnSameLimbSegment(rest, hit.position, statureWorld(HANDLE_STRETCH_MAX_OFF_PATH), {
+    skipLimbGap: trustsLocators,
+    worldScale: statureScale(),
+  })) {
     return state
   }
-  const minGap = isTeHeadPair(fromCode, toCode) ? TE_HEAD_HANDLE_MIN_GAP : HANDLE_COMMIT_MIN_GAP
+  const minGap = statureWorld(isTeHeadPair(fromCode, toCode) ? TE_HEAD_HANDLE_MIN_GAP : HANDLE_COMMIT_MIN_GAP)
   const tooClose = records.some((record, cursor) => {
     if (cursor === index) return false
     const gap = Math.hypot(
