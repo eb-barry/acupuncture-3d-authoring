@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { isOmittedSurfaceSpan } from './catalog.js'
 import {
   buildRouteNodesFromPlaced,
   catalogSequence,
@@ -530,5 +531,18 @@ describe('meridian authoring workflow', () => {
     ])
     expect(drawableSurfacePairRuns(pairs, () => false)).toHaveLength(1)
     expect(drawableSurfacePairRuns(pairs, () => true)).toEqual([])
+  })
+
+  it('breaks drawable surface runs at the omitted ST8–ST9 stomach span', () => {
+    const pairs = [
+      { from: 'ST7', to: 'ST8' },
+      { from: 'ST8', to: 'ST9' },
+      { from: 'ST9', to: 'ST10' },
+    ]
+    const omitted = (pair) => isOmittedSurfaceSpan(pair.from, pair.to)
+    expect(drawableSurfacePairRuns(pairs, omitted)).toEqual([
+      [{ from: 'ST7', to: 'ST8' }],
+      [{ from: 'ST9', to: 'ST10' }],
+    ])
   })
 })

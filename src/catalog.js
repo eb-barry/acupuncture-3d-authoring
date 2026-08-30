@@ -90,10 +90,12 @@ export function meridianById(id) {
 /**
  * Consecutive catalog points that have no classical surface pathway.
  * The editor still keeps both acupoints; it just does not draw a geodesic
- * between them (足太陽膀胱經 委中 BL40 → 附分 BL41).
+ * between them (足太陽膀胱經 委中 BL40 → 附分 BL41；
+ * 足陽明胃經 頭維 ST8 → 人迎 ST9). Applies to male and female.
  */
 export const OMITTED_SURFACE_SPANS = Object.freeze([
   Object.freeze(['BL40', 'BL41']),
+  Object.freeze(['ST8', 'ST9']),
 ])
 
 export function isOmittedSurfaceSpan(fromCode, toCode) {

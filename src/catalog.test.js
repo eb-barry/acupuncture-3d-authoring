@@ -50,6 +50,20 @@ describe('authorized acupuncture catalog', () => {
     expect(isOmittedSurfaceSpan('', 'BL41')).toBe(false)
   })
 
+  it('omits the classical ST8–ST9 surface pathway in both directions', () => {
+    const stomach = pointsForMeridian('ST')
+    const st8 = stomach.findIndex((point) => point.code === 'ST8')
+    expect(POINT_BY_CODE.get('ST8').name).toBe('頭維')
+    expect(POINT_BY_CODE.get('ST9').name).toBe('人迎')
+    expect(stomach[st8 + 1].code).toBe('ST9')
+    expect(isOmittedSurfaceSpan('ST8', 'ST9')).toBe(true)
+    expect(isOmittedSurfaceSpan('ST9', 'ST8')).toBe(true)
+    expect(isOmittedSurfaceSpan('ST7', 'ST8')).toBe(false)
+    expect(isOmittedSurfaceSpan('ST9', 'ST10')).toBe(false)
+    expect(isOmittedSurfaceSpan('', 'ST9')).toBe(false)
+    expect(isOmittedSurfaceSpan('ST8', 'BL41')).toBe(false)
+  })
+
   it('keeps 任督 consecutive pairs drawable even when they are not BL40–BL41', () => {
     expect(isRenDuCodePair('GV15', 'GV14')).toBe(true)
     expect(isRenDuCodePair('GV13', 'GV12')).toBe(true)
