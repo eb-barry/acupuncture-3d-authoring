@@ -2782,7 +2782,7 @@ function drawPairSkinSegment(route, pair, override = null) {
   })
 }
 
-/** One or more on-skin polylines. Omitted spans (BL40–BL41) start a new run. */
+/** One or more on-skin polylines. Omitted spans (BL40–BL41, ST8–ST9) start a new run. */
 function skinCurveRuns(route, override = null) {
   const pairRuns = drawableSurfacePairRuns(consecutiveAcupointPairs(route), isOmittedSurfacePair)
   return pairRuns.map((pairs) => {
