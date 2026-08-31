@@ -2511,7 +2511,7 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
     .map((record) => snapGbHandleToSkin(record, a, b, path))
     .filter(Boolean)
   const hasUserHandles = sanitized.length > 0
-  const sampleCount = Math.max(18, Math.ceil(span / 0.006))
+  const sampleCount = 28
   const samples = hasUserHandles
     ? catmullRomThrough(
       [a.position, ...sanitized.map((record) => record.position), b.position],
@@ -2558,16 +2558,25 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
         || closestSkinHit(sample, { maxDistance: Math.max(0.38, span * 1.7), sideX: side, guideNormal: guide })
         || projectFromOutside(new THREE.Vector3(...sample), guide, Math.max(0.45, span * 2))
         || hit
-    }
-    if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position))) {
+      // Keep the locator curve. Rescuing onto the default outer corridor
+      // flattened 肩井–淵腋 so dragged black dots no longer moved the line.
+      if (!hitOk(hit, t)) {
+        const fromSample = projectFromOutside(new THREE.Vector3(...sample), guide, probeRadius)
+          || closestSkinHit(sample, { maxDistance: Math.max(0.5, span * 2.2), sideX: side, guideNormal: guide })
+        if (hitOk(fromSample, t)) hit = fromSample
+        else if (isGbJianjingYuanyeHandleOk(sample, a.position, b.position)) {
+          hit = { position: [...sample], normal: [...guide] }
+        }
+      }
+    } else if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position))) {
       hit = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, probeRadius)
         || closestSkinHit(outer, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: rescueGuide })
         || projectFromOutside(new THREE.Vector3(...outer), rescueGuide, Math.max(0.08, span * 0.4))
+      if (!hitOk(hit, t)) {
+        hit = { position: [...outer], normal: [...rescueGuide] }
+      }
     }
-    if (!hitOk(hit, t)) {
-      hit = { position: [...outer], normal: [...rescueGuide] }
-    }
-    accept(hit)
+    if (!hasUserHandles || hitOk(hit, t)) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
   return points.length >= 3 ? points : null
