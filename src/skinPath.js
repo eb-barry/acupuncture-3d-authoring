@@ -221,6 +221,30 @@ export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0) {
   return normalize([side * 0.90, 0.16, 0.38])
 }
 
+/** Stand-off that clears the female torso before the inward skin ray. */
+export function gbLocatorCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
+  return Math.max(0.05, gbPairSpan(from, to) * 0.28)
+}
+
+/**
+ * Push a 肩井–淵腋 locator-curve sample outside the ribcage. Catmull-Rom
+ * chords dive into the thorax; casting from there hits pecs/pit or keeps the
+ * sample interior, so the red line ignores the black dots.
+ */
+export function gbLocatorOutsideProbe(sample = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const p = asPathPoint(sample)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  const guide = gbLateralChestGuide(p, side)
+  const standoff = gbLocatorCastStandoff(a, b)
+  return [
+    p[0] + guide[0] * standoff,
+    p[1] + guide[1] * standoff,
+    p[2] + guide[2] * standoff,
+  ]
+}
+
 function smoothstep01(value) {
   const x = clamp01(value)
   return x * x * (3 - 2 * x)

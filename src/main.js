@@ -54,6 +54,8 @@ import {
   gbJianjingYuanyeGuidePoints,
   gbJianjingYuanyeOuterPoint,
   gbLateralChestGuide,
+  gbLocatorCastStandoff,
+  gbLocatorOutsideProbe,
   gbPairSpan,
   isSiXiaohaiJianzhenPair,
   isSiXiaohaiJianzhenAxillaHollow,
@@ -2471,28 +2473,32 @@ function snapGbHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   const span = gbPairSpan(from, to)
   const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
   const guide = placed.normal || gbLateralChestGuide(placed.position, sideX)
+  const near = Math.max(0.06, span * 0.16)
+  const standoff = gbLocatorCastStandoff(from, to)
+  const probe = gbLocatorOutsideProbe(placed.position, from, to)
   const hit = closestSkinHit(placed.position, {
-    maxDistance: Math.max(0.32, span * 1.4),
+    maxDistance: near,
     sideX,
     guideNormal: guide,
   })
-    || closestSkinHit(placed.position, {
-      maxDistance: Math.max(0.5, span * 2.2),
-      sideX,
-      guideNormal: guide,
-    })
-    || projectFromOutside(new THREE.Vector3(...placed.position), guide, Math.max(0.55, span * 2.4))
+    || projectFromOutside(new THREE.Vector3(...probe), guide, standoff)
+    || projectFromOutside(new THREE.Vector3(...placed.position), guide, standoff)
   if (hit && isGbJianjingYuanyeHandleOk(hit.position, from, to)) {
     return { position: hit.position, normal: hit.normal }
+  }
+  // A legal 側胸 locator must keep its place. Falling back to the default
+  // corridor flattened the ribbon while the black dots still moved.
+  if (isGbJianjingYuanyeHandleOk(placed.position, from, to)) {
+    return { position: [...placed.position], normal: [...(placed.normal || guide)] }
   }
   const outer = gbJianjingYuanyeOuterPoint(from, to, t)
   const fallbackGuide = gbLateralChestGuide(outer, sideX)
   const fallback = closestSkinHit(outer, {
-    maxDistance: Math.max(0.26, span * 1.2),
+    maxDistance: Math.max(0.08, span * 0.18),
     sideX,
     guideNormal: fallbackGuide,
   })
-    || projectFromOutside(new THREE.Vector3(...outer), fallbackGuide, Math.max(0.4, span * 1.8))
+    || projectFromOutside(new THREE.Vector3(...outer), fallbackGuide, standoff)
   if (fallback && isGbJianjingYuanyeHandleOk(fallback.position, from, to)) {
     return { position: fallback.position, normal: fallback.normal }
   }
@@ -2522,6 +2528,8 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
   const previousRef = { current: null }
   const probeRadius = Math.max(0.028, span * 0.12)
   const snapRadius = Math.max(0.05, span * 0.22)
+  const locatorStandoff = gbLocatorCastStandoff(a.position, b.position)
+  const locatorNear = Math.max(0.06, span * 0.14)
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
   const accept = (hit) => {
@@ -2541,34 +2549,30 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
     const outer = gbJianjingYuanyeOuterPoint(a.position, b.position, t)
     const sample = samples[index]
     const side = Math.sign(sideX) || 1
-    let probe = sample
-    if (!hasUserHandles) {
-      const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - span * 0.012
-      const tooAnterior = sample[2] > outer[2] + span * 0.08
-      const tooLateral = Math.abs(sample[0]) > Math.abs(outer[0]) + span * 0.12
-      const tooPosterior = sample[2] < outer[2] - span * 0.10
-      if (tooMedial || tooAnterior || tooLateral || tooPosterior) probe = outer
+    if (hasUserHandles) {
+      const guide = gbLateralChestGuide(sample, side)
+      const probe = gbLocatorOutsideProbe(sample, a.position, b.position)
+      const hit = projectFromOutside(new THREE.Vector3(...probe), guide, locatorStandoff)
+        || projectFromOutside(new THREE.Vector3(...sample), guide, locatorStandoff)
+        || closestSkinHit(sample, { maxDistance: locatorNear, sideX: side, guideNormal: guide })
+      // Locators are the path. Always emit a point under the curve; never
+      // rescue onto the default mid-axillary corridor, and never drop the
+      // sample (that left a jagged ribbon while the black dots moved).
+      if (hit) accept(hit)
+      else accept({ position: [...sample], normal: [...guide] })
+      continue
     }
+    let probe = sample
+    const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - span * 0.012
+    const tooAnterior = sample[2] > outer[2] + span * 0.08
+    const tooLateral = Math.abs(sample[0]) > Math.abs(outer[0]) + span * 0.12
+    const tooPosterior = sample[2] < outer[2] - span * 0.10
+    if (tooMedial || tooAnterior || tooLateral || tooPosterior) probe = outer
     const guide = gbLateralChestGuide(probe, side)
     const rescueGuide = gbLateralChestGuide(outer, side)
     let hit = projectFromOutside(new THREE.Vector3(...probe), guide, probeRadius)
-      || closestSkinHit(probe, { maxDistance: hasUserHandles ? Math.max(0.22, span) : snapRadius, sideX: side, guideNormal: guide })
-    if (hasUserHandles) {
-      hit = closestSkinHit(sample, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: guide })
-        || closestSkinHit(sample, { maxDistance: Math.max(0.38, span * 1.7), sideX: side, guideNormal: guide })
-        || projectFromOutside(new THREE.Vector3(...sample), guide, Math.max(0.45, span * 2))
-        || hit
-      // Keep the locator curve. Rescuing onto the default outer corridor
-      // flattened 肩井–淵腋 so dragged black dots no longer moved the line.
-      if (!hitOk(hit, t)) {
-        const fromSample = projectFromOutside(new THREE.Vector3(...sample), guide, probeRadius)
-          || closestSkinHit(sample, { maxDistance: Math.max(0.5, span * 2.2), sideX: side, guideNormal: guide })
-        if (hitOk(fromSample, t)) hit = fromSample
-        else if (isGbJianjingYuanyeHandleOk(sample, a.position, b.position)) {
-          hit = { position: [...sample], normal: [...guide] }
-        }
-      }
-    } else if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position))) {
+      || closestSkinHit(probe, { maxDistance: snapRadius, sideX: side, guideNormal: guide })
+    if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position))) {
       hit = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, probeRadius)
         || closestSkinHit(outer, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: rescueGuide })
         || projectFromOutside(new THREE.Vector3(...outer), rescueGuide, Math.max(0.08, span * 0.4))
@@ -2576,7 +2580,7 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
         hit = { position: [...outer], normal: [...rescueGuide] }
       }
     }
-    if (!hasUserHandles || hitOk(hit, t)) accept(hit)
+    if (hitOk(hit, t)) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
   return points.length >= 3 ? points : null
@@ -3634,8 +3638,8 @@ function addRouteEditHandles(route) {
             new THREE.SphereGeometry(0.5, 12, 10),
             createGizmoMaterial(0x111111, { selected: true }),
           )
-          handle.position.copy(offsetPosition(placed, 0.006))
-          handle.scale.setScalar(0.012)
+          handle.position.copy(offsetPosition(placed, statureWorld(0.006)))
+          handle.scale.setScalar(statureWorld(0.012))
           handle.renderOrder = 12
           handle.material.depthTest = !skinDecalXray()
           handle.userData = {
@@ -4309,7 +4313,7 @@ function previewHandleDrag(drag, hit) {
         position: [-skinHit.position[0], skinHit.position[1], skinHit.position[2]],
         normal: [-skinHit.normal[0], skinHit.normal[1], skinHit.normal[2]],
       }
-    mesh.position.copy(offsetPosition(node, 0.006))
+    mesh.position.copy(offsetPosition(node, statureWorld(0.006)))
   })
   if (!drag.records?.length || drag.handleIndex == null) return
   if (!route || !pair) return
