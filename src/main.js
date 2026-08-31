@@ -4465,10 +4465,8 @@ function removeLocatorFromSelectedPair() {
 function placeAt(event) {
   const markerHit = nearestAcupointMarkerHit(event)
   const routeHit = annotationHit(event, ['meridian'])
-  const acupointCorePx = 12
-  const preferAcupoint = markerHit && !(
-    routeHit && screenDistanceToHit(event, markerHit) > acupointCorePx
-  )
+  const acupointDist = screenDistanceToHit(event, markerHit)
+  const preferAcupoint = markerHit && (!routeHit || acupointDist <= 8)
   if (preferAcupoint) {
     const point = getPoint(markerHit.object.userData.id)
     selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
@@ -5330,10 +5328,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     startHandleDrag(handleHit)
     return
   }
-  // Clicking the line between 肩井 and 淵腋 must select the span, even when
-  // those discs overlap the short ribbon. Only a click near the disc centre
-  // starts an acupoint drag; otherwise pointerup/placeAt can pick the pair.
-  if (acupointHit && !(routeHit && screenDistanceToHit(event, acupointHit) > 12)) {
+  // A click on the ribbon selects the span. Only the inner 8 px of an
+  // acupoint disc starts a point drag, so large female 肩井/淵腋 markers do
+  // not swallow GB21–GB22.
+  if (acupointHit && (!routeHit || screenDistanceToHit(event, acupointHit) <= 8)) {
     startAcupointDrag(acupointHit)
     return
   }
