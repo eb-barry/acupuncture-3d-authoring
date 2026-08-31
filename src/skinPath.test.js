@@ -35,6 +35,8 @@ import {
   isGbShoulderAxillaSpan,
   isShoulderAxillaWrap,
   gbLateralChestGuide,
+  gbLocatorCastStandoff,
+  gbLocatorOutsideProbe,
   gbJianjingYuanyeOuterPoint,
   gbJianjingYuanyeGuidePoints,
   isGbAxillaHollow,
@@ -280,6 +282,33 @@ describe('skin path wrapping', () => {
     expect(mid[2]).toBeGreaterThan(midChord[2] + 0.03)
     expect(path.every((point) => !isGbAxillaHollow(point, jianjing, yuanye)
       || point === path[0] || point === path.at(-1))).toBe(true)
+
+    const dist = (left, right) => Math.hypot(
+      left[0] - right[0],
+      left[1] - right[1],
+      left[2] - right[2],
+    )
+    const nearest = (polyline, target) => Math.min(
+      ...polyline.map((point) => dist(point, target)),
+    )
+    const locatorCurve = catmullRomThrough([jianjing, pulledMedial, yuanye], 16)
+    expect(nearest(locatorCurve, pulledMedial)).toBeLessThan(0.0001)
+    expect(nearest(locatorCurve, pulledMedial)).toBeLessThan(nearest(path, pulledMedial) * 0.35)
+
+    const interior = [
+      (jianjing[0] + yuanye[0]) / 2,
+      (jianjing[1] + yuanye[1]) / 2,
+      (jianjing[2] + yuanye[2]) / 2,
+    ]
+    const probe = gbLocatorOutsideProbe(interior, jianjing, yuanye)
+    expect(Math.abs(probe[0])).toBeGreaterThan(Math.abs(interior[0]) + 0.02)
+    expect(gbLocatorCastStandoff(jianjing, yuanye)).toBeGreaterThan(0.05)
+    const femaleProbe = gbLocatorOutsideProbe(
+      interior.map((value) => value * 232),
+      femaleJianjing,
+      femaleYuanye,
+    )
+    expect(Math.abs(femaleProbe[0])).toBeGreaterThan(Math.abs(interior[0] * 232) + femaleSpan * 0.1)
   })
 
   it('picks the tightest polyline span that contains the click', () => {
