@@ -4464,7 +4464,12 @@ function removeLocatorFromSelectedPair() {
 
 function placeAt(event) {
   const markerHit = nearestAcupointMarkerHit(event)
-  if (markerHit) {
+  const routeHit = annotationHit(event, ['meridian'])
+  const acupointCorePx = 12
+  const preferAcupoint = markerHit && !(
+    routeHit && screenDistanceToHit(event, markerHit) > acupointCorePx
+  )
+  if (preferAcupoint) {
     const point = getPoint(markerHit.object.userData.id)
     selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
     if (appMode === 'edit') {
@@ -4476,7 +4481,6 @@ function placeAt(event) {
     return
   }
 
-  const routeHit = annotationHit(event, ['meridian'])
   if (routeHit) {
     const route = state.meridians.find((item) => item.id === routeHit.object.userData.id)
     const pair = route && !isRenDuMeridian(route.meridianId)
@@ -5318,6 +5322,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 
   const acupointHit = nearestAcupointMarkerHit(event)
   const handleHit = nearestHandleHit(event)
+  const routeHit = annotationHit(event, ['meridian'])
   // Black locators sit on the ribbon next to large female acupoint discs.
   // Prefer whichever gizmo is closer on screen so a click on a black dot
   // reshapes the meridian instead of dragging 肩井/淵腋.
@@ -5325,7 +5330,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     startHandleDrag(handleHit)
     return
   }
-  if (acupointHit) {
+  // Clicking the line between 肩井 and 淵腋 must select the span, even when
+  // those discs overlap the short ribbon. Only a click near the disc centre
+  // starts an acupoint drag; otherwise pointerup/placeAt can pick the pair.
+  if (acupointHit && !(routeHit && screenDistanceToHit(event, acupointHit) > 12)) {
     startAcupointDrag(acupointHit)
     return
   }
