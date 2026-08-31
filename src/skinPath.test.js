@@ -245,6 +245,27 @@ describe('skin path wrapping', () => {
     expect(isGbJianjingYuanyeHit(midChord, jianjing, yuanye, 0.5)).toBe(false)
     expect(isGbJianjingYuanyeHandleOk(outer, jianjing, yuanye)).toBe(true)
     expect(isGbJianjingYuanyeHandleOk([0.10, 1.40, 0.10], jianjing, yuanye)).toBe(false)
+    const pulledMedial = [outer[0] - 0.035, outer[1], outer[2] + 0.01]
+    const pulledLateral = [outer[0] + 0.02, outer[1], outer[2] + 0.012]
+    expect(isGbJianjingYuanyeHandleOk(pulledMedial, jianjing, yuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk(pulledLateral, jianjing, yuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHit(pulledMedial, jianjing, yuanye, 0.5)).toBe(false)
+    const femaleJianjing = jianjing.map((value) => value * 232)
+    const femaleYuanye = yuanye.map((value) => value * 232)
+    const femaleOuter = gbJianjingYuanyeOuterPoint(femaleJianjing, femaleYuanye, 0.5)
+    const femaleSpan = Math.hypot(
+      femaleJianjing[0] - femaleYuanye[0],
+      femaleJianjing[1] - femaleYuanye[1],
+      femaleJianjing[2] - femaleYuanye[2],
+    )
+    const femalePulled = [
+      femaleOuter[0] - femaleSpan * 0.12,
+      femaleOuter[1],
+      femaleOuter[2] + femaleSpan * 0.05,
+    ]
+    expect(isGbJianjingYuanyeHandleOk(femaleOuter, femaleJianjing, femaleYuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk(femalePulled, femaleJianjing, femaleYuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk([0.10 * 232, 1.40 * 232, 0.10 * 232], femaleJianjing, femaleYuanye)).toBe(false)
 
     const guide = gbLateralChestGuide(midChord, 0.15)
     expect(Math.abs(guide[0])).toBeGreaterThan(0.6)
