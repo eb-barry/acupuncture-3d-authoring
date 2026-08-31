@@ -47,7 +47,14 @@ import {
   teEarCenter,
   teHeadArcPoints,
   isDuBackWrapPair,
-  isJianjingYuanyePair,
+  isGbShoulderAxillaSpan,
+  isGbAxillaHollow,
+  isGbJianjingYuanyeHandleOk,
+  isGbJianjingYuanyeHit,
+  gbJianjingYuanyeGuidePoints,
+  gbJianjingYuanyeOuterPoint,
+  gbLateralChestGuide,
+  gbPairSpan,
   isSiXiaohaiJianzhenPair,
   isSiXiaohaiJianzhenAxillaHollow,
   isSiArmShoulderHandleOk,
@@ -2456,6 +2463,110 @@ function snapSiHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   return { position: [...outer], normal: [...(placed.normal || fallbackGuide)] }
 }
 
+function snapGbHandleToSkin(placed, fromResolved, toResolved, rest = []) {
+  if (!placed?.position) return null
+  const from = fromResolved.position
+  const to = toResolved.position
+  const sideX = (from[0] + to[0]) / 2
+  const span = gbPairSpan(from, to)
+  const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
+  const guide = placed.normal || gbLateralChestGuide(placed.position, sideX)
+  const hit = closestSkinHit(placed.position, {
+    maxDistance: Math.max(0.32, span * 1.4),
+    sideX,
+    guideNormal: guide,
+  })
+    || closestSkinHit(placed.position, {
+      maxDistance: Math.max(0.5, span * 2.2),
+      sideX,
+      guideNormal: guide,
+    })
+    || projectFromOutside(new THREE.Vector3(...placed.position), guide, Math.max(0.55, span * 2.4))
+  if (hit && isGbJianjingYuanyeHandleOk(hit.position, from, to)) {
+    return { position: hit.position, normal: hit.normal }
+  }
+  const outer = gbJianjingYuanyeOuterPoint(from, to, t)
+  const fallbackGuide = gbLateralChestGuide(outer, sideX)
+  const fallback = closestSkinHit(outer, {
+    maxDistance: Math.max(0.26, span * 1.2),
+    sideX,
+    guideNormal: fallbackGuide,
+  })
+    || projectFromOutside(new THREE.Vector3(...outer), fallbackGuide, Math.max(0.4, span * 1.8))
+  if (fallback && isGbJianjingYuanyeHandleOk(fallback.position, from, to)) {
+    return { position: fallback.position, normal: fallback.normal }
+  }
+  if (fallback) return { position: fallback.position, normal: fallback.normal }
+  return { position: [...outer], normal: [...(placed.normal || fallbackGuide)] }
+}
+
+function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const span = gbPairSpan(a.position, b.position)
+  const path = rest.length >= 2 ? rest : gbJianjingYuanyeGuidePoints(a.position, b.position)
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
+  ))
+  const sanitized = ordered
+    .map((record) => snapGbHandleToSkin(record, a, b, path))
+    .filter(Boolean)
+  const hasUserHandles = sanitized.length > 0
+  const samples = hasUserHandles
+    ? catmullRomThrough(
+      [a.position, ...sanitized.map((record) => record.position), b.position],
+      16,
+    )
+    : gbJianjingYuanyeGuidePoints(a.position, b.position, 14)
+  const points = []
+  const previousRef = { current: null }
+  const probeRadius = Math.max(0.03, span * 0.14)
+  const snapRadius = Math.max(0.04, span * 0.18)
+  const accept = (hit, t) => {
+    if (!hit) return
+    const ok = hasUserHandles
+      ? isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position)
+      : isGbJianjingYuanyeHit(hit.position, a.position, b.position, t)
+    if (!ok) return
+    const lifted = new THREE.Vector3(...hit.position)
+      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+    appendSkinPoint(points, lifted, previousRef)
+  }
+  accept({ position: a.position, normal: a.normal }, 0)
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    const t = index / Math.max(1, samples.length - 1)
+    const outer = gbJianjingYuanyeOuterPoint(a.position, b.position, t)
+    const sample = samples[index]
+    const side = Math.sign(sideX) || 1
+    let probe = sample
+    if (!hasUserHandles) {
+      const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - span * 0.012
+      const tooAnterior = sample[2] > outer[2] + span * 0.03
+      if (tooMedial || tooAnterior) probe = outer
+    }
+    const guide = gbLateralChestGuide(probe, side)
+    let hit = projectFromOutside(new THREE.Vector3(...probe), guide, probeRadius)
+      || closestSkinHit(probe, { maxDistance: hasUserHandles ? Math.max(0.22, span) : snapRadius, sideX: side, guideNormal: guide })
+    if (hasUserHandles) {
+      hit = closestSkinHit(sample, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: guide })
+        || closestSkinHit(sample, { maxDistance: Math.max(0.38, span * 1.7), sideX: side, guideNormal: guide })
+        || projectFromOutside(new THREE.Vector3(...sample), guide, Math.max(0.45, span * 2))
+        || hit
+      if (hit && (
+        !isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position)
+        || isGbAxillaHollow(hit.position, a.position, b.position)
+      )) {
+        const rescueGuide = gbLateralChestGuide(outer, side)
+        const rescued = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, probeRadius)
+          || closestSkinHit(outer, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: rescueGuide })
+        if (rescued) hit = rescued
+      }
+    }
+    accept(hit, t)
+  }
+  accept({ position: b.position, normal: b.normal }, 1)
+  return points.length >= 3 ? points : null
+}
+
 function skinSegmentPoints(a, b, {
   allowGeodesic = true,
   preferWrap = false,
@@ -2472,10 +2583,15 @@ function skinSegmentPoints(a, b, {
   const totalDist = Math.max(start.distanceTo(end), 1e-6)
   const sideX = (a.position[0] + b.position[0]) / 2
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
+  const gbShoulderAxilla = isGbShoulderAxillaSpan(fromCode, toCode, a.position, b.position)
   const duBack = isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)
   const teHead = isTeHeadPair(fromCode, toCode)
   if (siArmShoulder) {
     const wrapped = snapSiArmShoulderToSkin(a, b)
+    if (wrapped?.length >= 3) return wrapped
+  }
+  if (gbShoulderAxilla) {
+    const wrapped = snapGbJianjingYuanyeToSkin(a, b)
     if (wrapped?.length >= 3) return wrapped
   }
   if (teHead) {
@@ -2491,12 +2607,12 @@ function skinSegmentPoints(a, b, {
       end.clone().addScaledVector(endNormal, SKIN_LIFT),
     ]
   }
-  const facingLimb = !siArmShoulder && isFacingLimbSpan(a.position, b.position, normalDot)
+  const facingLimb = !siArmShoulder && !gbShoulderAxilla && isFacingLimbSpan(a.position, b.position, normalDot)
   if (facingLimb) {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
   }
-  const mustWrap = !siArmShoulder && !teHead && !facingLimb && !digitTip && (
+  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && (
     preferWrap
     || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
@@ -2504,7 +2620,7 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !teHead && !facingLimb && !digitTip) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip) {
     const geodesic = geodesicOnSkin(a, b)
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
@@ -2514,7 +2630,7 @@ function skinSegmentPoints(a, b, {
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !duBack && !teHead && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !gbShoulderAxilla && !duBack && !teHead && !facingLimb && !digitTip && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -2611,6 +2727,9 @@ function joinOnSkin(anchors) {
       '',
       from.position,
       to.position,
+    ) || isShoulderAxillaWrap(
+      from.position,
+      to.position,
     ) || isDigitTipWrap(
         from.position,
         to.position,
@@ -2668,13 +2787,14 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
   earArc = false,
   teTemple = false,
   siArmShoulder = false,
+  gbShoulderAxilla = false,
   fromCode = '',
   toCode = '',
 } = {}) {
   const restGuide = rest?.length >= 2 ? rest : null
   const restArrays = restGuide ? arraysFromSkin(restGuide) : []
   const drawSpan = (fromNode, toNode) => skinSegmentPoints(fromNode, toNode, {
-    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap && !siArmShoulder,
+    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap && !siArmShoulder && !gbShoulderAxilla,
     preferWrap,
     earArc,
     teTemple,
@@ -2710,12 +2830,16 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
     const wrapped = snapSiArmShoulderToSkin(fromResolved, toResolved, records, restArrays)
     if (wrapped?.length >= 3) return wrapped
   }
+  if (gbShoulderAxilla) {
+    const wrapped = snapGbJianjingYuanyeToSkin(fromResolved, toResolved, records, restArrays)
+    if (wrapped?.length >= 3) return wrapped
+  }
   if (!records.length) {
     return restArrays.length >= 2
       ? vectorsFromArrays(restArrays)
       : drawSpan(fromResolved, toResolved)
   }
-  const usable = (siArmShoulder || teHead
+  const usable = (siArmShoulder || gbShoulderAxilla || teHead
     ? keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
     : keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays))
   const spans = locatorSpans(restArrays, fromResolved, toResolved, usable)
@@ -2771,12 +2895,14 @@ function drawPairSkinSegment(route, pair, override = null) {
   const teTemple = isTeTempleHandlePair(fromCode, toCode)
   const earArc = isTeEarArcPair(fromCode, toCode)
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
+  const gbShoulderAxilla = isGbShoulderAxillaSpan(fromCode, toCode, a.position, b.position)
   return pairDrawnSkinPoints(a, b, records, rest, {
-    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder,
+    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder && !gbShoulderAxilla,
     preferWrap: pairPrefersWrap(fromCode, toCode, a.position, b.position),
     earArc,
     teTemple,
     siArmShoulder,
+    gbShoulderAxilla,
     fromCode,
     toCode,
   })
@@ -2810,6 +2936,7 @@ function restPathArrays(fromNode, toNode) {
   const teTemple = isTeTempleHandlePair(fromCode, toCode)
   const earArc = isTeEarArcPair(fromCode, toCode)
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
+  const gbShoulderAxilla = isGbShoulderAxillaSpan(fromCode, toCode, a.position, b.position)
   const key = geodesicCacheKey(a, b)
   const reverseKey = geodesicCacheKey(b, a)
   const usableCached = (cached) => {
@@ -2819,13 +2946,17 @@ function restPathArrays(fromNode, toNode) {
       const mid = cached[Math.floor(cached.length / 2)]
       return Boolean(mid) && isSiArmShoulderHit(mid, a.position, b.position)
     }
+    if (gbShoulderAxilla) {
+      if (isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.7 })) return false
+      const mid = cached[Math.floor(cached.length / 2)]
+      return Boolean(mid) && isGbJianjingYuanyeHit(mid, a.position, b.position)
+    }
     if (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)) {
       const mid = cached[Math.floor(cached.length / 2)]
       const ceiling = Math.max(a.position[2], b.position[2]) + 0.04
       return Boolean(mid) && mid[2] <= ceiling
     }
-    if (!isJianjingYuanyePair(fromCode, toCode) && !isShoulderAxillaWrap(a.position, b.position)) return true
-    return !isDisorderedPolyline(cached, [a.position, b.position])
+    return true
   }
   if (restPathCache.has(key) && usableCached(restPathCache.get(key))) {
     return restPathCache.get(key).map((point) => [...point])
@@ -2885,6 +3016,9 @@ function snapHandleToSkin(placed, fromNode, toNode) {
   const to = resolvedNode(toNode)
   if (isSiXiaohaiJianzhenPair(routeNodeCode(fromNode), routeNodeCode(toNode))) {
     return snapSiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode)) || placed
+  }
+  if (isGbShoulderAxillaSpan(routeNodeCode(fromNode), routeNodeCode(toNode), from.position, to.position)) {
+    return snapGbHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode)) || placed
   }
   const sideX = pairSideX(fromNode, toNode)
   return closestSkinHit(placed.position, {
@@ -4107,7 +4241,9 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
   if (tooClose) return state
   const placed = isSiXiaohaiJianzhenPair(fromCode, toCode)
     ? snapSiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
-    : hit
+    : isGbShoulderAxillaSpan(fromCode, toCode, resolvedNode(pair.fromNode).position, resolvedNode(pair.toNode).position)
+      ? snapGbHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
+      : hit
   if (!records.length) {
     records.push({
       type: 'control',
@@ -4136,7 +4272,14 @@ function previewHandleDrag(drag, hit) {
     item.fromPointId === drag.fromPointId && item.toPointId === drag.toPointId)
   const skinHit = pair && isSiXiaohaiJianzhenPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
     ? snapSiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), drag.rest || []) || hit
-    : hit
+    : pair && isGbShoulderAxillaSpan(
+      routeNodeCode(pair.fromNode),
+      routeNodeCode(pair.toNode),
+      resolvedNode(pair.fromNode).position,
+      resolvedNode(pair.toNode).position,
+    )
+      ? snapGbHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), drag.rest || []) || hit
+      : hit
   handleVisuals.forEach(({ mesh }) => {
     const data = mesh.userData
     if (data.handleIndex !== drag.handleIndex) return

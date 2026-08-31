@@ -32,7 +32,14 @@ import {
   TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
   isJianjingYuanyePair,
+  isGbShoulderAxillaSpan,
   isShoulderAxillaWrap,
+  gbLateralChestGuide,
+  gbJianjingYuanyeOuterPoint,
+  gbJianjingYuanyeGuidePoints,
+  isGbAxillaHollow,
+  isGbJianjingYuanyeHandleOk,
+  isGbJianjingYuanyeHit,
   pairPrefersWrap,
   pathFollowsFacingChord,
   pickPairAlongPolyline,
@@ -197,7 +204,7 @@ describe('skin path wrapping', () => {
     ], shaohai, lingdao)).toBe(false)
   })
 
-  it('wraps 肩井→淵腋 without a geodesic, but keeps 雲門→天府 and 食竇→腹哀 on the geodesic', () => {
+  it('routes 肩井→淵腋 on the lateral chest, not through the axilla or onto the pecs', () => {
     const jianjing = [0.1192, 1.5029, -0.0947]
     const yuanye = [0.1886, 1.3039, -0.0628]
     const yunmen = [0.1493, 1.4351, -0.0112]
@@ -209,15 +216,46 @@ describe('skin path wrapping', () => {
     expect(isJianjingYuanyePair('GB21', 'GB22')).toBe(true)
     expect(isJianjingYuanyePair('GB22', 'GB21')).toBe(true)
     expect(isJianjingYuanyePair('LU2', 'LU3')).toBe(false)
+    expect(isGbShoulderAxillaSpan('GB21', 'GB22', jianjing, yuanye)).toBe(true)
+    expect(isGbShoulderAxillaSpan('LU2', 'LU3', yunmen, tianfu)).toBe(false)
     expect(isShoulderAxillaWrap(jianjing, yuanye)).toBe(true)
     expect(isShoulderAxillaWrap(yunmen, tianfu)).toBe(false)
     expect(isShoulderAxillaWrap(shidou, fuai)).toBe(false)
     expect(isShoulderAxillaWrap(ki10, ki11)).toBe(false)
-    expect(pairPrefersWrap('GB21', 'GB22', jianjing, yuanye)).toBe(true)
+    expect(pairPrefersWrap('GB21', 'GB22', jianjing, yuanye)).toBe(false)
+    expect(pairKeepsOffPathLocators('GB21', 'GB22')).toBe(true)
     expect(pairPrefersWrap('LU2', 'LU3', yunmen, tianfu)).toBe(false)
     expect(pairPrefersWrap('SP17', 'SP16', shidou, fuai)).toBe(false)
     expect(pairPrefersWrap('TE20', 'TE21', [0.078, 1.694, -0.041], [0.075, 1.666, -0.012])).toBe(false)
     expect(isFacingLimbSpan(jianjing, yuanye, 0.4)).toBe(false)
+
+    const midChord = [
+      (jianjing[0] + yuanye[0]) / 2,
+      (jianjing[1] + yuanye[1]) / 2,
+      (jianjing[2] + yuanye[2]) / 2,
+    ]
+    const outer = gbJianjingYuanyeOuterPoint(jianjing, yuanye, 0.5)
+    expect(Math.abs(outer[0])).toBeGreaterThan(Math.abs(midChord[0]) + 0.02)
+    expect(outer[2]).toBeLessThan(Math.max(jianjing[2], yuanye[2]) + 0.03)
+    expect(isGbAxillaHollow(midChord, jianjing, yuanye)).toBe(true)
+    expect(isGbAxillaHollow(outer, jianjing, yuanye)).toBe(false)
+    expect(isGbAxillaHollow([0.10, 1.40, 0.08], jianjing, yuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHit(outer, jianjing, yuanye, 0.5)).toBe(true)
+    expect(isGbJianjingYuanyeHit(midChord, jianjing, yuanye, 0.5)).toBe(false)
+    expect(isGbJianjingYuanyeHandleOk(outer, jianjing, yuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk([0.10, 1.40, 0.10], jianjing, yuanye)).toBe(false)
+
+    const guide = gbLateralChestGuide(midChord, 0.15)
+    expect(Math.abs(guide[0])).toBeGreaterThan(0.7)
+    expect(guide[2]).toBeLessThan(0.45)
+
+    const path = gbJianjingYuanyeGuidePoints(jianjing, yuanye, 10)
+    expect(path[0]).toEqual(jianjing)
+    expect(path.at(-1)).toEqual(yuanye)
+    const mid = path[Math.floor(path.length / 2)]
+    expect(Math.abs(mid[0])).toBeGreaterThan(Math.abs(midChord[0]))
+    expect(path.every((point) => !isGbAxillaHollow(point, jianjing, yuanye)
+      || point === path[0] || point === path.at(-1))).toBe(true)
   })
 
   it('picks the tightest polyline span that contains the click', () => {
