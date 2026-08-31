@@ -246,8 +246,9 @@ describe('skin path wrapping', () => {
     expect(isGbJianjingYuanyeHandleOk([0.10, 1.40, 0.10], jianjing, yuanye)).toBe(false)
 
     const guide = gbLateralChestGuide(midChord, 0.15)
-    expect(Math.abs(guide[0])).toBeGreaterThan(0.7)
-    expect(guide[2]).toBeLessThan(0.45)
+    expect(Math.abs(guide[0])).toBeGreaterThan(0.6)
+    expect(guide[2]).toBeGreaterThan(0.25)
+    expect(guide[2]).toBeLessThan(0.7)
 
     const path = gbJianjingYuanyeGuidePoints(jianjing, yuanye, 10)
     expect(path[0]).toEqual(jianjing)

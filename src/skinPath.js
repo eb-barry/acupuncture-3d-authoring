@@ -214,33 +214,34 @@ export function gbPairSpan(from = [0, 0, 0], to = [0, 0, 0]) {
 /**
  * Cast onto the lateral chest wall: mostly ±X, slightly up.
  * Only a hint of anterior so the line leaves the axilla hollow without
- * wrapping onto the pecs.
+ * wrapping onto the pecs or jumping onto the T-pose arm.
  */
 export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0) {
   const side = Math.sign(Number(sideX) || Number(chordPoint[0]) || 1) || 1
-  return normalize([side * 0.88, 0.20, 0.18])
+  return normalize([side * 0.82, 0.12, 0.55])
 }
 
 /**
- * A point outside the through-shoulder chord, on the mid-axillary wall.
- * Mid-span stays farther out so samples are never taken from inside the pit.
+ * Corridor on the mid-axillary wall. Hold 淵腋 laterality until near 肩井
+ * so the climb skirts the axilla pit instead of cutting through it or
+ * the raised arm.
  */
 export function gbJianjingYuanyeOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const tt = clamp01(t)
-  const chord = lerp3(a, b, tt)
+  const lower = a[1] <= b[1] ? a : b
+  const upper = a[1] <= b[1] ? b : a
+  const yT = a[1] <= b[1] ? tt : 1 - tt
   const side = Math.sign((a[0] + b[0]) / 2) || 1
   const span = gbPairSpan(a, b)
-  const keepOut = Math.sin(Math.PI * tt)
-  const guide = gbLateralChestGuide(chord, side)
-  const standoff = span * (0.06 + keepOut * 0.22)
-  const lateral = side * span * 0.16 * keepOut
-  return [
-    chord[0] + guide[0] * standoff + lateral,
-    chord[1] + guide[1] * standoff,
-    chord[2] + guide[2] * standoff * 0.28,
-  ]
+  const toShoulder = yT < 0.78 ? 0 : (yT - 0.78) / 0.22
+  const eased = toShoulder * toShoulder
+  const aroundPit = Math.sin(Math.PI * Math.min(1, Math.max(0, (yT - 0.12) / 0.72)))
+  const x = side * (Math.abs(lower[0]) * (1 - eased) + Math.abs(upper[0]) * eased)
+  const y = lower[1] * (1 - yT) + upper[1] * yT
+  const z = lower[2] * (1 - eased) + upper[2] * eased + aroundPit * span * 0.07
+  return [x, y, z]
 }
 
 /**
@@ -254,13 +255,17 @@ export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0
   const y0 = Math.min(a[1], b[1])
   const y1 = Math.max(a[1], b[1])
   const midSpan = p[1] > y0 + span * 0.10 && p[1] < y1 - span * 0.10
-  const maxAbsX = Math.max(Math.abs(a[0]), Math.abs(b[0]))
   const zFront = Math.max(a[2], b[2])
   const onChest = p[2] > zFront + span * 0.18
-  const tooMedial = midSpan && Math.abs(p[0]) < maxAbsX - span * 0.12
   const lower = a[1] <= b[1] ? a : b
-  const throughPit = midSpan
-    && Math.abs(p[0]) < Math.abs(lower[0]) - span * 0.02
+  const upper = a[1] <= b[1] ? b : a
+  const yT = y1 - y0 > 1e-8 ? clamp01((p[1] - y0) / (y1 - y0)) : 0.5
+  const toShoulder = yT < 0.78 ? 0 : (yT - 0.78) / 0.22
+  const eased = toShoulder * toShoulder
+  const expectedAbsX = Math.abs(lower[0]) * (1 - eased) + Math.abs(upper[0]) * eased
+  const tooMedial = midSpan && Math.abs(p[0]) < expectedAbsX - span * 0.10
+  const throughPit = midSpan && yT > 0.18 && yT < 0.72
+    && Math.abs(p[0]) < Math.abs(lower[0]) - span * 0.04
     && p[2] > Math.min(a[2], b[2]) + span * 0.08
   return onChest || tooMedial || throughPit
 }
