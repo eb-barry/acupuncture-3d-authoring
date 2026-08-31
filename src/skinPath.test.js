@@ -236,7 +236,8 @@ describe('skin path wrapping', () => {
     ]
     const outer = gbJianjingYuanyeOuterPoint(jianjing, yuanye, 0.5)
     expect(Math.abs(outer[0])).toBeGreaterThan(Math.abs(midChord[0]) + 0.02)
-    expect(outer[2]).toBeLessThan(Math.max(jianjing[2], yuanye[2]) + 0.03)
+    expect(outer[2]).toBeGreaterThan(Math.max(jianjing[2], yuanye[2]))
+    expect(outer[2]).toBeLessThan(0.04)
     expect(isGbAxillaHollow(midChord, jianjing, yuanye)).toBe(true)
     expect(isGbAxillaHollow(outer, jianjing, yuanye)).toBe(false)
     expect(isGbAxillaHollow([0.10, 1.40, 0.08], jianjing, yuanye)).toBe(true)
@@ -255,6 +256,7 @@ describe('skin path wrapping', () => {
     expect(path.at(-1)).toEqual(yuanye)
     const mid = path[Math.floor(path.length / 2)]
     expect(Math.abs(mid[0])).toBeGreaterThan(Math.abs(midChord[0]))
+    expect(mid[2]).toBeGreaterThan(midChord[2] + 0.03)
     expect(path.every((point) => !isGbAxillaHollow(point, jianjing, yuanye)
       || point === path[0] || point === path.at(-1))).toBe(true)
   })

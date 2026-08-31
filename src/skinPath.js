@@ -218,34 +218,80 @@ export function gbPairSpan(from = [0, 0, 0], to = [0, 0, 0]) {
  */
 export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0) {
   const side = Math.sign(Number(sideX) || Number(chordPoint[0]) || 1) || 1
-  return normalize([side * 0.82, 0.12, 0.55])
+  return normalize([side * 0.90, 0.16, 0.38])
+}
+
+function smoothstep01(value) {
+  const x = clamp01(value)
+  return x * x * (3 - 2 * x)
 }
 
 /**
- * Corridor on the mid-axillary wall. Hold 淵腋 laterality until near 肩井
- * so the climb skirts the axilla pit instead of cutting through it or
- * the raised arm.
+ * Mid-axillary 側胸 target at climb `yT` (0 = 淵腋, 1 = 肩井).
+ * 淵腋 sits in the axillary crease, more posterior and slightly more
+ * lateral than the chest wall. The corridor leaves that pit onto the
+ * side of the thorax, holds laterality until near the shoulder cap,
+ * then eases onto 肩井. Z goes posterior earlier so the last third
+ * rides the shoulder onto 肩頸 instead of punching through it.
+ */
+function gbJianjingYuanyeCorridorAtYT(from = [0, 0, 0], to = [0, 0, 0], yT = 0.5) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const lower = a[1] <= b[1] ? a : b
+  const upper = a[1] <= b[1] ? b : a
+  const side = Math.sign((a[0] + b[0]) / 2) || 1
+  const span = gbPairSpan(a, b)
+  const yt = clamp01(yT)
+  const leave = smoothstep01(yt / 0.16)
+  const shoulderX = smoothstep01((yt - 0.78) / 0.22)
+  const shoulderZ = smoothstep01((yt - 0.50) / 0.50)
+  const onSideX = Math.max(0, leave - shoulderX)
+  const onSideZ = Math.max(0, leave - shoulderZ)
+  const cap = Math.sin(Math.PI * Math.min(1, Math.max(0, (yt - 0.55) / 0.45)))
+  const wallAbsX = Math.max(span * 0.18, Math.abs(lower[0]) - span * 0.05)
+  const wallZ = lower[2] + span * 0.30
+  const x = side * (
+    Math.abs(lower[0]) * (1 - leave)
+    + wallAbsX * onSideX
+    + Math.abs(upper[0]) * shoulderX
+  )
+  const y = lower[1] * (1 - yt) + upper[1] * yt + span * 0.12 * cap
+  const z = lower[2] * (1 - leave) + wallZ * onSideZ + upper[2] * shoulderZ
+  return {
+    point: [x, y, z],
+    yT: yt,
+    onSide: Math.max(onSideX, onSideZ),
+    cap,
+    wallAbsX,
+    wallZ,
+    span,
+    side,
+    lower,
+    upper,
+  }
+}
+
+/**
+ * Corridor on the mid-axillary wall. Leave 淵腋 onto 側胸, then climb to 肩頸.
  */
 export function gbJianjingYuanyeOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const tt = clamp01(t)
-  const lower = a[1] <= b[1] ? a : b
-  const upper = a[1] <= b[1] ? b : a
   const yT = a[1] <= b[1] ? tt : 1 - tt
-  const side = Math.sign((a[0] + b[0]) / 2) || 1
-  const span = gbPairSpan(a, b)
-  const toShoulder = yT < 0.78 ? 0 : (yT - 0.78) / 0.22
-  const eased = toShoulder * toShoulder
-  const aroundPit = Math.sin(Math.PI * Math.min(1, Math.max(0, (yT - 0.12) / 0.72)))
-  const x = side * (Math.abs(lower[0]) * (1 - eased) + Math.abs(upper[0]) * eased)
-  const y = lower[1] * (1 - yT) + upper[1] * yT
-  const z = lower[2] * (1 - eased) + upper[2] * eased + aroundPit * span * 0.07
-  return [x, y, z]
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
+  const guide = gbLateralChestGuide(corridor.point, corridor.side)
+  const standoff = corridor.span * (0.035 * corridor.onSide + 0.04 * corridor.cap)
+  return [
+    corridor.point[0] + guide[0] * standoff,
+    corridor.point[1] + guide[1] * standoff,
+    corridor.point[2] + guide[2] * standoff,
+  ]
 }
 
 /**
- * Axilla pit or anterior pec — not the mid-axillary wall 淵腋 sits on.
+ * Axilla pit, T-pose inner arm, through-shoulder chord, or anterior pec —
+ * not the mid-axillary wall the span should ride.
  */
 export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
   const p = asPathPoint(point)
@@ -255,19 +301,15 @@ export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0
   const y0 = Math.min(a[1], b[1])
   const y1 = Math.max(a[1], b[1])
   const midSpan = p[1] > y0 + span * 0.10 && p[1] < y1 - span * 0.10
-  const zFront = Math.max(a[2], b[2])
-  const onChest = p[2] > zFront + span * 0.18
-  const lower = a[1] <= b[1] ? a : b
-  const upper = a[1] <= b[1] ? b : a
   const yT = y1 - y0 > 1e-8 ? clamp01((p[1] - y0) / (y1 - y0)) : 0.5
-  const toShoulder = yT < 0.78 ? 0 : (yT - 0.78) / 0.22
-  const eased = toShoulder * toShoulder
-  const expectedAbsX = Math.abs(lower[0]) * (1 - eased) + Math.abs(upper[0]) * eased
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
+  const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.14
+  const expectedAbsX = Math.abs(corridor.point[0])
   const tooMedial = midSpan && Math.abs(p[0]) < expectedAbsX - span * 0.10
-  const throughPit = midSpan && yT > 0.18 && yT < 0.72
-    && Math.abs(p[0]) < Math.abs(lower[0]) - span * 0.04
-    && p[2] > Math.min(a[2], b[2]) + span * 0.08
-  return onChest || tooMedial || throughPit
+  const tooLateral = midSpan && Math.abs(p[0]) > Math.max(corridor.wallAbsX, expectedAbsX) + span * 0.18
+  const throughPit = midSpan && yT > 0.12 && yT < 0.82
+    && p[2] < corridor.point[2] - span * 0.10
+  return onChest || tooMedial || tooLateral || throughPit
 }
 
 /** User locators may sit beside the default lateral path; only the pit / pecs / other side is rejected. */
@@ -316,14 +358,14 @@ export function isGbJianjingYuanyeHit(point = [0, 0, 0], from = [0, 0, 0], to = 
 export function gbJianjingYuanyeGuidePoints(from = [0, 0, 0], to = [0, 0, 0], samplesPerSpan = 12) {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
-  return catmullRomThrough([
-    a,
-    gbJianjingYuanyeOuterPoint(a, b, 0.22),
-    gbJianjingYuanyeOuterPoint(a, b, 0.45),
-    gbJianjingYuanyeOuterPoint(a, b, 0.68),
-    gbJianjingYuanyeOuterPoint(a, b, 0.86),
-    b,
-  ], samplesPerSpan)
+  const count = Math.max(8, Math.floor(Number(samplesPerSpan) || 12))
+  const out = []
+  for (let index = 0; index <= count; index += 1) {
+    if (index === 0) out.push([...a])
+    else if (index === count) out.push([...b])
+    else out.push(gbJianjingYuanyeOuterPoint(a, b, index / count))
+  }
+  return out
 }
 
 /**

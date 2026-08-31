@@ -2540,9 +2540,10 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
     let probe = sample
     if (!hasUserHandles) {
       const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - span * 0.012
-      const tooAnterior = sample[2] > outer[2] + span * 0.05
-      const tooLateral = Math.abs(sample[0]) > Math.abs(outer[0]) + span * 0.22
-      if (tooMedial || tooAnterior || tooLateral) probe = outer
+      const tooAnterior = sample[2] > outer[2] + span * 0.08
+      const tooLateral = Math.abs(sample[0]) > Math.abs(outer[0]) + span * 0.12
+      const tooPosterior = sample[2] < outer[2] - span * 0.10
+      if (tooMedial || tooAnterior || tooLateral || tooPosterior) probe = outer
     }
     const guide = gbLateralChestGuide(probe, side)
     let hit = projectFromOutside(new THREE.Vector3(...probe), guide, probeRadius)
