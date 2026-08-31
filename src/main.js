@@ -2511,27 +2511,31 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
     .map((record) => snapGbHandleToSkin(record, a, b, path))
     .filter(Boolean)
   const hasUserHandles = sanitized.length > 0
+  const sampleCount = Math.max(18, Math.ceil(span / 0.006))
   const samples = hasUserHandles
     ? catmullRomThrough(
       [a.position, ...sanitized.map((record) => record.position), b.position],
       16,
     )
-    : gbJianjingYuanyeGuidePoints(a.position, b.position, 14)
+    : gbJianjingYuanyeGuidePoints(a.position, b.position, sampleCount)
   const points = []
   const previousRef = { current: null }
-  const probeRadius = Math.max(0.03, span * 0.14)
-  const snapRadius = Math.max(0.04, span * 0.18)
-  const accept = (hit, t) => {
-    if (!hit) return
-    const ok = hasUserHandles
+  const probeRadius = Math.max(0.028, span * 0.12)
+  const snapRadius = Math.max(0.05, span * 0.22)
+  const liftHit = (hit) => new THREE.Vector3(...hit.position)
+    .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+  const accept = (hit) => {
+    if (!hit) return false
+    appendSkinPoint(points, liftHit(hit), previousRef)
+    return true
+  }
+  const hitOk = (hit, t) => {
+    if (!hit) return false
+    return hasUserHandles
       ? isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position)
       : isGbJianjingYuanyeHit(hit.position, a.position, b.position, t)
-    if (!ok) return
-    const lifted = new THREE.Vector3(...hit.position)
-      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
-    appendSkinPoint(points, lifted, previousRef)
   }
-  accept({ position: a.position, normal: a.normal }, 0)
+  accept({ position: a.position, normal: a.normal })
   for (let index = 1; index < samples.length - 1; index += 1) {
     const t = index / Math.max(1, samples.length - 1)
     const outer = gbJianjingYuanyeOuterPoint(a.position, b.position, t)
@@ -2546,6 +2550,7 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
       if (tooMedial || tooAnterior || tooLateral || tooPosterior) probe = outer
     }
     const guide = gbLateralChestGuide(probe, side)
+    const rescueGuide = gbLateralChestGuide(outer, side)
     let hit = projectFromOutside(new THREE.Vector3(...probe), guide, probeRadius)
       || closestSkinHit(probe, { maxDistance: hasUserHandles ? Math.max(0.22, span) : snapRadius, sideX: side, guideNormal: guide })
     if (hasUserHandles) {
@@ -2553,19 +2558,18 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
         || closestSkinHit(sample, { maxDistance: Math.max(0.38, span * 1.7), sideX: side, guideNormal: guide })
         || projectFromOutside(new THREE.Vector3(...sample), guide, Math.max(0.45, span * 2))
         || hit
-      if (hit && (
-        !isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position)
-        || isGbAxillaHollow(hit.position, a.position, b.position)
-      )) {
-        const rescueGuide = gbLateralChestGuide(outer, side)
-        const rescued = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, probeRadius)
-          || closestSkinHit(outer, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: rescueGuide })
-        if (rescued) hit = rescued
-      }
     }
-    accept(hit, t)
+    if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position))) {
+      hit = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, probeRadius)
+        || closestSkinHit(outer, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: rescueGuide })
+        || projectFromOutside(new THREE.Vector3(...outer), rescueGuide, Math.max(0.08, span * 0.4))
+    }
+    if (!hitOk(hit, t)) {
+      hit = { position: [...outer], normal: [...rescueGuide] }
+    }
+    accept(hit)
   }
-  accept({ position: b.position, normal: b.normal }, 1)
+  accept({ position: b.position, normal: b.normal })
   return points.length >= 3 ? points : null
 }
 
