@@ -1090,6 +1090,13 @@ function projectHandleToScreen(mesh) {
   }
 }
 
+function screenDistanceToHit(event, hit) {
+  if (!hit?.object) return Infinity
+  const screen = projectHandleToScreen(hit.object)
+  if (!screen) return Infinity
+  return Math.hypot(screen.x - event.clientX, screen.y - event.clientY)
+}
+
 /** Prefer the visible acupoint marker, even when a meridian line is closer in 3D. */
 function nearestAcupointMarkerHit(event) {
   const exact = annotationHit(event, ['acupoint'])
@@ -5281,15 +5288,8 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return true
   }
 
-  const acupointHit = nearestAcupointMarkerHit(event)
-  if (acupointHit) {
-    startAcupointDrag(acupointHit)
-    return
-  }
-
-  const handleHit = nearestHandleHit(event)
-  if (handleHit) {
-    const data = handleHit.object.userData
+  const startHandleDrag = (hit) => {
+    const data = hit.object.userData
     selected = {
       type: 'meridian',
       id: data.routeId,
@@ -5313,6 +5313,21 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     syncAppModeUI()
     syncControlsEnabled()
     capturePointer(event)
+    return true
+  }
+
+  const acupointHit = nearestAcupointMarkerHit(event)
+  const handleHit = nearestHandleHit(event)
+  // Black locators sit on the ribbon next to large female acupoint discs.
+  // Prefer whichever gizmo is closer on screen so a click on a black dot
+  // reshapes the meridian instead of dragging 肩井/淵腋.
+  if (handleHit && (!acupointHit || screenDistanceToHit(event, handleHit) <= screenDistanceToHit(event, acupointHit))) {
+    startHandleDrag(handleHit)
+    return
+  }
+  if (acupointHit) {
+    startAcupointDrag(acupointHit)
+    return
   }
 })
 renderer.domElement.addEventListener('pointermove', (event) => {
