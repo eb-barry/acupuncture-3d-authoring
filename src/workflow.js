@@ -497,21 +497,22 @@ export const HANDLE_PROJECT_RADIUS = HANDLE_STRETCH_PROJECT_RADIUS
  * Opposite-limb mirroring is for arms/legs. Head rest paths sit near x=0,
  * so the mirrored ear/temple is close enough to steal a same-side locator.
  */
-export function restPathUsesLimbMirrorGuard(rest = [], worldScale = 1) {
+export function restPathUsesLimbMirrorGuard(rest = [], limbGapMinAbsX = LIMB_GAP_MIN_ABS_X) {
   if (!Array.isArray(rest) || rest.length < 2) return false
-  const scale = Number(worldScale) > 0 ? Number(worldScale) : 1
+  const minAbsX = Number(limbGapMinAbsX) > 0 ? Number(limbGapMinAbsX) : LIMB_GAP_MIN_ABS_X
   let sum = 0
   for (const point of rest) sum += Math.abs(Number(point?.[0]) || 0)
-  return sum / rest.length >= LIMB_GAP_MIN_ABS_X * scale
+  return sum / rest.length >= minAbsX
 }
 
 /** How far a probe may leave the rest path on this segment. */
-export function limbGapMaxOffPath(restX, maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH, worldScale = 1) {
+export function limbGapMaxOffPath(restX, maxOffPath = HANDLE_STRETCH_MAX_OFF_PATH, options = {}) {
   const cap = Number.isFinite(Number(maxOffPath)) ? Number(maxOffPath) : HANDLE_STRETCH_MAX_OFF_PATH
-  const scale = Number(worldScale) > 0 ? Number(worldScale) : 1
-  if (!Number.isFinite(Number(restX)) || Math.abs(restX) < LIMB_GAP_MIN_ABS_X * scale) return cap
+  const minAbsX = Number(options.limbGapMinAbsX) > 0 ? Number(options.limbGapMinAbsX) : LIMB_GAP_MIN_ABS_X
+  const floor = Number(options.limbGapFloor) > 0 ? Number(options.limbGapFloor) : 0.05
+  if (!Number.isFinite(Number(restX)) || Math.abs(restX) < minAbsX) return cap
   const sep = Math.abs(restX) * 2
-  return Math.min(cap, Math.max(0.05 * scale, sep * 0.42))
+  return Math.min(cap, Math.max(floor, sep * 0.42))
 }
 
 export function isCloserToMirroredPolyline(points = [], probe = [0, 0, 0], margin = 0.03) {
@@ -530,12 +531,16 @@ export function isProbeOnSameLimbSegment(
   options = {},
 ) {
   if (!rest.length || !probe) return false
-  const scale = Number(options.worldScale) > 0 ? Number(options.worldScale) : 1
+  const yPad = Number(options.yPad) > 0 ? Number(options.yPad) : 0.22
+  const midlineX = Number(options.midlineX) > 0 ? Number(options.midlineX) : 0.035
+  const mirrorMargin = Number(options.mirrorMargin) > 0 ? Number(options.mirrorMargin) : 0.03
+  const limbGapMinAbsX = Number(options.limbGapMinAbsX) > 0 ? Number(options.limbGapMinAbsX) : LIMB_GAP_MIN_ABS_X
   const ys = rest.map((point) => point[1])
-  const yMin = Math.min(...ys) - 0.22 * scale
-  const yMax = Math.max(...ys) + 0.22 * scale
+  const yMin = Math.min(...ys) - yPad
+  const yMax = Math.max(...ys) + yPad
   if (probe[1] < yMin || probe[1] > yMax) return false
-  if (restPathUsesLimbMirrorGuard(rest, scale) && isCloserToMirroredPolyline(rest, probe, 0.03 * scale)) {
+  if (restPathUsesLimbMirrorGuard(rest, limbGapMinAbsX)
+    && isCloserToMirroredPolyline(rest, probe, mirrorMargin)) {
     return false
   }
   const closest = pointAtPolylineT(rest, closestTOnPolyline(rest, probe))
@@ -543,12 +548,12 @@ export function isProbeOnSameLimbSegment(
   if (off > maxOffPath) return false
   const restX = closest[0]
   const probeX = probe[0]
-  if (Math.abs(restX) > 0.035 * scale && restX * probeX < 0) return false
+  if (Math.abs(restX) > midlineX && restX * probeX < 0) return false
   // Near the groin the other thigh is close; don't collapse into the inter-leg gap.
   // Skip that cap on the head/torso so temple locators can sit on skin.
   // 小海–肩貞 also skips it so locators can leave the arm rest path sideways.
   if (options?.skipLimbGap) return true
-  return off <= limbGapMaxOffPath(restX, maxOffPath, scale)
+  return off <= limbGapMaxOffPath(restX, maxOffPath, options)
 }
 
 /** Slice a polyline between two normalized arc-length values. */
