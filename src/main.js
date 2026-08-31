@@ -99,6 +99,7 @@ import {
   conformPath,
   densifyPath,
   markerScreenScale,
+  MAX_CONFORM_PULL,
   perspectivePixelScale,
   sampleStepForQuality,
   smoothPathNormals,
@@ -3283,7 +3284,10 @@ function trimCache(cache, limit) {
  * rebuild refines it.
  */
 function conformRunToSkin(points) {
-  const step = sampleStepForQuality(dragging ? 'coarse' : 'fine')
+  const scale = Math.max(statureScale(), 1e-3)
+  const step = sampleStepForQuality(dragging ? 'coarse' : 'fine') * scale
+  const snap = 0.02 * scale
+  const pull = MAX_CONFORM_PULL * scale
   const mid = points[Math.floor(points.length / 2)]
   const key = [
     points.length,
@@ -3298,9 +3302,12 @@ function conformRunToSkin(points) {
   // Two passes: nearest-point first, only to learn a stable normal per sample,
   // then drop each sample along that normal so the drawn line keeps the
   // authored route instead of sliding toward whichever crease wall is nearer.
-  const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point))
+  const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point, null, snap), { maxPull: pull })
   const guides = smoothPathNormals(estimate.normals, 2)
-  const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide), { guides })
+  const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide, snap), {
+    guides,
+    maxPull: pull,
+  })
   const run = {
     points: conformed.points.map((point, index) => (
       // A sample neither pass could place stays where the nearest-point pass
