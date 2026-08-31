@@ -153,7 +153,7 @@ export function posteriorWrapGuide(chordPoint = [0, 0, 0]) {
   return normalize([x * 0.2, 0.08, -1])
 }
 
-/** 肩井→淵腋 and front-chest locators should wrap on the anterior skin. */
+/** Front-chest locators / generic convex wraps. 肩井→淵腋 uses the lateral corridor instead. */
 export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   const dropY = Math.abs((Number(from[1]) || 0) - (Number(to[1]) || 0))
   const meanX = ((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2
@@ -163,10 +163,15 @@ export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   return dropY > 0.1 && Math.abs(meanX) > 0.09 && meanZ > -0.035
 }
 
-/** 肩井 GB21 ↔ 淵腋 GB22 only. A* through the armpit crease freezes the tab. */
+/** 肩井 GB21 ↔ 淵腋 GB22 only. Geodesic through the armpit crease is skipped; a lateral-chest corridor is used instead. */
 export function isJianjingYuanyePair(fromCode = '', toCode = '') {
   const codes = new Set([String(fromCode || ''), String(toCode || '')])
   return codes.has('GB21') && codes.has('GB22')
+}
+
+/** Code pair, or the same upper-torso geometry when codes are missing. */
+export function isGbShoulderAxillaSpan(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
+  return isJianjingYuanyePair(fromCode, toCode) || isShoulderAxillaWrap(from, to)
 }
 
 /**
@@ -185,15 +190,182 @@ export function isShoulderAxillaWrap(from = [0, 0, 0], to = [0, 0, 0]) {
 
 /**
  * Pairs that must wrap instead of trying a geodesic first.
- * 肩井→淵腋 is code-gated; geometry is only a fallback.
+ * 肩井→淵腋 and 小海→肩貞 have dedicated on-skin corridors, not this generic wrap.
  */
 export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to = [0, 0, 0]) {
-  if (isTeHeadPair(fromCode, toCode) || isSiXiaohaiJianzhenPair(fromCode, toCode)) {
+  if (
+    isTeHeadPair(fromCode, toCode)
+    || isSiXiaohaiJianzhenPair(fromCode, toCode)
+    || isJianjingYuanyePair(fromCode, toCode)
+  ) {
     return false
   }
   if (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(from, to)) return true
-  if (isJianjingYuanyePair(fromCode, toCode) || isShoulderAxillaWrap(from, to)) return true
   return false
+}
+
+/** Chord length, used to scale 肩井→淵腋 offsets on male and female bodies. */
+export function gbPairSpan(from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  return Math.max(length3(sub3(b, a)), 1e-6)
+}
+
+/**
+ * Cast onto the lateral chest wall: mostly ±X, slightly up.
+ * Only a hint of anterior so the line leaves the axilla hollow without
+ * wrapping onto the pecs or jumping onto the T-pose arm.
+ */
+export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0) {
+  const side = Math.sign(Number(sideX) || Number(chordPoint[0]) || 1) || 1
+  return normalize([side * 0.90, 0.16, 0.38])
+}
+
+function smoothstep01(value) {
+  const x = clamp01(value)
+  return x * x * (3 - 2 * x)
+}
+
+/**
+ * Mid-axillary 側胸 target at climb `yT` (0 = 淵腋, 1 = 肩井).
+ * 淵腋 sits in the axillary crease, more posterior and slightly more
+ * lateral than the chest wall. The corridor leaves that pit onto the
+ * side of the thorax, holds laterality until near the shoulder cap,
+ * then eases onto 肩井. Z goes posterior earlier so the last third
+ * rides the shoulder onto 肩頸 instead of punching through it.
+ */
+function gbJianjingYuanyeCorridorAtYT(from = [0, 0, 0], to = [0, 0, 0], yT = 0.5) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const lower = a[1] <= b[1] ? a : b
+  const upper = a[1] <= b[1] ? b : a
+  const side = Math.sign((a[0] + b[0]) / 2) || 1
+  const span = gbPairSpan(a, b)
+  const yt = clamp01(yT)
+  const leave = smoothstep01(yt / 0.16)
+  const shoulderX = smoothstep01((yt - 0.78) / 0.22)
+  const shoulderZ = smoothstep01((yt - 0.50) / 0.50)
+  const onSideX = Math.max(0, leave - shoulderX)
+  const onSideZ = Math.max(0, leave - shoulderZ)
+  const cap = Math.sin(Math.PI * Math.min(1, Math.max(0, (yt - 0.55) / 0.45)))
+  const wallAbsX = Math.max(span * 0.18, Math.abs(lower[0]) - span * 0.05)
+  const wallZ = lower[2] + span * 0.30
+  const x = side * (
+    Math.abs(lower[0]) * (1 - leave)
+    + wallAbsX * onSideX
+    + Math.abs(upper[0]) * shoulderX
+  )
+  const y = lower[1] * (1 - yt) + upper[1] * yt + span * 0.12 * cap
+  const z = lower[2] * (1 - leave) + wallZ * onSideZ + upper[2] * shoulderZ
+  return {
+    point: [x, y, z],
+    yT: yt,
+    onSide: Math.max(onSideX, onSideZ),
+    cap,
+    wallAbsX,
+    wallZ,
+    span,
+    side,
+    lower,
+    upper,
+  }
+}
+
+/**
+ * Corridor on the mid-axillary wall. Leave 淵腋 onto 側胸, then climb to 肩頸.
+ */
+export function gbJianjingYuanyeOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const tt = clamp01(t)
+  const yT = a[1] <= b[1] ? tt : 1 - tt
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
+  const guide = gbLateralChestGuide(corridor.point, corridor.side)
+  const standoff = corridor.span * (0.035 * corridor.onSide + 0.04 * corridor.cap)
+  return [
+    corridor.point[0] + guide[0] * standoff,
+    corridor.point[1] + guide[1] * standoff,
+    corridor.point[2] + guide[2] * standoff,
+  ]
+}
+
+/**
+ * Axilla pit, T-pose inner arm, through-shoulder chord, or anterior pec —
+ * not the mid-axillary wall the span should ride.
+ */
+export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const span = gbPairSpan(a, b)
+  const y0 = Math.min(a[1], b[1])
+  const y1 = Math.max(a[1], b[1])
+  const midSpan = p[1] > y0 + span * 0.10 && p[1] < y1 - span * 0.10
+  const yT = y1 - y0 > 1e-8 ? clamp01((p[1] - y0) / (y1 - y0)) : 0.5
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
+  const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.14
+  const expectedAbsX = Math.abs(corridor.point[0])
+  const tooMedial = midSpan && Math.abs(p[0]) < expectedAbsX - span * 0.10
+  const tooLateral = midSpan && Math.abs(p[0]) > Math.max(corridor.wallAbsX, expectedAbsX) + span * 0.18
+  const throughPit = midSpan && yT > 0.12 && yT < 0.82
+    && p[2] < corridor.point[2] - span * 0.10
+  return onChest || tooMedial || tooLateral || throughPit
+}
+
+/** User locators may sit beside the default lateral path; only the pit / pecs / other side is rejected. */
+export function isGbJianjingYuanyeHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  const span = gbPairSpan(a, b)
+  if (p[0] * side < 0 && Math.abs(p[0]) > span * 0.12) return false
+  const yMin = Math.min(a[1], b[1]) - span * 0.22
+  const yMax = Math.max(a[1], b[1]) + span * 0.22
+  if (p[1] < yMin || p[1] > yMax) return false
+  return !isGbAxillaHollow(p, a, b)
+}
+
+/** Reject samples that fell into the axilla crease or jumped onto the chest. */
+export function isGbJianjingYuanyeHit(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = null) {
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  const span = gbPairSpan(a, b)
+  if (p[0] * side < 0 && Math.abs(p[0]) > span * 0.12) return false
+  const yMin = Math.min(a[1], b[1]) - span * 0.14
+  const yMax = Math.max(a[1], b[1]) + span * 0.14
+  if (p[1] < yMin || p[1] > yMax) return false
+  if (isGbAxillaHollow(p, a, b)) return false
+  const progress = Number.isFinite(Number(t))
+    ? clamp01(t)
+    : clamp01((
+      (p[0] - a[0]) * (b[0] - a[0])
+      + (p[1] - a[1]) * (b[1] - a[1])
+      + (p[2] - a[2]) * (b[2] - a[2])
+    ) / (span * span))
+  if (progress > 0.14 && progress < 0.86) {
+    const chord = lerp3(a, b, progress)
+    const outer = gbJianjingYuanyeOuterPoint(a, b, progress)
+    const toChord = length3(sub3(p, chord))
+    const toOuter = length3(sub3(p, outer))
+    if (toChord + span * 0.045 < toOuter && toChord < span * 0.14) return false
+  }
+  return true
+}
+
+export function gbJianjingYuanyeGuidePoints(from = [0, 0, 0], to = [0, 0, 0], samplesPerSpan = 12) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const count = Math.max(8, Math.floor(Number(samplesPerSpan) || 12))
+  const out = []
+  for (let index = 0; index <= count; index += 1) {
+    if (index === 0) out.push([...a])
+    else if (index === count) out.push([...b])
+    else out.push(gbJianjingYuanyeOuterPoint(a, b, index / count))
+  }
+  return out
 }
 
 /**
@@ -581,7 +753,9 @@ export function isSiXiaohaiJianzhenPair(fromCode = '', toCode = '') {
  * polyline or drop them with the opposite-limb filter after mouse-up.
  */
 export function pairKeepsOffPathLocators(fromCode = '', toCode = '') {
-  return isSiXiaohaiJianzhenPair(fromCode, toCode) || isTeHeadPair(fromCode, toCode)
+  return isSiXiaohaiJianzhenPair(fromCode, toCode)
+    || isTeHeadPair(fromCode, toCode)
+    || isJianjingYuanyePair(fromCode, toCode)
 }
 
 /** Stay on the back of the arm/shoulder — not into the axilla or chest. */

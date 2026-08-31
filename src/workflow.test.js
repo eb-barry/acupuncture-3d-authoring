@@ -416,7 +416,7 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(rest, [-0.22, 1.16, -0.09], 0.36, { skipLimbGap: true })).toBe(false)
   })
 
-  it('lets 肩井–淵腋 locators move onto the front of the chest', () => {
+  it('lets 肩井–淵腋 locators sit on the lateral chest, not only the rest chord', () => {
     const shoulder = [[0.12, 1.42, -0.02], [0.15, 1.18, 0.01]]
     const frontChest = [0.11, 1.28, 0.08]
     expect(limbGapMaxOffPath(0.13, 0.36)).toBeCloseTo(0.36)
