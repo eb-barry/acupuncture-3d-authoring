@@ -172,7 +172,7 @@ function kiYinguChangqiangEnds(from = [0, 0, 0], to = [0, 0, 0]) {
  * straight diagonal into 長強. Smoothstep-after-0.58 plus a posterior bulge
  * wrapped the natal cleft into a V.
  */
-export const KI_YINGU_CHANGQIANG_FOLD_T = 0.62
+export const KI_YINGU_CHANGQIANG_FOLD_T = 0.50
 
 /** 0 on the thigh; 0→1 linearly from the fold into 長強. */
 export function kiYinguChangqiangMedialT(t = 0) {

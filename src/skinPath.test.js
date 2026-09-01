@@ -364,7 +364,7 @@ describe('skin path wrapping', () => {
     expect(Math.abs(fold[0])).toBeGreaterThan(0.05)
     expect(Math.abs(half[0] - fold[0] * 0.5)).toBeLessThan(0.01)
     expect(half[2]).toBeGreaterThan(Math.min(ki10[2], gv1[2]) - 0.03)
-    const diagonal = [0.62, 0.72, 0.82, 0.92, 1].map((t) => kiYinguChangqiangOuterPoint(ki10, gv1, t))
+    const diagonal = [0.50, 0.62, 0.74, 0.86, 1].map((t) => kiYinguChangqiangOuterPoint(ki10, gv1, t))
     for (let index = 1; index < diagonal.length; index += 1) {
       expect(Math.abs(diagonal[index][0])).toBeLessThanOrEqual(Math.abs(diagonal[index - 1][0]) + 1e-9)
     }

@@ -2913,7 +2913,7 @@ function snapKiYinguChangqiangToSkin(a, b) {
   const simplified = simplifyPolylineWithNormals(
     arrays,
     arrays.map(() => [0, 0, -1]),
-    statureWorld(0.006),
+    statureWorld(0.0025),
   )
   return simplified.points.map((point) => new THREE.Vector3(...point))
 }
@@ -5108,6 +5108,7 @@ async function importJSON(file) {
   }
   rebuildAnnotations()
   updateUI()
+  $('#model-status').textContent = `${preset.label} · ${preset.fileName}`
   const mappedNote = needsRetarget
     ? `（已從${BODY_MODELS[sourceBody].label}依身高貼到皮膚${retargetMissed ? `，${retargetMissed} 點未貼上` : ''}，請再微調）`
     : ''
