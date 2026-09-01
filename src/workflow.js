@@ -138,6 +138,16 @@ export const HANDLE_SPACING = 0.0409
 export const MIN_HANDLE_GAP = 0.08
 export const HANDLE_END_MARGIN = 0.1
 
+/**
+ * 任督二脈 have no locators in the UI. Drawing must not auto-insert them
+ * either: female world units (~200× male) otherwise look like a long arc
+ * and fill each pair with five hidden locators, which fragments the
+ * midline snap into zigzag / flying chords.
+ */
+export function meridianUsesLocators(meridianId = '') {
+  return meridianId !== 'CV' && meridianId !== 'GV'
+}
+
 export function isStyledHandle(node) {
   return node?.type === 'control' && HANDLE_STYLES.includes(node.style)
 }

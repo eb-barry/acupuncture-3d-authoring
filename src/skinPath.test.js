@@ -54,8 +54,11 @@ import {
   hitStaysOnFrontMidline,
   hitStaysNearMidlineChord,
   midlineFrontProbeOrigin,
+  midlineBackProbeOrigin,
   hitMatchesMidlineSampleY,
+  hitStaysOnMidlineX,
   isGvFacePair,
+  isGvOcciputPair,
   isCvAnteriorPair,
   slerpUnitVectors,
   surfaceStepLength,
@@ -172,6 +175,23 @@ describe('skin path wrapping', () => {
     const guide = posteriorWrapGuide([0.01, 1.22, -0.04])
     expect(guide[2]).toBeLessThan(-0.9)
     expect(Math.abs(guide[0])).toBeLessThan(0.2)
+    expect(isGvOcciputPair('GV16', 'GV19')).toBe(true)
+    expect(isGvOcciputPair('GV18', 'GV17')).toBe(true)
+    expect(isGvOcciputPair('GV24', 'GV25')).toBe(false)
+    const houding = [0.004, 1.62, -0.02]
+    const fengfu = [-0.005, 1.50, -0.08]
+    expect(shouldPosteriorWrap(houding, fengfu)).toBe(true)
+    const femaleHouding = [2.1, 376, -4.6]
+    const femaleFengfu = [-1.4, 348, -18.6]
+    expect(shouldPosteriorWrap(femaleHouding, femaleFengfu)).toBe(true)
+    expect(shouldFrontWrap(femaleHouding, femaleFengfu)).toBe(false)
+    const femaleOcciputMid = [0.4, 362, -20]
+    expect(isHitOnWrapSide(femaleOcciputMid, femaleHouding, femaleFengfu)).toBe(true)
+    const backProbe = midlineBackProbeOrigin(houding, fengfu, 0.5, 0.08)
+    expect(backProbe[2]).toBeLessThan(Math.min(houding[2], fengfu[2]))
+    expect(surfaceStepLength(0.12, 0.9)).toBeCloseTo(surfaceStepLength(0.12, 0.9), 8)
+    expect(surfaceStepLength(28, 0.9)).toBeGreaterThan(0.2)
+    expect(surfaceStepLength(0.08, -0.8)).toBeLessThan(0.008)
   })
 
   it('keeps 神庭→素髎 and 玉堂→膻中 on the sagittal midline, not in the sky or off the sternum', () => {
@@ -209,6 +229,12 @@ describe('skin path wrapping', () => {
     expect(hitStaysOnFrontMidline(faceMid, shenting, suliao)).toBe(true)
     expect(hitStaysOnFrontMidline(skyFront, shenting, suliao)).toBe(false)
     expect(hitStaysOnFrontMidline([0.002, 1.565, -0.12], shenting, suliao)).toBe(false)
+    const femaleJiuwei = [0, 262, 22.77]
+    const femaleJuque = [0, 252, 23.58]
+    const femaleXiphoid = [0, 257, 18.4]
+    expect(hitStaysOnFrontMidline(femaleXiphoid, femaleJiuwei, femaleJuque)).toBe(true)
+    expect(hitStaysOnMidlineX(femaleXiphoid, femaleJiuwei, femaleJuque, 0.5)).toBe(true)
+    expect(hitStaysOnMidlineX([1.1, 257, 20], femaleJiuwei, femaleJuque, 0.5)).toBe(false)
     expect(isHitOnWrapSide(skyFront, shenting, suliao)).toBe(false)
     expect(hitStaysNearMidlineChord(sternumMid, yutang, danzhong)).toBe(true)
     expect(hitStaysNearMidlineChord(chestJog, yutang, danzhong)).toBe(false)
@@ -235,6 +261,17 @@ describe('skin path wrapping', () => {
     expect(isSagittalMidlineSpan(femaleShenting, femaleSuliao)).toBe(true)
     expect(hitStaysOnSagittalSpan(femaleFace, femaleShenting, femaleSuliao)).toBe(true)
     expect(hitStaysOnSagittalSpan(femaleSky, femaleShenting, femaleSuliao)).toBe(false)
+    const chestBump = [0.001, 1.25, 0.16]
+    expect(hitStaysOnMidlineX(chestBump, yutang, danzhong, 0.5)).toBe(true)
+    expect(hitStaysOnMidlineX(chestJog, yutang, danzhong, 0.5)).toBe(false)
+    const femaleYutang = yutang.map((value) => value * 232)
+    const femaleDanzhong = danzhong.map((value) => value * 232)
+    const femaleBump = [0.2, 1.25 * 232, 0.16 * 232]
+    const femalePec = [0.12 * 232, 1.25 * 232, 0.08 * 232]
+    expect(hitStaysOnMidlineX(femaleBump, femaleYutang, femaleDanzhong, 0.5)).toBe(true)
+    expect(hitStaysOnMidlineX(femalePec, femaleYutang, femaleDanzhong, 0.5)).toBe(false)
+    expect(shouldFrontWrap(femaleShenting, femaleSuliao)).toBe(true)
+    expect(shouldPosteriorWrap(femaleShenting, femaleSuliao)).toBe(false)
   })
 
   it('wraps 少府→少衝 around the pinky tip instead of cutting through the finger', () => {

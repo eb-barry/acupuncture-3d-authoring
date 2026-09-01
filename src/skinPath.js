@@ -33,9 +33,13 @@ export function slerpUnitVectors(a, b, t, hint = [0, 1, 0]) {
 
 /** Step length while marching on skin between two nodes. */
 export function surfaceStepLength(distance, normalDot) {
-  const wrap = Math.max(0, 1 - normalDot)
-  // Smaller steps on wrap segments (手掌魚際) keep a single clean arc.
-  return Math.min(0.007, Math.max(0.0022, distance / (28 + wrap * 40)))
+  const wrap = Math.max(0, 1 - Number(normalDot) || 0)
+  const dist = Math.max(Number(distance) || 0, 1e-6)
+  const maleStep = Math.min(0.007, Math.max(0.0022, dist / (28 + wrap * 40)))
+  // Female GLB is ~200× male. Keep the male millimetre step; do not march
+  // 20k tiny steps that zigzag across the occiput.
+  if (dist <= 0.5) return maleStep
+  return Math.min(dist / 28, Math.max(dist / 80, 0.35))
 }
 
 /** Tight outside cast while marching — large enough to leave the surface, not the limb. */
@@ -142,9 +146,12 @@ export function shouldPosteriorWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   const meanX = (ax + bx) / 2
   const meanZ = (az + bz) / 2
   const maxZ = Math.max(az, bz)
-  if (Math.abs(meanX) > 0.08) return false
-  if (maxZ > 0.025) return false
-  return meanZ < 0.008
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  // Span-relative so female (~200×) crown/nape still counts as back.
+  // Male spans stay on the original 0.08 / 0.025 / 0.008 caps.
+  if (Math.abs(meanX) > Math.max(0.08, span * 0.25)) return false
+  if (maxZ > Math.max(0.025, span * 0.15) && meanZ > Math.max(0.008, span * 0.05)) return false
+  return meanZ < Math.max(0.008, span * 0.05)
 }
 
 /** Push a through-spine chord out onto the back skin (−Z). */
@@ -199,6 +206,14 @@ function meridianCodeNumber(code = '') {
   return match ? Number(match[1]) : Number.NaN
 }
 
+/** 風府→後頂 (GV16–GV19): occiput midline. */
+export function isGvOcciputPair(fromCode = '', toCode = '') {
+  if (!/^GV\d+$/.test(String(fromCode || '')) || !/^GV\d+$/.test(String(toCode || ''))) return false
+  const a = meridianCodeNumber(fromCode)
+  const b = meridianCodeNumber(toCode)
+  return a >= 16 && a <= 19 && b >= 16 && b <= 19
+}
+
 /** 上星→齦交 (GV23–GV28): forehead, nose, philtrum. */
 export function isGvFacePair(fromCode = '', toCode = '') {
   if (!/^GV\d+$/.test(String(fromCode || '')) || !/^GV\d+$/.test(String(toCode || ''))) return false
@@ -225,8 +240,9 @@ export function hitStaysOnFrontMidline(hit = [0, 0, 0], from = [0, 0, 0], to = [
   const minZ = Math.min(Number(from[2]) || 0, Number(to[2]) || 0)
   const hitZ = Number(hit[2]) || 0
   if (hitZ > maxZ + Math.max(0.016, span * 0.10)) return false
-  // Through-skull occiput, but still allow recessed lips / gums on 督脈.
-  if (hitZ < minZ - Math.max(0.025, span * 0.45)) return false
+  // Through-skull occiput, but allow a recessed sternum / philtrum.
+  // Female 鳩尾–巨闕 drops ~4 units at the xiphoid; span*0.45 was too tight.
+  if (hitZ < minZ - Math.max(0.025, span * 0.80)) return false
   return true
 }
 
@@ -242,6 +258,13 @@ export function hitStaysNearMidlineChord(hit = [0, 0, 0], from = [0, 0, 0], to =
   return length3(sub3(p, proj)) <= Math.max(0.008, span * 0.05)
 }
 
+/** Front-view straightness: stay on the chord X, even if Z follows the sternum / breasts. */
+export function hitStaysOnMidlineX(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const origin = midlineFrontProbeOrigin(from, to, t, 0)
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.abs((Number(hit[0]) || 0) - origin[0]) <= Math.max(0.008, span * 0.05)
+}
+
 /**
  * Probe origin in front of the face/chest at sample t.
  * A −Z ray from here hits skin at that Y, not the nose tip from every Y.
@@ -255,6 +278,19 @@ export function midlineFrontProbeOrigin(from = [0, 0, 0], to = [0, 0, 0], t = 0.
     a[0] + (b[0] - a[0]) * u,
     a[1] + (b[1] - a[1]) * u,
     maxZ + Math.max(0, Number(standoff) || 0),
+  ]
+}
+
+/** Origin behind the occiput at sample t. A +Z ray hits the back of the skull at that Y. */
+export function midlineBackProbeOrigin(from = [0, 0, 0], to = [0, 0, 0], t = 0.5, standoff = 0) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const u = clamp01(t)
+  const minZ = Math.min(a[2], b[2])
+  return [
+    a[0] + (b[0] - a[0]) * u,
+    a[1] + (b[1] - a[1]) * u,
+    minZ - Math.max(0, Number(standoff) || 0),
   ]
 }
 
@@ -1122,9 +1158,10 @@ export function isHitOnWrapSide(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0
   const side = Math.sign(((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2) || Math.sign(hitX) || 1
   if (side * hitX < 0 && Math.abs(hitX) > 0.04) return false
   if (shouldPosteriorWrap(from, to)) {
+    const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
     const maxZ = Math.max(Number(from[2]) || 0, Number(to[2]) || 0)
     const meanZ = ((Number(from[2]) || 0) + (Number(to[2]) || 0)) / 2
-    const ceiling = Math.max(maxZ, meanZ) + 0.035
+    const ceiling = Math.max(maxZ, meanZ) + Math.max(0.035, span * 0.12)
     return hitZ <= ceiling
   }
   if (!shouldFrontWrap(from, to)) return true

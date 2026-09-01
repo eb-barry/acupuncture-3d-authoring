@@ -79,10 +79,12 @@ import {
   shouldPosteriorWrap,
   isSagittalMidlineSpan,
   hitStaysOnFrontMidline,
-  hitStaysNearMidlineChord,
+  hitStaysOnMidlineX,
   midlineFrontProbeOrigin,
+  midlineBackProbeOrigin,
   hitMatchesMidlineSampleY,
   isGvFacePair,
+  isGvOcciputPair,
   isCvAnteriorPair,
   slerpUnitVectors,
   surfaceStepLength,
@@ -151,6 +153,7 @@ import {
   keepPairHandles,
   locatorOnPairLimb,
   mergeControlsIntoRoute,
+  meridianUsesLocators,
   nearestScreenIndex,
   nextHandleInsertT,
   normalizePlacedPointSide,
@@ -2090,10 +2093,14 @@ function simplifyLiftedPolyline(points) {
  * cutting through / spawning multiple floating chords.
  */
 /**
- * 任督中線：依 Y 切片從前方 −Z 貼回皮膚。
- * 臉段跟著輪廓（額→鼻→唇），胸腹段鎖在穴位和弦的 X，避免飛到鼻前空中或繞到胸骨旁邊。
+ * 任督中線：依 Y 切片貼回皮膚。
+ * 臉段從前方 −Z、後枕從後方 +Z；胸腹段只鎖 X，Z 可跟著胸骨／乳房起伏。
  */
-function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = false } = {}) {
+function snapMidlineChordToSkin(a, b, {
+  followProfile = false,
+  keepStraight = false,
+  fromBack = false,
+} = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   const from = a.position
@@ -2102,26 +2109,27 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
   const count = Math.min(72, Math.max(20, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 10))
   const maxZ = Math.max(from[2], to[2])
   const minZ = Math.min(from[2], to[2])
-  const inward = new THREE.Vector3(0, 0, -1)
-  const outward = new THREE.Vector3(0, 0, 1)
+  const inward = new THREE.Vector3(0, 0, fromBack ? 1 : -1)
+  const outward = new THREE.Vector3(0, 0, fromBack ? -1 : 1)
   const standoffs = followProfile
     ? [statureWorld(0.06), statureWorld(0.10), statureWorld(0.16)]
     : [statureWorld(0.05), statureWorld(0.09)]
   const extraReach = Math.max(statureWorld(0.12), maxZ - minZ + statureWorld(0.04))
   const xSlack = Math.max(statureWorld(0.008), span * 0.05)
+  const lift = statureWorld(SKIN_LIFT)
   const points = []
   const previousRef = { current: null }
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
-    .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+    .addScaledVector(new THREE.Vector3(...hit.normal), lift)
   const legal = (hit, t, sampleX) => {
     if (!hit) return false
     if (!hitStaysOnFrontMidline(hit.position, from, to)) return false
     if (!hitMatchesMidlineSampleY(hit.position, from, to, t)) return false
-    if (keepStraight && !hitStaysNearMidlineChord(hit.position, from, to)) return false
+    if (keepStraight && !hitStaysOnMidlineX(hit.position, from, to, t)) return false
     if (keepStraight && Math.abs(hit.position[0] - sampleX) > xSlack) return false
     return true
   }
-  const pickFrontHit = (origin, maxDistance, t, sampleX) => {
+  const pickHit = (origin, maxDistance, t, sampleX) => {
     const hits = raySkinHits(origin, inward, maxDistance, outward)
     for (const hit of hits) {
       if (legal(hit, t, sampleX)) return hit
@@ -2129,25 +2137,33 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
     return null
   }
 
-  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), SKIN_LIFT), previousRef)
+  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), lift), previousRef)
   for (let index = 1; index < count - 1; index += 1) {
     const t = index / (count - 1)
-    const sample = midlineFrontProbeOrigin(from, to, t, 0)
+    const sample = fromBack
+      ? midlineBackProbeOrigin(from, to, t, 0)
+      : midlineFrontProbeOrigin(from, to, t, 0)
     const x = sample[0]
     const y = sample[1]
-    const dx = Math.max(statureWorld(0.0025), span * 0.015)
+    const dx = Math.max(statureWorld(0.012), span * 0.03)
     const xs = followProfile
       ? [x, x + dx, x - dx, x + dx * 2, x - dx * 2, (from[0] + to[0]) / 2]
       : [x]
     let hit = null
-    let bestZ = -Infinity
+    let bestZ = fromBack ? Infinity : -Infinity
     for (const ox of xs) {
       for (const standoff of standoffs) {
-        const origin = new THREE.Vector3(ox, y, maxZ + standoff)
-        const candidate = pickFrontHit(origin, standoff + extraReach, t, x)
+        const origin = fromBack
+          ? new THREE.Vector3(...midlineBackProbeOrigin(from, to, t, standoff))
+          : new THREE.Vector3(ox, y, maxZ + standoff)
+        if (fromBack) origin.x = ox
+        const candidate = pickHit(origin, standoff + extraReach, t, x)
         if (!candidate) continue
         if (followProfile) {
-          if (candidate.position[2] > bestZ) {
+          const better = fromBack
+            ? candidate.position[2] < bestZ
+            : candidate.position[2] > bestZ
+          if (better) {
             hit = candidate
             bestZ = candidate.position[2]
           }
@@ -2161,16 +2177,30 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
     if (!hit && keepStraight) {
       const chord = start.clone().lerp(end, t)
       const nearby = closestSkinHit(toArray(chord), {
-        maxDistance: Math.max(statureWorld(0.012), span * 0.08),
+        maxDistance: Math.max(statureWorld(0.04), span * 0.5),
         sideX: null,
-        guideNormal: [0, 0, 1],
+        guideNormal: fromBack ? [0, 0, -1] : [0, 0, 1],
       })
       if (legal(nearby, t, x)) hit = nearby
     }
     if (!hit) continue
     appendSkinPoint(points, liftHit(hit), previousRef)
   }
-  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), SKIN_LIFT), previousRef)
+  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), lift), previousRef)
+  if (import.meta.env.DEV) {
+    window.__midlineSnap = window.__midlineSnap || []
+    window.__midlineSnap.push({
+      followProfile,
+      keepStraight,
+      fromBack,
+      n: points.length,
+      from: [...from],
+      to: [...to],
+      xs: points.map((point) => point.x),
+      ys: points.map((point) => point.y),
+      zs: points.map((point) => point.z),
+    })
+  }
   return points.length >= 3 ? points : null
 }
 
@@ -2817,15 +2847,17 @@ function skinSegmentPoints(a, b, {
     if (facing?.length >= 2) return facing
   }
   const gvFace = isGvFacePair(fromCode, toCode)
+  const gvOcciput = isGvOcciputPair(fromCode, toCode)
   const cvAnterior = isCvAnteriorPair(fromCode, toCode)
-  if (gvFace || cvAnterior) {
+  if (gvFace || gvOcciput || cvAnterior) {
     const wrapped = snapMidlineChordToSkin(a, b, {
-      followProfile: gvFace,
-      keepStraight: cvAnterior,
+      followProfile: gvFace || gvOcciput,
+      keepStraight: cvAnterior || gvFace || gvOcciput,
+      fromBack: gvOcciput,
     })
     if (wrapped?.length >= 2) return wrapped
   }
-  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !cvAnterior && (
+  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && (
     preferWrap
     || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
@@ -2833,7 +2865,7 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !cvAnterior) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior) {
     const geodesic = geodesicOnSkin(a, b)
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
@@ -2849,7 +2881,7 @@ function skinSegmentPoints(a, b, {
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !gbShoulderAxilla && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !gbShoulderAxilla && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -3101,6 +3133,9 @@ function drawPairSkinSegment(route, pair, override = null) {
   const rest = isOverride && override.rest
     ? override.rest
     : restPathArrays(pair.fromNode, pair.toNode)
+  if (!meridianUsesLocators(route.meridianId)) {
+    return vectorsFromArrays(rest)
+  }
   const count = visibleHandleCount(
     polylineArcLength(rest),
     shortSegmentReferenceArc(route.side),
@@ -3498,6 +3533,10 @@ function conformRunToSkin(points) {
   const cached = conformCache.get(key)
   if (cached) return cached
   const dense = densifyPath(points.map((point) => toArray(point)), step)
+  const start = toArray(points[0])
+  const end = toArray(points[points.length - 1])
+  const lockMidlineX = Math.abs(start[0]) <= statureWorld(0.02)
+    && Math.abs(end[0]) <= statureWorld(0.02)
   // Two passes: nearest-point first, only to learn a stable normal per sample,
   // then drop each sample along that normal so the drawn line keeps the
   // authored route instead of sliding toward whichever crease wall is nearer.
@@ -3508,11 +3547,13 @@ function conformRunToSkin(points) {
     maxPull: pull,
   })
   const run = {
-    points: conformed.points.map((point, index) => (
-      // A sample neither pass could place stays where the nearest-point pass
-      // left it — on the skin — rather than at its authored height.
-      conformed.resolved[index] ? point : estimate.points[index]
-    )),
+    points: conformed.points.map((point, index) => {
+      const placed = conformed.resolved[index] ? point : estimate.points[index]
+      // 任督 x=0: nearest-point conform otherwise slides into the breasts
+      // at the xiphoid dip and makes 鳩尾–巨闕 look crooked from the front.
+      if (!lockMidlineX || !placed) return placed
+      return [dense[index][0], placed[1], placed[2]]
+    }),
     normals: smoothPathNormals(conformed.normals, 2),
     unresolved: conformed.resolved.reduce(
       (total, ok, index) => (ok || estimate.resolved[index] ? total : total + 1),
@@ -3876,6 +3917,7 @@ function refreshRouteEditHandles() {
 }
 
 function rebuildAnnotations() {
+  if (import.meta.env.DEV) window.__midlineSnap = []
   // Decal materials are per visual; drop them before the group is cleared so
   // the shader material set does not grow with every rebuild.
   routeVisuals.forEach(({ line }) => disposeSkinDecalMaterial(line?.material))
@@ -5808,4 +5850,74 @@ controls.addEventListener('end', () => {
 $('#body-model-filter').addEventListener('change', (event) => {
   setActiveBodyModel(event.target.value)
 })
+if (import.meta.env.DEV) {
+  window.__studio = {
+    dump() {
+      const summarize = (pts) => {
+        if (!pts.length) return null
+        const xs = pts.map((p) => p[0])
+        const ys = pts.map((p) => p[1])
+        const zs = pts.map((p) => p[2])
+        let maxEdge = 0
+        for (let i = 1; i < pts.length; i += 1) {
+          maxEdge = Math.max(maxEdge, Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]))
+        }
+        return {
+          n: pts.length,
+          xMin: Math.min(...xs),
+          xMax: Math.max(...xs),
+          xSpread: Math.max(...xs) - Math.min(...xs),
+          yMin: Math.min(...ys),
+          yMax: Math.max(...ys),
+          zMin: Math.min(...zs),
+          zMax: Math.max(...zs),
+          maxEdge,
+          mid: pts[Math.floor(pts.length / 2)],
+        }
+      }
+      return {
+        body: state.model?.body,
+        bodyHeightWorld,
+        stature: statureScale(),
+        snaps: window.__midlineSnap || [],
+        routes: routeVisuals.map(({ line, route }) => {
+          const pts = (line.userData.tubePoints || []).map((p) => [p.x, p.y, p.z])
+          return {
+            id: route.id,
+            meridianId: route.meridianId,
+            unresolved: line.userData.unresolvedSamples || 0,
+            pairKeys: line.userData.pairKeys || [],
+            ...summarize(pts),
+            pts,
+          }
+        }),
+        acupoints: state.acupoints.map((p) => ({
+          code: p.code,
+          name: p.name,
+          position: p.position,
+        })),
+      }
+    },
+    profileX0(y0, y1, fromBack = false) {
+      const hits = []
+      const step = Math.max(0.4, (y1 - y0) / 24)
+      for (let y = y0; y <= y1 + 1e-6; y += step) {
+        const origin = fromBack ? new THREE.Vector3(0, y, -80) : new THREE.Vector3(0, y, 80)
+        const dir = fromBack ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 0, -1)
+        const hit = raySkinHits(origin, dir, 200, dir.clone().negate())[0]
+        if (hit) hits.push({ y, p: hit.position.map((v) => Math.round(v * 1000) / 1000), n: hit.normal.map((v) => Math.round(v * 1000) / 1000) })
+      }
+      return hits
+    },
+    frame(target, position) {
+      if (orbitLocked) setOrbitLocked(false)
+      controls.target.set(...target)
+      camera.position.set(...position)
+      camera.up.set(0, 1, 0)
+      camera.lookAt(controls.target)
+      controls.update()
+      syncZoomUI({ force: true })
+    },
+  }
+}
 loadDefaultModel()
