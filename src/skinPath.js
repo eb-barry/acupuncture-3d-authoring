@@ -236,14 +236,15 @@ function gbScalpInterior(from = [0, 0, 0], to = [0, 0, 0]) {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const span = Math.max(length3(sub3(b, a)), 1e-6)
+  const side = Math.sign((a[0] + b[0]) / 2) || 1
   return [
-    ((a[0] + b[0]) / 2) * 0.18,
-    Math.min(a[1], b[1]) - span * 0.18,
-    Math.max(a[2], b[2]) + span * 0.42,
+    ((a[0] + b[0]) / 2) - side * span * 0.32,
+    (a[1] + b[1]) / 2,
+    Math.max(a[2], b[2]) + span * 0.22,
   ]
 }
 
-/** Outward scalp normal along 承靈→腦空 (not the hair bun behind the occiput). */
+/** Outward scalp normal along 承靈→腦空 (lateral, not into the hair bun). */
 export function gbChenglingNaokongGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
@@ -253,7 +254,8 @@ export function gbChenglingNaokongGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.
 
 export function gbChenglingNaokongCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
   const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
-  return Math.max(0.03, span * 0.10)
+  // Short of the female occiput bun: long posterior stand-offs start behind hair.
+  return Math.max(0.012, span * 0.045)
 }
 
 /** Chord sample lifted just outside the skull, short of the bun. */
@@ -264,7 +266,7 @@ export function gbChenglingNaokongOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t
   const p = lerp3(a, b, tt)
   const guide = gbChenglingNaokongGuide(a, b, tt)
   const span = Math.max(length3(sub3(b, a)), 1e-6)
-  const bulge = Math.sin(Math.PI * tt) * span * 0.055
+  const bulge = Math.sin(Math.PI * tt) * span * 0.028
   return add3(p, scale3(guide, bulge))
 }
 
@@ -281,12 +283,15 @@ export function isGbChenglingNaokongHit(hit = [0, 0, 0], from = [0, 0, 0], to = 
   const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
   if (side * p[0] < -span * 0.08) return false
   const xLerp = a[0] + (b[0] - a[0]) * tt
-  if (Math.abs(p[0] - xLerp) > Math.max(0.02, span * 0.40)) return false
+  // The bun is more medial; stay on the parietal–occipital strip.
+  if (Math.abs(xLerp) > span * 0.05 && Math.abs(p[0]) < Math.abs(xLerp) * 0.50) return false
+  if (Math.abs(p[0] - xLerp) > Math.max(0.018, span * 0.22)) return false
   // Hair bun sits more posterior than both acupoints.
-  if (p[2] < Math.min(a[2], b[2]) - span * 0.10) return false
+  if (p[2] < Math.min(a[2], b[2]) - span * 0.08) return false
   if (p[2] > Math.max(a[2], b[2]) + span * 0.28) return false
   const chord = lerp3(a, b, tt)
-  return length3(sub3(p, chord)) <= Math.max(0.03, span * 0.42)
+  if (p[2] < chord[2] - span * 0.26) return false
+  return length3(sub3(p, chord)) <= Math.max(0.025, span * 0.32)
 }
 
 /** Push a through-spine chord out onto the back skin (−Z). */

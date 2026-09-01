@@ -96,7 +96,6 @@ import {
   isGbChenglingNaokongHit,
   gbChenglingNaokongCastStandoff,
   gbChenglingNaokongGuide,
-  gbChenglingNaokongOuterPoint,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -2924,28 +2923,31 @@ function snapKiYinguChangqiangToSkin(a, b) {
 
 /** 承靈→腦空: stay on the parietal–occipital scalp, not the hair bun or air. */
 function snapGbChenglingNaokongToSkin(a, b) {
-  const start = new THREE.Vector3(...a.position)
-  const end = new THREE.Vector3(...b.position)
-  const span = Math.max(start.distanceTo(end), 1e-6)
-  const count = Math.min(56, Math.max(18, Math.ceil(span / Math.max(statureWorld(0.005), span * 0.04)) + 8))
+  const span = Math.max(
+    new THREE.Vector3(...a.position).distanceTo(new THREE.Vector3(...b.position)),
+    1e-6,
+  )
+  const count = Math.min(72, Math.max(24, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 12))
   const standoff = gbChenglingNaokongCastStandoff(a.position, b.position)
-  const extraReach = Math.max(standoff * 1.5, statureWorld(0.07))
+  const extraReach = Math.max(standoff * 4, statureWorld(0.08), span * 0.55)
   const lift = statureWorld(SKIN_LIFT)
+  const minZ = Math.min(a.position[2], b.position[2])
+  const sideX = a.position[0]
   const points = []
   const previousRef = { current: null }
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), lift)
-  const pickHit = (hits, t, chord) => {
-    const legal = (hits || []).filter((hit) => (
-      isGbChenglingNaokongHit(hit.position, a.position, b.position, t)
-    ))
-    if (!legal.length) return null
-    legal.sort((left, right) => {
-      const dLeft = dist3(left.position, chord)
-      const dRight = dist3(right.position, chord)
-      return dLeft - dRight
-    })
-    return legal[0]
+  const legal = (hit, t) => Boolean(hit) && isGbChenglingNaokongHit(
+    hit.position,
+    a.position,
+    b.position,
+    t,
+  )
+  const pickClosest = (hits, t, chord) => {
+    const legalHits = (hits || []).filter((hit) => legal(hit, t))
+    if (!legalHits.length) return null
+    legalHits.sort((left, right) => dist3(left.position, chord) - dist3(right.position, chord))
+    return legalHits[0]
   }
   const accept = (hit) => {
     if (!hit) return false
@@ -2955,41 +2957,97 @@ function snapGbChenglingNaokongToSkin(a, b) {
   accept({ position: a.position, normal: a.normal })
   for (let index = 1; index < count - 1; index += 1) {
     const t = index / (count - 1)
-    const outer = gbChenglingNaokongOuterPoint(a.position, b.position, t)
-    const guide = gbChenglingNaokongGuide(a.position, b.position, t)
-    const probe = [
-      outer[0] + guide[0] * standoff,
-      outer[1] + guide[1] * standoff,
-      outer[2] + guide[2] * standoff,
+    const chord = [
+      a.position[0] + (b.position[0] - a.position[0]) * t,
+      a.position[1] + (b.position[1] - a.position[1]) * t,
+      a.position[2] + (b.position[2] - a.position[2]) * t,
     ]
-    let hit = pickHit(
-      projectFromOutsideHits(new THREE.Vector3(...probe), guide, standoff),
+    const guide = gbChenglingNaokongGuide(a.position, b.position, t)
+    const side = Math.sign(chord[0] || sideX) || 1
+    const candidates = []
+    const nearest = closestSkinHit(chord, {
+      maxDistance: extraReach,
+      sideX,
+      guideNormal: guide,
+    })
+    if (legal(nearest, t)) candidates.push(nearest)
+    const inward = pickClosest(
+      projectFromOutsideHits(new THREE.Vector3(...chord), guide, standoff),
       t,
-      outer,
-    ) || pickHit(
-      projectFromOutsideHits(new THREE.Vector3(...outer), guide, extraReach),
-      t,
-      outer,
+      chord,
     )
-    if (!hit) {
-      const closest = closestSkinHit(outer, {
-        maxDistance: extraReach,
-        sideX: a.position[0],
-        guideNormal: guide,
-      })
-      if (closest && isGbChenglingNaokongHit(closest.position, a.position, b.position, t)) {
-        hit = closest
-      }
+    if (inward) candidates.push(inward)
+    const backHits = raySkinHits(
+      new THREE.Vector3(chord[0], chord[1], minZ - extraReach * 0.45),
+      new THREE.Vector3(0, 0, 1),
+      extraReach,
+      new THREE.Vector3(0, 0, -1),
+    )
+    const back = pickClosest(backHits, t, chord)
+    if (back) candidates.push(back)
+    const lateralHits = raySkinHits(
+      new THREE.Vector3(chord[0] + side * extraReach * 0.4, chord[1], chord[2]),
+      new THREE.Vector3(-side, 0, 0),
+      extraReach,
+      new THREE.Vector3(side, 0, 0),
+    )
+    const lateral = pickClosest(lateralHits, t, chord)
+    if (lateral) candidates.push(lateral)
+    candidates.sort((left, right) => dist3(left.position, chord) - dist3(right.position, chord))
+    let hit = candidates[0] || null
+    if (!hit && nearest && Math.abs((nearest.position[0] || 0) * side) >= 0) {
+      const ny = nearest.position[1]
+      const yMin = Math.min(a.position[1], b.position[1]) - span * 0.18
+      const yMax = Math.max(a.position[1], b.position[1]) + span * 0.18
+      if (ny >= yMin && ny <= yMax) hit = nearest
     }
     if (hit) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
+  const maxGap = Math.max(statureWorld(0.01), span * 0.045)
+  const snapRadius = Math.max(statureWorld(0.06), span * 0.4)
+  for (let pass = 0; pass < 4; pass += 1) {
+    const denser = [points[0]]
+    let added = false
+    for (let index = 1; index < points.length; index += 1) {
+      const prev = points[index - 1]
+      const next = points[index]
+      if (prev.distanceTo(next) > maxGap) {
+        const mid = prev.clone().lerp(next, 0.5)
+        const tMid = Math.abs(b.position[1] - a.position[1]) > 1e-6
+          ? (mid.y - a.position[1]) / (b.position[1] - a.position[1])
+          : index / points.length
+        const snapped = closestSkinHit(toArray(mid), {
+          maxDistance: snapRadius,
+          sideX,
+          guideNormal: gbChenglingNaokongGuide(a.position, b.position, tMid),
+        })
+        if (
+          snapped
+          && isGbChenglingNaokongHit(snapped.position, a.position, b.position, tMid)
+          && liftHit(snapped).distanceTo(prev) > statureWorld(0.002)
+          && liftHit(snapped).distanceTo(next) > statureWorld(0.002)
+        ) {
+          denser.push(liftHit(snapped))
+          added = true
+        }
+      }
+      denser.push(next)
+    }
+    points.length = 0
+    points.push(...denser)
+    if (!added) break
+  }
   const arrays = points.map((point) => [point.x, point.y, point.z])
   const simplified = simplifyPolylineWithNormals(
     arrays,
-    arrays.map(() => gbChenglingNaokongGuide(a.position, b.position, 0.5)),
-    statureWorld(0.003),
+    arrays.map((_, index) => gbChenglingNaokongGuide(
+      a.position,
+      b.position,
+      arrays.length > 1 ? index / (arrays.length - 1) : 0.5,
+    )),
+    statureWorld(0.0012),
   )
   return simplified.points.map((point) => new THREE.Vector3(...point))
 }
@@ -6285,6 +6343,13 @@ if (isDevMode(import.meta.env)) {
       camera.lookAt(controls.target)
       controls.update()
       syncZoomUI({ force: true })
+    },
+    closestSkin(position, maxDistance) {
+      const hit = closestSkinHit(position, {
+        maxDistance: Number(maxDistance) || statureWorld(0.08),
+        sideX: position?.[0],
+      })
+      return hit ? { position: hit.position, distance: hit.distance, normal: hit.normal } : null
     },
   }
 }
