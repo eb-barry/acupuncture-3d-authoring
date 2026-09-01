@@ -3133,13 +3133,14 @@ function drawPairSkinSegment(route, pair, override = null) {
   const rest = isOverride && override.rest
     ? override.rest
     : restPathArrays(pair.fromNode, pair.toNode)
-  const count = meridianUsesLocators(route.meridianId)
-    ? 0
-    : visibleHandleCount(
-      polylineArcLength(rest),
-      shortSegmentReferenceArc(route.side),
-      pair.handles.length,
-    )
+  if (!meridianUsesLocators(route.meridianId)) {
+    return vectorsFromArrays(rest)
+  }
+  const count = visibleHandleCount(
+    polylineArcLength(rest),
+    shortSegmentReferenceArc(route.side),
+    pair.handles.length,
+  )
   const records = isOverride && override.records
     ? override.records
     : pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
