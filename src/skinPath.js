@@ -167,16 +167,33 @@ function kiYinguChangqiangEnds(from = [0, 0, 0], to = [0, 0, 0]) {
   return { start, end, flipped: start !== a }
 }
 
-/** Outside-skin sample on the medial/posterior thigh, easing into 長強. */
+/**
+ * Gluteal-fold parameter: hold the posterior-thigh X until here, then a
+ * straight diagonal into 長強. Smoothstep-after-0.58 plus a posterior bulge
+ * wrapped the natal cleft into a V.
+ */
+export const KI_YINGU_CHANGQIANG_FOLD_T = 0.62
+
+/** 0 on the thigh; 0→1 linearly from the fold into 長強. */
+export function kiYinguChangqiangMedialT(t = 0) {
+  const tt = clamp01(t)
+  if (tt <= KI_YINGU_CHANGQIANG_FOLD_T) return 0
+  return (tt - KI_YINGU_CHANGQIANG_FOLD_T) / (1 - KI_YINGU_CHANGQIANG_FOLD_T)
+}
+
+/** Outside-skin sample: medial thigh, then a straight diagonal into 長強. */
 export function kiYinguChangqiangOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
   const { start, end, flipped } = kiYinguChangqiangEnds(from, to)
   const tt = flipped ? 1 - clamp01(t) : clamp01(t)
   const span = Math.max(length3(sub3(end, start)), 1e-6)
-  const medial = smoothstep01((tt - 0.58) / 0.42)
+  const medial = kiYinguChangqiangMedialT(tt)
   const y = start[1] + (end[1] - start[1]) * tt
   const x = start[0] + (end[0] - start[0]) * medial
   const zLerp = start[2] + (end[2] - start[2]) * tt
-  const posteriorBulge = Math.sin(Math.PI * tt) * Math.max(0.02, span * 0.10)
+  // Thigh-only posterior ease. It is zero at the fold so the last segment
+  // does not wrap the gluteal bulge on the way into the cleft.
+  const thighArc = Math.sin(Math.PI * clamp01(tt / KI_YINGU_CHANGQIANG_FOLD_T))
+  const posteriorBulge = (1 - medial) * thighArc * Math.max(0.01, span * 0.035)
   return [x, y, zLerp - posteriorBulge]
 }
 
@@ -184,17 +201,17 @@ export function kiYinguChangqiangOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t 
 export function kiYinguChangqiangGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
   const { start, end, flipped } = kiYinguChangqiangEnds(from, to)
   const tt = flipped ? 1 - clamp01(t) : clamp01(t)
-  const medial = smoothstep01((tt - 0.58) / 0.42)
+  const medial = kiYinguChangqiangMedialT(tt)
   const side = Math.sign(start[0]) || 1
-  return normalize([side * 0.28 * (1 - medial), 0.10, -1])
+  return normalize([side * 0.22 * (1 - medial), 0.08 + 0.06 * medial, -1])
 }
 
 export function kiYinguChangqiangCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
   const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
-  return Math.max(0.04, span * 0.22)
+  return Math.max(0.03, span * 0.14)
 }
 
-/** Keep samples on this thigh, posterior, then into the midline cleft. */
+/** Keep samples on this thigh, posterior, then on the diagonal into the cleft. */
 export function isKiYinguChangqiangHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
   const { start, end, flipped } = kiYinguChangqiangEnds(from, to)
   const p = asPathPoint(hit)
@@ -207,9 +224,10 @@ export function isKiYinguChangqiangHit(hit = [0, 0, 0], from = [0, 0, 0], to = [
   if (p[2] > posteriorCeiling) return false
   const side = Math.sign(start[0]) || 1
   if (side * p[0] < -Math.max(0.02, span * 0.04)) return false
-  const medial = smoothstep01((tt - 0.58) / 0.42)
-  const maxAbsX = Math.abs(start[0]) * (1 - medial * 0.85) + Math.abs(end[0]) * medial + span * 0.14
-  if (Math.abs(p[0]) > maxAbsX + span * 0.10) return false
+  const medial = kiYinguChangqiangMedialT(tt)
+  const corridorX = Math.abs(start[0]) * (1 - medial) + Math.abs(end[0]) * medial
+  const slack = span * (medial > 0.02 ? 0.07 : 0.12)
+  if (Math.abs(p[0]) > corridorX + slack) return false
   return true
 }
 

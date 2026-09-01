@@ -23,3 +23,19 @@ export function shouldLoadBodyModel({
 export function isCurrentBodyLoad(seq, currentSeq, wantedBody, body) {
   return seq === currentSeq && wantedBody === body
 }
+
+/**
+ * Clone a studio document for the per-body cache. Falls back to JSON if
+ * structuredClone fails (non-cloneable leftovers after a JSON import).
+ */
+export function cloneStudioDocument(value) {
+  try {
+    return structuredClone(value)
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(value))
+    } catch {
+      return null
+    }
+  }
+}
