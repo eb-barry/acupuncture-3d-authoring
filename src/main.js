@@ -153,6 +153,7 @@ import {
   keepPairHandles,
   locatorOnPairLimb,
   mergeControlsIntoRoute,
+  meridianUsesLocators,
   nearestScreenIndex,
   nextHandleInsertT,
   normalizePlacedPointSide,
@@ -2186,6 +2187,20 @@ function snapMidlineChordToSkin(a, b, {
     appendSkinPoint(points, liftHit(hit), previousRef)
   }
   appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), lift), previousRef)
+  if (import.meta.env.DEV) {
+    window.__midlineSnap = window.__midlineSnap || []
+    window.__midlineSnap.push({
+      followProfile,
+      keepStraight,
+      fromBack,
+      n: points.length,
+      from: [...from],
+      to: [...to],
+      xs: points.map((point) => point.x),
+      ys: points.map((point) => point.y),
+      zs: points.map((point) => point.z),
+    })
+  }
   return points.length >= 3 ? points : null
 }
 
@@ -3118,11 +3133,13 @@ function drawPairSkinSegment(route, pair, override = null) {
   const rest = isOverride && override.rest
     ? override.rest
     : restPathArrays(pair.fromNode, pair.toNode)
-  const count = visibleHandleCount(
-    polylineArcLength(rest),
-    shortSegmentReferenceArc(route.side),
-    pair.handles.length,
-  )
+  const count = meridianUsesLocators(route.meridianId)
+    ? 0
+    : visibleHandleCount(
+      polylineArcLength(rest),
+      shortSegmentReferenceArc(route.side),
+      pair.handles.length,
+    )
   const records = isOverride && override.records
     ? override.records
     : pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
@@ -3893,6 +3910,7 @@ function refreshRouteEditHandles() {
 }
 
 function rebuildAnnotations() {
+  if (import.meta.env.DEV) window.__midlineSnap = []
   // Decal materials are per visual; drop them before the group is cleared so
   // the shader material set does not grow with every rebuild.
   routeVisuals.forEach(({ line }) => disposeSkinDecalMaterial(line?.material))
@@ -5825,4 +5843,74 @@ controls.addEventListener('end', () => {
 $('#body-model-filter').addEventListener('change', (event) => {
   setActiveBodyModel(event.target.value)
 })
+if (import.meta.env.DEV) {
+  window.__studio = {
+    dump() {
+      const summarize = (pts) => {
+        if (!pts.length) return null
+        const xs = pts.map((p) => p[0])
+        const ys = pts.map((p) => p[1])
+        const zs = pts.map((p) => p[2])
+        let maxEdge = 0
+        for (let i = 1; i < pts.length; i += 1) {
+          maxEdge = Math.max(maxEdge, Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]))
+        }
+        return {
+          n: pts.length,
+          xMin: Math.min(...xs),
+          xMax: Math.max(...xs),
+          xSpread: Math.max(...xs) - Math.min(...xs),
+          yMin: Math.min(...ys),
+          yMax: Math.max(...ys),
+          zMin: Math.min(...zs),
+          zMax: Math.max(...zs),
+          maxEdge,
+          mid: pts[Math.floor(pts.length / 2)],
+        }
+      }
+      return {
+        body: state.model?.body,
+        bodyHeightWorld,
+        stature: statureScale(),
+        snaps: window.__midlineSnap || [],
+        routes: routeVisuals.map(({ line, route }) => {
+          const pts = (line.userData.tubePoints || []).map((p) => [p.x, p.y, p.z])
+          return {
+            id: route.id,
+            meridianId: route.meridianId,
+            unresolved: line.userData.unresolvedSamples || 0,
+            pairKeys: line.userData.pairKeys || [],
+            ...summarize(pts),
+            pts,
+          }
+        }),
+        acupoints: state.acupoints.map((p) => ({
+          code: p.code,
+          name: p.name,
+          position: p.position,
+        })),
+      }
+    },
+    profileX0(y0, y1, fromBack = false) {
+      const hits = []
+      const step = Math.max(0.4, (y1 - y0) / 24)
+      for (let y = y0; y <= y1 + 1e-6; y += step) {
+        const origin = fromBack ? new THREE.Vector3(0, y, -80) : new THREE.Vector3(0, y, 80)
+        const dir = fromBack ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 0, -1)
+        const hit = raySkinHits(origin, dir, 200, dir.clone().negate())[0]
+        if (hit) hits.push({ y, p: hit.position.map((v) => Math.round(v * 1000) / 1000), n: hit.normal.map((v) => Math.round(v * 1000) / 1000) })
+      }
+      return hits
+    },
+    frame(target, position) {
+      if (orbitLocked) setOrbitLocked(false)
+      controls.target.set(...target)
+      camera.position.set(...position)
+      camera.up.set(0, 1, 0)
+      camera.lookAt(controls.target)
+      controls.update()
+      syncZoomUI({ force: true })
+    },
+  }
+}
 loadDefaultModel()
