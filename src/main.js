@@ -79,10 +79,12 @@ import {
   shouldPosteriorWrap,
   isSagittalMidlineSpan,
   hitStaysOnFrontMidline,
-  hitStaysNearMidlineChord,
+  hitStaysOnMidlineX,
   midlineFrontProbeOrigin,
+  midlineBackProbeOrigin,
   hitMatchesMidlineSampleY,
   isGvFacePair,
+  isGvOcciputPair,
   isCvAnteriorPair,
   slerpUnitVectors,
   surfaceStepLength,
@@ -2090,10 +2092,14 @@ function simplifyLiftedPolyline(points) {
  * cutting through / spawning multiple floating chords.
  */
 /**
- * 任督中線：依 Y 切片從前方 −Z 貼回皮膚。
- * 臉段跟著輪廓（額→鼻→唇），胸腹段鎖在穴位和弦的 X，避免飛到鼻前空中或繞到胸骨旁邊。
+ * 任督中線：依 Y 切片貼回皮膚。
+ * 臉段從前方 −Z、後枕從後方 +Z；胸腹段只鎖 X，Z 可跟著胸骨／乳房起伏。
  */
-function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = false } = {}) {
+function snapMidlineChordToSkin(a, b, {
+  followProfile = false,
+  keepStraight = false,
+  fromBack = false,
+} = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   const from = a.position
@@ -2102,26 +2108,27 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
   const count = Math.min(72, Math.max(20, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 10))
   const maxZ = Math.max(from[2], to[2])
   const minZ = Math.min(from[2], to[2])
-  const inward = new THREE.Vector3(0, 0, -1)
-  const outward = new THREE.Vector3(0, 0, 1)
+  const inward = new THREE.Vector3(0, 0, fromBack ? 1 : -1)
+  const outward = new THREE.Vector3(0, 0, fromBack ? -1 : 1)
   const standoffs = followProfile
     ? [statureWorld(0.06), statureWorld(0.10), statureWorld(0.16)]
     : [statureWorld(0.05), statureWorld(0.09)]
   const extraReach = Math.max(statureWorld(0.12), maxZ - minZ + statureWorld(0.04))
   const xSlack = Math.max(statureWorld(0.008), span * 0.05)
+  const lift = statureWorld(SKIN_LIFT)
   const points = []
   const previousRef = { current: null }
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
-    .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+    .addScaledVector(new THREE.Vector3(...hit.normal), lift)
   const legal = (hit, t, sampleX) => {
     if (!hit) return false
     if (!hitStaysOnFrontMidline(hit.position, from, to)) return false
     if (!hitMatchesMidlineSampleY(hit.position, from, to, t)) return false
-    if (keepStraight && !hitStaysNearMidlineChord(hit.position, from, to)) return false
+    if (keepStraight && !hitStaysOnMidlineX(hit.position, from, to, t)) return false
     if (keepStraight && Math.abs(hit.position[0] - sampleX) > xSlack) return false
     return true
   }
-  const pickFrontHit = (origin, maxDistance, t, sampleX) => {
+  const pickHit = (origin, maxDistance, t, sampleX) => {
     const hits = raySkinHits(origin, inward, maxDistance, outward)
     for (const hit of hits) {
       if (legal(hit, t, sampleX)) return hit
@@ -2129,25 +2136,33 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
     return null
   }
 
-  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), SKIN_LIFT), previousRef)
+  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), lift), previousRef)
   for (let index = 1; index < count - 1; index += 1) {
     const t = index / (count - 1)
-    const sample = midlineFrontProbeOrigin(from, to, t, 0)
+    const sample = fromBack
+      ? midlineBackProbeOrigin(from, to, t, 0)
+      : midlineFrontProbeOrigin(from, to, t, 0)
     const x = sample[0]
     const y = sample[1]
-    const dx = Math.max(statureWorld(0.0025), span * 0.015)
+    const dx = Math.max(statureWorld(0.012), span * 0.03)
     const xs = followProfile
       ? [x, x + dx, x - dx, x + dx * 2, x - dx * 2, (from[0] + to[0]) / 2]
       : [x]
     let hit = null
-    let bestZ = -Infinity
+    let bestZ = fromBack ? Infinity : -Infinity
     for (const ox of xs) {
       for (const standoff of standoffs) {
-        const origin = new THREE.Vector3(ox, y, maxZ + standoff)
-        const candidate = pickFrontHit(origin, standoff + extraReach, t, x)
+        const origin = fromBack
+          ? new THREE.Vector3(...midlineBackProbeOrigin(from, to, t, standoff))
+          : new THREE.Vector3(ox, y, maxZ + standoff)
+        if (fromBack) origin.x = ox
+        const candidate = pickHit(origin, standoff + extraReach, t, x)
         if (!candidate) continue
         if (followProfile) {
-          if (candidate.position[2] > bestZ) {
+          const better = fromBack
+            ? candidate.position[2] < bestZ
+            : candidate.position[2] > bestZ
+          if (better) {
             hit = candidate
             bestZ = candidate.position[2]
           }
@@ -2163,14 +2178,14 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
       const nearby = closestSkinHit(toArray(chord), {
         maxDistance: Math.max(statureWorld(0.012), span * 0.08),
         sideX: null,
-        guideNormal: [0, 0, 1],
+        guideNormal: fromBack ? [0, 0, -1] : [0, 0, 1],
       })
       if (legal(nearby, t, x)) hit = nearby
     }
     if (!hit) continue
     appendSkinPoint(points, liftHit(hit), previousRef)
   }
-  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), SKIN_LIFT), previousRef)
+  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), lift), previousRef)
   return points.length >= 3 ? points : null
 }
 
@@ -2817,15 +2832,17 @@ function skinSegmentPoints(a, b, {
     if (facing?.length >= 2) return facing
   }
   const gvFace = isGvFacePair(fromCode, toCode)
+  const gvOcciput = isGvOcciputPair(fromCode, toCode)
   const cvAnterior = isCvAnteriorPair(fromCode, toCode)
-  if (gvFace || cvAnterior) {
+  if (gvFace || gvOcciput || cvAnterior) {
     const wrapped = snapMidlineChordToSkin(a, b, {
-      followProfile: gvFace,
+      followProfile: gvFace || gvOcciput,
       keepStraight: cvAnterior,
+      fromBack: gvOcciput,
     })
     if (wrapped?.length >= 2) return wrapped
   }
-  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !cvAnterior && (
+  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && (
     preferWrap
     || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
@@ -2833,7 +2850,7 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !cvAnterior) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior) {
     const geodesic = geodesicOnSkin(a, b)
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
@@ -2849,7 +2866,7 @@ function skinSegmentPoints(a, b, {
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !gbShoulderAxilla && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !gbShoulderAxilla && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
