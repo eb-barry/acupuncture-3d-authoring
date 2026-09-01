@@ -39,6 +39,7 @@ import {
   removePointIdsFromRouteNodes,
   resolveHandleSlots,
   drawableSurfacePairRuns,
+  appendExtraPairsToRuns,
   routeHasDrawableAcupoints,
   routeIncludesAllPoints,
   sameSpatialSide,
@@ -552,5 +553,30 @@ describe('meridian authoring workflow', () => {
       [{ from: 'ST7', to: 'ST8' }],
       [{ from: 'ST9', to: 'ST10' }],
     ])
+  })
+
+  it('breaks drawable surface runs at the omitted KI10–KI11 kidney span', () => {
+    const pairs = [
+      { from: 'KI9', to: 'KI10' },
+      { from: 'KI10', to: 'KI11' },
+      { from: 'KI11', to: 'KI12' },
+    ]
+    const omitted = (pair) => isOmittedSurfaceSpan(pair.from, pair.to)
+    expect(drawableSurfacePairRuns(pairs, omitted)).toEqual([
+      [{ from: 'KI9', to: 'KI10' }],
+      [{ from: 'KI11', to: 'KI12' }],
+    ])
+  })
+
+  it('appends 陰谷→長強 onto the run that ends at 陰谷', () => {
+    const runs = appendExtraPairsToRuns(
+      [
+        [{ fromPointId: 'ki9', toPointId: 'ki10' }],
+        [{ fromPointId: 'ki11', toPointId: 'ki12' }],
+      ],
+      [{ fromPointId: 'ki10', toPointId: 'gv1' }],
+    )
+    expect(runs[0].map((pair) => pair.toPointId)).toEqual(['ki10', 'gv1'])
+    expect(runs[1]).toEqual([{ fromPointId: 'ki11', toPointId: 'ki12' }])
   })
 })

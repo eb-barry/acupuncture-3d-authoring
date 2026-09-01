@@ -6,7 +6,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, getTriangleHitPointInfo } from 'three-mesh-bvh'
-import { MERIDIANS, POINTS, POINT_BY_CODE, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, acupointMarkerColor, pointsForMeridian } from './catalog.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, isKiYinguChangqiangPair, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, acupointMarkerColor, pointsForMeridian } from './catalog.js'
 import {
   BODY_MODELS,
   emptyDocument,
@@ -88,6 +88,10 @@ import {
   isGvFacePair,
   isGvOcciputPair,
   isCvAnteriorPair,
+  isKiYinguChangqiangHit,
+  kiYinguChangqiangCastStandoff,
+  kiYinguChangqiangGuide,
+  kiYinguChangqiangOuterPoint,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -146,6 +150,7 @@ import {
   catalogSequence,
   defaultHandleTs,
   drawableSurfacePairRuns,
+  appendExtraPairsToRuns,
   exceedsDragThreshold,
   isDisorderedPolyline,
   isOcclusionHitBlocking,
@@ -2838,6 +2843,56 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
   return points.length >= 3 ? points : null
 }
 
+/** 陰谷→長強: stay on the posterior/medial thigh, then enter the natal cleft. */
+function snapKiYinguChangqiangToSkin(a, b) {
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  const span = Math.max(start.distanceTo(end), 1e-6)
+  const count = Math.min(72, Math.max(22, Math.ceil(span / Math.max(statureWorld(0.006), span * 0.035)) + 12))
+  const standoff = kiYinguChangqiangCastStandoff(a.position, b.position)
+  const extraReach = Math.max(standoff * 1.6, statureWorld(0.12))
+  const lift = statureWorld(SKIN_LIFT)
+  const points = []
+  const previousRef = { current: null }
+  const liftHit = (hit) => new THREE.Vector3(...hit.position)
+    .addScaledVector(new THREE.Vector3(...hit.normal), lift)
+  const accept = (hit) => {
+    if (!hit) return false
+    appendSkinPoint(points, liftHit(hit), previousRef)
+    return true
+  }
+  accept({ position: a.position, normal: a.normal })
+  for (let index = 1; index < count - 1; index += 1) {
+    const t = index / (count - 1)
+    const outer = kiYinguChangqiangOuterPoint(a.position, b.position, t)
+    const guide = kiYinguChangqiangGuide(a.position, b.position, t)
+    const probe = [
+      outer[0] + guide[0] * standoff,
+      outer[1] + guide[1] * standoff,
+      outer[2] + guide[2] * standoff,
+    ]
+    let hit = projectFromOutside(new THREE.Vector3(...probe), guide, standoff)
+      || projectFromOutside(new THREE.Vector3(...outer), guide, extraReach)
+      || closestSkinHit(outer, {
+        maxDistance: extraReach,
+        sideX: a.position[0],
+        preferPosterior: true,
+        guideNormal: guide,
+      })
+    if (hit && !isKiYinguChangqiangHit(hit.position, a.position, b.position, t)) {
+      hit = closestSkinHit(outer, {
+        maxDistance: extraReach,
+        preferPosterior: true,
+        guideNormal: guide,
+      })
+      if (hit && !isKiYinguChangqiangHit(hit.position, a.position, b.position, t)) hit = null
+    }
+    if (hit) accept(hit)
+  }
+  accept({ position: b.position, normal: b.normal })
+  return points.length >= 3 ? points : null
+}
+
 function skinSegmentPoints(a, b, {
   allowGeodesic = true,
   preferWrap = false,
@@ -2855,6 +2910,7 @@ function skinSegmentPoints(a, b, {
   const sideX = (a.position[0] + b.position[0]) / 2
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   const gbShoulderAxilla = isGbShoulderAxillaSpan(fromCode, toCode, a.position, b.position)
+  const kiYingu = isKiYinguChangqiangPair(fromCode, toCode)
   const duBack = isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)
   const teHead = isTeHeadPair(fromCode, toCode)
   if (siArmShoulder) {
@@ -2863,6 +2919,10 @@ function skinSegmentPoints(a, b, {
   }
   if (gbShoulderAxilla) {
     const wrapped = snapGbJianjingYuanyeToSkin(a, b)
+    if (wrapped?.length >= 3) return wrapped
+  }
+  if (kiYingu) {
+    const wrapped = snapKiYinguChangqiangToSkin(a, b)
     if (wrapped?.length >= 3) return wrapped
   }
   if (teHead) {
@@ -2878,7 +2938,7 @@ function skinSegmentPoints(a, b, {
       end.clone().addScaledVector(endNormal, SKIN_LIFT),
     ]
   }
-  const facingLimb = !siArmShoulder && !gbShoulderAxilla && isFacingLimbSpan(a.position, b.position, normalDot)
+  const facingLimb = !siArmShoulder && !gbShoulderAxilla && !kiYingu && isFacingLimbSpan(a.position, b.position, normalDot)
   if (facingLimb) {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
@@ -2894,7 +2954,7 @@ function skinSegmentPoints(a, b, {
     })
     if (wrapped?.length >= 2) return wrapped
   }
-  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && (
+  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && (
     preferWrap
     || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
@@ -2902,7 +2962,7 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !kiYingu && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior) {
     const geodesic = geodesicOnSkin(a, b)
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
@@ -2918,7 +2978,7 @@ function skinSegmentPoints(a, b, {
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !gbShoulderAxilla && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !gbShoulderAxilla && !kiYingu && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -3170,7 +3230,9 @@ function drawPairSkinSegment(route, pair, override = null) {
   const rest = isOverride && override.rest
     ? override.rest
     : restPathArrays(pair.fromNode, pair.toNode)
-  if (!meridianUsesLocators(route.meridianId)) {
+  const fromCode = routeNodeCode(pair.fromNode)
+  const toCode = routeNodeCode(pair.toNode)
+  if (!meridianUsesLocators(route.meridianId) || isKiYinguChangqiangPair(fromCode, toCode)) {
     return vectorsFromArrays(rest)
   }
   const count = visibleHandleCount(
@@ -3181,8 +3243,6 @@ function drawPairSkinSegment(route, pair, override = null) {
   const records = isOverride && override.records
     ? override.records
     : pairHandleRecords(pair.fromNode, pair.toNode, pair.handles, count, rest)
-  const fromCode = routeNodeCode(pair.fromNode)
-  const toCode = routeNodeCode(pair.toNode)
   const teTemple = isTeTempleHandlePair(fromCode, toCode)
   const earArc = isTeEarArcPair(fromCode, toCode)
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
@@ -3199,9 +3259,12 @@ function drawPairSkinSegment(route, pair, override = null) {
   })
 }
 
-/** One or more on-skin polylines. Omitted spans (BL40–BL41, ST8–ST9) start a new run. */
+/** One or more on-skin polylines. Omitted spans (BL40–BL41, ST8–ST9, KI10–KI11) start a new run. */
 function skinCurveRuns(route, override = null) {
-  const pairRuns = drawableSurfacePairRuns(consecutiveAcupointPairs(route), isOmittedSurfacePair)
+  const pairRuns = appendExtraPairsToRuns(
+    drawableSurfacePairRuns(consecutiveAcupointPairs(route), isOmittedSurfacePair),
+    extraMeridianPairs(route),
+  )
   return pairRuns.map((pairs) => {
     const points = []
     const pairKeys = []
@@ -3246,6 +3309,10 @@ function restPathArrays(fromNode, toNode) {
       const mid = cached[Math.floor(cached.length / 2)]
       const ceiling = Math.max(a.position[2], b.position[2]) + 0.04
       return Boolean(mid) && mid[2] <= ceiling
+    }
+    if (isKiYinguChangqiangPair(fromCode, toCode)) {
+      const mid = cached[Math.floor(cached.length / 2)]
+      return Boolean(mid) && isKiYinguChangqiangHit(mid, a.position, b.position, 0.5)
     }
     return true
   }
@@ -3835,8 +3902,36 @@ function consecutiveAcupointPairs(route) {
   return pairs
 }
 
+function extraMeridianPairs(route) {
+  if (route.meridianId !== 'KI') return []
+  const gv1 = state.acupoints.find((point) => point.code === 'GV1')
+  if (!gv1) return []
+  const pairs = []
+  route.nodes.forEach((node, index) => {
+    if (node.type !== 'acupoint') return
+    if (getPoint(node.pointId)?.code !== 'KI10') return
+    pairs.push({
+      fromIndex: index,
+      toIndex: -1,
+      fromNode: node,
+      toNode: {
+        type: 'acupoint',
+        pointId: gv1.id,
+        position: gv1.position,
+        normal: gv1.normal,
+      },
+      fromPointId: node.pointId,
+      toPointId: gv1.id,
+      handles: [],
+    })
+  })
+  return pairs
+}
+
 function acupointPairs(route) {
-  return consecutiveAcupointPairs(route).filter((pair) => !isOmittedSurfacePair(pair))
+  return consecutiveAcupointPairs(route)
+    .filter((pair) => !isOmittedSurfacePair(pair))
+    .concat(extraMeridianPairs(route))
 }
 
 function pairsOnClickedLine(pairs, line) {
@@ -3913,6 +4008,7 @@ function addRouteEditHandles(route) {
   const referenceArc = shortSegmentReferenceArc(route.side)
   acupointPairs(route)
     .filter((pair) => isSegmentSelected(route, pair.fromPointId, pair.toPointId))
+    .filter((pair) => !isKiYinguChangqiangPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
     .forEach((pair) => {
       const rest = restPathArrays(pair.fromNode, pair.toNode)
       const count = visibleHandleCount(polylineArcLength(rest), referenceArc, pair.handles.length)
