@@ -252,6 +252,22 @@ describe('skin path wrapping', () => {
     expect(isGbJianjingYuanyeHandleOk(pulledMedial, jianjing, yuanye)).toBe(true)
     expect(isGbJianjingYuanyeHandleOk(pulledLateral, jianjing, yuanye)).toBe(true)
     expect(isGbJianjingYuanyeHit(pulledMedial, jianjing, yuanye, 0.5)).toBe(false)
+    const gbSpan = Math.hypot(
+      jianjing[0] - yuanye[0],
+      jianjing[1] - yuanye[1],
+      jianjing[2] - yuanye[2],
+    )
+    const pulledRight = [
+      outer[0] + gbSpan * 0.14,
+      outer[1],
+      outer[2] - gbSpan * 0.20,
+    ]
+    expect(isGbJianjingYuanyeHandleOk(pulledRight, jianjing, yuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk(
+      [Math.max(Math.abs(jianjing[0]), Math.abs(yuanye[0])) + gbSpan * 0.75, outer[1], outer[2]],
+      jianjing,
+      yuanye,
+    )).toBe(false)
     const femaleJianjing = jianjing.map((value) => value * 232)
     const femaleYuanye = yuanye.map((value) => value * 232)
     const femaleOuter = gbJianjingYuanyeOuterPoint(femaleJianjing, femaleYuanye, 0.5)
