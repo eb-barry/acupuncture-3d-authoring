@@ -1,8 +1,8 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
-import { isKiYinguChangqiangPair } from './catalog.js'
+import { isGbChenglingNaokongPair, isKiYinguChangqiangPair } from './catalog.js'
 
-export { isKiYinguChangqiangPair }
+export { isGbChenglingNaokongPair, isKiYinguChangqiangPair }
 
 /** Tiny lift so tubes clear the mesh without looking floaty. */
 export const SKIN_LIFT = 0.0055
@@ -231,6 +231,64 @@ export function isKiYinguChangqiangHit(hit = [0, 0, 0], from = [0, 0, 0], to = [
   return true
 }
 
+/** Cranial-cavity estimate so a radial from here points out through the scalp. */
+function gbScalpInterior(from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const span = Math.max(length3(sub3(b, a)), 1e-6)
+  return [
+    ((a[0] + b[0]) / 2) * 0.18,
+    Math.min(a[1], b[1]) - span * 0.18,
+    Math.max(a[2], b[2]) + span * 0.42,
+  ]
+}
+
+/** Outward scalp normal along 承靈→腦空 (not the hair bun behind the occiput). */
+export function gbChenglingNaokongGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const p = lerp3(a, b, clamp01(t))
+  return normalize(sub3(p, gbScalpInterior(a, b)))
+}
+
+export function gbChenglingNaokongCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.max(0.03, span * 0.10)
+}
+
+/** Chord sample lifted just outside the skull, short of the bun. */
+export function gbChenglingNaokongOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const tt = clamp01(t)
+  const p = lerp3(a, b, tt)
+  const guide = gbChenglingNaokongGuide(a, b, tt)
+  const span = Math.max(length3(sub3(b, a)), 1e-6)
+  const bulge = Math.sin(Math.PI * tt) * span * 0.055
+  return add3(p, scale3(guide, bulge))
+}
+
+/** Keep samples on this side of the scalp; reject hair-bun / opposite-side hits. */
+export function isGbChenglingNaokongHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const p = asPathPoint(hit)
+  const span = Math.max(length3(sub3(b, a)), 1e-6)
+  const tt = clamp01(t)
+  const yMin = Math.min(a[1], b[1]) - span * 0.18
+  const yMax = Math.max(a[1], b[1]) + span * 0.18
+  if (p[1] < yMin || p[1] > yMax) return false
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  if (side * p[0] < -span * 0.08) return false
+  const xLerp = a[0] + (b[0] - a[0]) * tt
+  if (Math.abs(p[0] - xLerp) > Math.max(0.02, span * 0.40)) return false
+  // Hair bun sits more posterior than both acupoints.
+  if (p[2] < Math.min(a[2], b[2]) - span * 0.10) return false
+  if (p[2] > Math.max(a[2], b[2]) + span * 0.28) return false
+  const chord = lerp3(a, b, tt)
+  return length3(sub3(p, chord)) <= Math.max(0.03, span * 0.42)
+}
+
 /** Push a through-spine chord out onto the back skin (−Z). */
 export function posteriorWrapGuide(chordPoint = [0, 0, 0]) {
   const x = Number(chordPoint[0]) || 0
@@ -413,6 +471,7 @@ export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to
     || isSiXiaohaiJianzhenPair(fromCode, toCode)
     || isJianjingYuanyePair(fromCode, toCode)
     || isKiYinguChangqiangPair(fromCode, toCode)
+    || isGbChenglingNaokongPair(fromCode, toCode)
   ) {
     return false
   }

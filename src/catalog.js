@@ -108,6 +108,12 @@ export function isKiYinguChangqiangPair(fromCode = '', toCode = '') {
   return (a === 'KI10' && b === 'GV1') || (a === 'GV1' && b === 'KI10')
 }
 
+/** 足少陽膽經 承靈 (GB18) → 腦空 (GB19), parietal–occipital scalp. */
+export function isGbChenglingNaokongPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('GB18') && codes.has('GB19')
+}
+
 export function isOmittedSurfaceSpan(fromCode, toCode) {
   const a = String(fromCode || '')
   const b = String(toCode || '')
