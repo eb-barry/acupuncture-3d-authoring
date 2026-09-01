@@ -240,8 +240,9 @@ export function hitStaysOnFrontMidline(hit = [0, 0, 0], from = [0, 0, 0], to = [
   const minZ = Math.min(Number(from[2]) || 0, Number(to[2]) || 0)
   const hitZ = Number(hit[2]) || 0
   if (hitZ > maxZ + Math.max(0.016, span * 0.10)) return false
-  // Through-skull occiput, but still allow recessed lips / gums on 督脈.
-  if (hitZ < minZ - Math.max(0.025, span * 0.45)) return false
+  // Through-skull occiput, but allow a recessed sternum / philtrum.
+  // Female 鳩尾–巨闕 drops ~4 units at the xiphoid; span*0.45 was too tight.
+  if (hitZ < minZ - Math.max(0.025, span * 0.80)) return false
   return true
 }
 

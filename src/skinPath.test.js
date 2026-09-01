@@ -229,6 +229,12 @@ describe('skin path wrapping', () => {
     expect(hitStaysOnFrontMidline(faceMid, shenting, suliao)).toBe(true)
     expect(hitStaysOnFrontMidline(skyFront, shenting, suliao)).toBe(false)
     expect(hitStaysOnFrontMidline([0.002, 1.565, -0.12], shenting, suliao)).toBe(false)
+    const femaleJiuwei = [0, 262, 22.77]
+    const femaleJuque = [0, 252, 23.58]
+    const femaleXiphoid = [0, 257, 18.4]
+    expect(hitStaysOnFrontMidline(femaleXiphoid, femaleJiuwei, femaleJuque)).toBe(true)
+    expect(hitStaysOnMidlineX(femaleXiphoid, femaleJiuwei, femaleJuque, 0.5)).toBe(true)
+    expect(hitStaysOnMidlineX([1.1, 257, 20], femaleJiuwei, femaleJuque, 0.5)).toBe(false)
     expect(isHitOnWrapSide(skyFront, shenting, suliao)).toBe(false)
     expect(hitStaysNearMidlineChord(sternumMid, yutang, danzhong)).toBe(true)
     expect(hitStaysNearMidlineChord(chestJog, yutang, danzhong)).toBe(false)

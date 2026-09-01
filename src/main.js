@@ -2177,7 +2177,7 @@ function snapMidlineChordToSkin(a, b, {
     if (!hit && keepStraight) {
       const chord = start.clone().lerp(end, t)
       const nearby = closestSkinHit(toArray(chord), {
-        maxDistance: Math.max(statureWorld(0.012), span * 0.08),
+        maxDistance: Math.max(statureWorld(0.04), span * 0.5),
         sideX: null,
         guideNormal: fromBack ? [0, 0, -1] : [0, 0, 1],
       })
@@ -2852,7 +2852,7 @@ function skinSegmentPoints(a, b, {
   if (gvFace || gvOcciput || cvAnterior) {
     const wrapped = snapMidlineChordToSkin(a, b, {
       followProfile: gvFace || gvOcciput,
-      keepStraight: cvAnterior,
+      keepStraight: cvAnterior || gvFace || gvOcciput,
       fromBack: gvOcciput,
     })
     if (wrapped?.length >= 2) return wrapped
