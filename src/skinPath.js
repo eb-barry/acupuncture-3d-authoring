@@ -359,7 +359,8 @@ export function isGbJianjingYuanyeHandleOk(point = [0, 0, 0], from = [0, 0, 0], 
   const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
   const wallAbs = Math.max(corridor.wallAbsX, Math.abs(a[0]), Math.abs(b[0]))
   const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.40
-  const tooLateral = midSpan && Math.abs(p[0]) > wallAbs + span * 0.55
+  // T-pose inner arm is often near 淵腋 height, so do not require midSpan.
+  const tooLateral = Math.abs(p[0]) > wallAbs + span * 0.38
   const throughPit = midSpan
     && p[2] < Math.min(a[2], b[2], corridor.point[2]) - span * 0.22
     && Math.abs(p[0]) < wallAbs - span * 0.06

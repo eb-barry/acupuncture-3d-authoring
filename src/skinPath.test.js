@@ -268,6 +268,7 @@ describe('skin path wrapping', () => {
       jianjing,
       yuanye,
     )).toBe(false)
+    expect(isGbJianjingYuanyeHandleOk(tianfu, jianjing, yuanye)).toBe(false)
     const femaleJianjing = jianjing.map((value) => value * 232)
     const femaleYuanye = yuanye.map((value) => value * 232)
     const femaleOuter = gbJianjingYuanyeOuterPoint(femaleJianjing, femaleYuanye, 0.5)

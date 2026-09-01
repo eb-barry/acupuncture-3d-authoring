@@ -2575,13 +2575,6 @@ function snapGbHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   if (isGbJianjingYuanyeHandleOk(placed.position, from, to)) {
     return { position: [...placed.position], normal: [...(placed.normal || guide)] }
   }
-  if (placed.position[0] * (Math.sign(sideX) || 1) >= 0) {
-    const yMin = Math.min(from[1], to[1]) - span * 0.28
-    const yMax = Math.max(from[1], to[1]) + span * 0.28
-    if (placed.position[1] >= yMin && placed.position[1] <= yMax) {
-      return { position: [...placed.position], normal: [...(placed.normal || guide)] }
-    }
-  }
   const outer = gbJianjingYuanyeOuterPoint(from, to, t)
   const fallbackGuide = gbLateralChestGuide(outer, sideX)
   const fallback = closestSkinHit(outer, {
