@@ -222,7 +222,12 @@ export function hitStaysOnFrontMidline(hit = [0, 0, 0], from = [0, 0, 0], to = [
   if (shouldPosteriorWrap(from, to)) return true
   const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
   const maxZ = Math.max(Number(from[2]) || 0, Number(to[2]) || 0)
-  return (Number(hit[2]) || 0) <= maxZ + Math.max(0.016, span * 0.10)
+  const minZ = Math.min(Number(from[2]) || 0, Number(to[2]) || 0)
+  const hitZ = Number(hit[2]) || 0
+  if (hitZ > maxZ + Math.max(0.016, span * 0.10)) return false
+  // Through-skull occiput, but still allow recessed lips / gums on 督脈.
+  if (hitZ < minZ - Math.max(0.025, span * 0.45)) return false
+  return true
 }
 
 /** 任脈短段應貼近穴位和弦，不要繞到胸骨旁邊. */

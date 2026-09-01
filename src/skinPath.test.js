@@ -208,6 +208,7 @@ describe('skin path wrapping', () => {
     expect(isCvAnteriorPair('CV1', 'CV2')).toBe(false)
     expect(hitStaysOnFrontMidline(faceMid, shenting, suliao)).toBe(true)
     expect(hitStaysOnFrontMidline(skyFront, shenting, suliao)).toBe(false)
+    expect(hitStaysOnFrontMidline([0.002, 1.565, -0.12], shenting, suliao)).toBe(false)
     expect(isHitOnWrapSide(skyFront, shenting, suliao)).toBe(false)
     expect(hitStaysNearMidlineChord(sternumMid, yutang, danzhong)).toBe(true)
     expect(hitStaysNearMidlineChord(chestJog, yutang, danzhong)).toBe(false)

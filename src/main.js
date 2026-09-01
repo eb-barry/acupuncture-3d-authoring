@@ -2135,20 +2135,28 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
     const sample = midlineFrontProbeOrigin(from, to, t, 0)
     const x = sample[0]
     const y = sample[1]
+    const dx = Math.max(statureWorld(0.0025), span * 0.015)
+    const xs = followProfile
+      ? [x, x + dx, x - dx, x + dx * 2, x - dx * 2, (from[0] + to[0]) / 2]
+      : [x]
     let hit = null
-    for (const standoff of standoffs) {
-      const origin = new THREE.Vector3(...midlineFrontProbeOrigin(from, to, t, standoff))
-      hit = pickFrontHit(origin, standoff + extraReach, t, x)
-      if (hit) break
-    }
-    if (!hit && followProfile) {
-      const dx = Math.max(statureWorld(0.0025), span * 0.015)
-      const standoff = standoffs[0]
-      for (const ox of [x + dx, x - dx, (from[0] + to[0]) / 2]) {
+    let bestZ = -Infinity
+    for (const ox of xs) {
+      for (const standoff of standoffs) {
         const origin = new THREE.Vector3(ox, y, maxZ + standoff)
-        hit = pickFrontHit(origin, standoff + extraReach, t, x)
-        if (hit) break
+        const candidate = pickFrontHit(origin, standoff + extraReach, t, x)
+        if (!candidate) continue
+        if (followProfile) {
+          if (candidate.position[2] > bestZ) {
+            hit = candidate
+            bestZ = candidate.position[2]
+          }
+        } else {
+          hit = candidate
+          break
+        }
       }
+      if (hit && !followProfile) break
     }
     if (!hit && keepStraight) {
       const chord = start.clone().lerp(end, t)
