@@ -43,6 +43,8 @@ import {
   isGbJianjingYuanyeHandleOk,
   isGbJianjingYuanyeHit,
   pairPrefersWrap,
+  KI_YINGU_CHANGQIANG_FOLD_T,
+  kiYinguChangqiangMedialT,
   kiYinguChangqiangOuterPoint,
   kiYinguChangqiangGuide,
   isKiYinguChangqiangHit,
@@ -346,6 +348,8 @@ describe('skin path wrapping', () => {
     const gv1 = [0.0, 0.88, -0.10]
     expect(isKiYinguChangqiangPair('KI10', 'GV1')).toBe(true)
     expect(pairPrefersWrap('KI10', 'GV1', ki10, gv1)).toBe(false)
+    expect(kiYinguChangqiangMedialT(KI_YINGU_CHANGQIANG_FOLD_T)).toBe(0)
+    expect(kiYinguChangqiangMedialT(1)).toBe(1)
     const thighMid = kiYinguChangqiangOuterPoint(ki10, gv1, 0.35)
     expect(thighMid[0]).toBeLessThan(-0.04)
     expect(thighMid[2]).toBeLessThan(Math.max(ki10[2], gv1[2]))
@@ -354,11 +358,27 @@ describe('skin path wrapping', () => {
     expect(Math.abs(cleft[0])).toBeLessThan(0.04)
     expect(isKiYinguChangqiangHit(cleft, ki10, gv1, 0.92)).toBe(true)
     expect(isKiYinguChangqiangHit([0.12, 0.7, 0.12], ki10, gv1, 0.5)).toBe(false)
+    expect(isKiYinguChangqiangHit([-0.12, 0.78, -0.18], ki10, gv1, 0.82)).toBe(false)
+    const fold = kiYinguChangqiangOuterPoint(ki10, gv1, KI_YINGU_CHANGQIANG_FOLD_T)
+    const half = kiYinguChangqiangOuterPoint(ki10, gv1, (KI_YINGU_CHANGQIANG_FOLD_T + 1) / 2)
+    expect(Math.abs(fold[0])).toBeGreaterThan(0.05)
+    expect(Math.abs(half[0] - fold[0] * 0.5)).toBeLessThan(0.01)
+    expect(half[2]).toBeGreaterThan(Math.min(ki10[2], gv1[2]) - 0.03)
+    const diagonal = [0.50, 0.62, 0.74, 0.86, 1].map((t) => kiYinguChangqiangOuterPoint(ki10, gv1, t))
+    for (let index = 1; index < diagonal.length; index += 1) {
+      expect(Math.abs(diagonal[index][0])).toBeLessThanOrEqual(Math.abs(diagonal[index - 1][0]) + 1e-9)
+    }
     const femaleKi10 = ki10.map((value) => value * 232)
     const femaleGv1 = gv1.map((value) => value * 232)
     const femaleThigh = kiYinguChangqiangOuterPoint(femaleKi10, femaleGv1, 0.35)
     expect(femaleThigh[0]).toBeLessThan(femaleKi10[0] * 0.4)
     expect(isKiYinguChangqiangHit(femaleThigh, femaleKi10, femaleGv1, 0.35)).toBe(true)
+    const femaleHalf = kiYinguChangqiangOuterPoint(
+      femaleKi10,
+      femaleGv1,
+      (KI_YINGU_CHANGQIANG_FOLD_T + 1) / 2,
+    )
+    expect(Math.abs(femaleHalf[0])).toBeLessThan(Math.abs(femaleKi10[0]) * 0.7)
     expect(kiYinguChangqiangGuide(ki10, gv1, 0.3)[2]).toBeLessThan(0)
 
     const midChord = [

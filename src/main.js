@@ -16,7 +16,7 @@ import {
   sanitizeRouteNode,
   validateDocument,
 } from './document.js'
-import { isCurrentBodyLoad, resolveStudioBodyId, shouldLoadBodyModel } from './bodyLoad.js'
+import { cloneStudioDocument, isCurrentBodyLoad, resolveStudioBodyId, shouldLoadBodyModel } from './bodyLoad.js'
 import { isDevMode } from './devFlag.js'
 import { bindDocumentToBody, mapDocumentAnnotations, scalePosition } from './retarget.js'
 import {
@@ -88,6 +88,7 @@ import {
   isGvFacePair,
   isGvOcciputPair,
   isCvAnteriorPair,
+  KI_YINGU_CHANGQIANG_FOLD_T,
   isKiYinguChangqiangHit,
   kiYinguChangqiangCastStandoff,
   kiYinguChangqiangGuide,
@@ -519,7 +520,16 @@ const createModelLoader = () => {
   const draco = new DRACOLoader()
   draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/')
   loader.setDRACOLoader(draco)
-  return loader
+  return { loader, draco }
+}
+
+async function loadStudioGltf(url, onProgress) {
+  const { loader, draco } = createModelLoader()
+  try {
+    return await loader.loadAsync(url, onProgress)
+  } finally {
+    draco.dispose?.()
+  }
 }
 
 const sideLabel = (side) => ({ left: '左側', right: '右側', midline: '中線' })[side] || side
@@ -557,7 +567,8 @@ function toast(message, kind = 'ok') {
 function persistState() {
   try {
     const body = inferBodyModel(state.model)
-    documentsByBody[body] = structuredClone(state)
+    const cloned = cloneStudioDocument(state)
+    if (cloned) documentsByBody[body] = cloned
     // Session draft only — startup never auto-restores acupoint JSON.
     localStorage.setItem(storageKeyForBody(body), JSON.stringify(state))
   } catch {
@@ -2843,19 +2854,25 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
   return points.length >= 3 ? points : null
 }
 
-/** 陰谷→長強: stay on the posterior/medial thigh, then enter the natal cleft. */
+/** 陰谷→長強: posterior thigh, then a straight diagonal into the natal cleft. */
 function snapKiYinguChangqiangToSkin(a, b) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   const span = Math.max(start.distanceTo(end), 1e-6)
-  const count = Math.min(72, Math.max(22, Math.ceil(span / Math.max(statureWorld(0.006), span * 0.035)) + 12))
+  const count = Math.min(64, Math.max(20, Math.ceil(span / Math.max(statureWorld(0.007), span * 0.04)) + 10))
   const standoff = kiYinguChangqiangCastStandoff(a.position, b.position)
-  const extraReach = Math.max(standoff * 1.6, statureWorld(0.12))
+  const extraReach = Math.max(standoff * 1.25, statureWorld(0.08))
   const lift = statureWorld(SKIN_LIFT)
+  const xSlack = Math.max(statureWorld(0.008), span * 0.05)
   const points = []
   const previousRef = { current: null }
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), lift)
+  const legal = (hit, t, outer) => {
+    if (!hit) return false
+    if (!isKiYinguChangqiangHit(hit.position, a.position, b.position, t)) return false
+    return Math.abs(hit.position[0]) <= Math.abs(outer[0]) + xSlack
+  }
   const accept = (hit) => {
     if (!hit) return false
     appendSkinPoint(points, liftHit(hit), previousRef)
@@ -2873,24 +2890,32 @@ function snapKiYinguChangqiangToSkin(a, b) {
     ]
     let hit = projectFromOutside(new THREE.Vector3(...probe), guide, standoff)
       || projectFromOutside(new THREE.Vector3(...outer), guide, extraReach)
-      || closestSkinHit(outer, {
+    if (!legal(hit, t, outer)) {
+      const innerT = Math.min(1, t + (1 - KI_YINGU_CHANGQIANG_FOLD_T) * 0.18)
+      const inner = kiYinguChangqiangOuterPoint(a.position, b.position, innerT)
+      hit = projectFromOutside(new THREE.Vector3(...inner), guide, extraReach)
+      if (!legal(hit, t, outer)) hit = null
+    }
+    if (!hit && t < KI_YINGU_CHANGQIANG_FOLD_T) {
+      hit = closestSkinHit(outer, {
         maxDistance: extraReach,
         sideX: a.position[0],
         preferPosterior: true,
         guideNormal: guide,
       })
-    if (hit && !isKiYinguChangqiangHit(hit.position, a.position, b.position, t)) {
-      hit = closestSkinHit(outer, {
-        maxDistance: extraReach,
-        preferPosterior: true,
-        guideNormal: guide,
-      })
-      if (hit && !isKiYinguChangqiangHit(hit.position, a.position, b.position, t)) hit = null
+      if (!legal(hit, t, outer)) hit = null
     }
     if (hit) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
-  return points.length >= 3 ? points : null
+  if (points.length < 3) return null
+  const arrays = points.map((point) => [point.x, point.y, point.z])
+  const simplified = simplifyPolylineWithNormals(
+    arrays,
+    arrays.map(() => [0, 0, -1]),
+    statureWorld(0.0025),
+  )
+  return simplified.points.map((point) => new THREE.Vector3(...point))
 }
 
 function skinSegmentPoints(a, b, {
@@ -4036,7 +4061,11 @@ function addRouteEditHandles(route) {
 }
 
 function clearRouteEditHandles() {
-  handleVisuals.forEach(({ mesh }) => annotationGroup.remove(mesh))
+  handleVisuals.forEach(({ mesh }) => {
+    annotationGroup.remove(mesh)
+    mesh?.geometry?.dispose?.()
+    mesh?.material?.dispose?.()
+  })
   handleVisuals = []
 }
 
@@ -4049,17 +4078,77 @@ function refreshRouteEditHandles() {
   })
 }
 
-function rebuildAnnotations() {
-  if (isDevMode(import.meta.env)) window.__midlineSnap = []
-  // Decal materials are per visual; drop them before the group is cleared so
-  // the shader material set does not grow with every rebuild.
-  routeVisuals.forEach(({ line }) => disposeSkinDecalMaterial(line?.material))
-  markerVisuals.forEach(({ mesh }) => disposeSkinDecalMaterial(mesh?.material))
+function clearAnnotationVisuals() {
+  routeVisuals.forEach(({ line }) => {
+    line?.geometry?.dispose?.()
+    disposeSkinDecalMaterial(line?.material)
+  })
+  markerVisuals.forEach(({ mesh, label }) => {
+    mesh?.geometry?.dispose?.()
+    disposeSkinDecalMaterial(mesh?.material)
+    if (label?.element) label.element.remove()
+  })
+  handleVisuals.forEach(({ mesh }) => {
+    mesh?.geometry?.dispose?.()
+    mesh?.material?.dispose?.()
+  })
+  midpointVisuals.forEach(({ mesh }) => {
+    mesh?.geometry?.dispose?.()
+    mesh?.material?.dispose?.()
+  })
   annotationGroup.clear()
   markerVisuals = []
   routeVisuals = []
   handleVisuals = []
   midpointVisuals = []
+}
+
+function isSharedSkinMaterial(material) {
+  return material === idleSkinMaterial || material === orbitSkinMaterial
+}
+
+function disposeMeshResources(object) {
+  if (!object) return
+  if (object.geometry) {
+    object.geometry.disposeBoundsTree?.()
+    object.geometry.dispose?.()
+  }
+  const collected = []
+  if (object.material) {
+    collected.push(...(Array.isArray(object.material) ? object.material : [object.material]))
+  }
+  if (object.userData?.originalMaterial) {
+    const original = object.userData.originalMaterial
+    collected.push(...(Array.isArray(original) ? original : [original]))
+  }
+  collected.forEach((material) => {
+    if (!material || isSharedSkinMaterial(material)) return
+    material.map?.dispose?.()
+    material.dispose?.()
+  })
+}
+
+function disposeObjectTree(root) {
+  if (!root) return
+  root.traverse((object) => {
+    if (object.isMesh) disposeMeshResources(object)
+  })
+}
+
+/** Drop GPU meshes, BVH, and meridian visuals so the next GLB can decode. */
+function releaseLoadedBody() {
+  clearPathCaches()
+  surfaceGraph = null
+  normalMatrices.clear()
+  clearAnnotationVisuals()
+  disposeObjectTree(modelGroup)
+  modelGroup.clear()
+  modelMeshes = []
+}
+
+function rebuildAnnotations() {
+  if (isDevMode(import.meta.env)) window.__midlineSnap = []
+  clearAnnotationVisuals()
 
   const displayIds = new Set(visibleMeridianIdList())
 
@@ -5003,7 +5092,7 @@ async function importJSON(file) {
     },
   })
   activeBody = targetBody
-  documentsByBody[targetBody] = structuredClone(state)
+  documentsByBody[targetBody] = cloneStudioDocument(state) || state
   history.replace(state)
   selected = null
   if (orbitLocked) detachOrbitLock({ restorePerspective: true })
@@ -5019,6 +5108,7 @@ async function importJSON(file) {
   }
   rebuildAnnotations()
   updateUI()
+  $('#model-status').textContent = `${preset.label} · ${preset.fileName}`
   const mappedNote = needsRetarget
     ? `（已從${BODY_MODELS[sourceBody].label}依身高貼到皮膚${retargetMissed ? `，${retargetMissed} 點未貼上` : ''}，請再微調）`
     : ''
@@ -5037,17 +5127,21 @@ async function measureFramedHeight(bodyId) {
     rememberFramedHeight(body, bodyHeightWorld)
     return bodyHeightWorld
   }
-  const gltf = await createModelLoader().loadAsync(bodyModelHref(body))
-  const root = gltf.scene
-  const box = new THREE.Box3().setFromObject(root)
-  const center = box.getCenter(new THREE.Vector3())
-  root.position.x += -center.x
-  root.position.z += -center.z
-  root.position.y += -box.min.y
-  root.updateMatrixWorld(true)
-  const height = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).y
-  rememberFramedHeight(body, height)
-  return height
+  const gltf = await loadStudioGltf(bodyModelHref(body))
+  try {
+    const root = gltf.scene
+    const box = new THREE.Box3().setFromObject(root)
+    const center = box.getCenter(new THREE.Vector3())
+    root.position.x += -center.x
+    root.position.z += -center.z
+    root.position.y += -box.min.y
+    root.updateMatrixWorld(true)
+    const height = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).y
+    rememberFramedHeight(body, height)
+    return height
+  } finally {
+    disposeObjectTree(gltf.scene)
+  }
 }
 
 async function applyModel(gltf, name, hash = null, { isStale } = {}) {
@@ -5057,10 +5151,12 @@ async function applyModel(gltf, name, hash = null, { isStale } = {}) {
   const center = box.getCenter(new THREE.Vector3())
   if (!Number.isFinite(size.y) || size.y === 0) throw new Error('模型尺寸無效')
 
-  modelGroup.clear()
-  modelMeshes = []
-  surfaceGraph = null
-  clearPathCaches()
+  if (modelGroup.children.length) releaseLoadedBody()
+  else {
+    surfaceGraph = null
+    clearPathCaches()
+    modelMeshes = []
+  }
   modelGroup.add(root)
 
   // Recenter at origin and sit on y=0 (same framing approach as the turntable viewer).
@@ -5139,7 +5235,8 @@ async function applyModel(gltf, name, hash = null, { isStale } = {}) {
       body,
     },
   }
-  documentsByBody[body] = structuredClone(state)
+  const cloned = cloneStudioDocument(state)
+  if (cloned) documentsByBody[body] = cloned
   history.replace(state)
   $('#model-status').textContent = `${BODY_MODELS[body].label} · ${state.model.name}`
   refreshBodyFrontAxis()
@@ -5149,14 +5246,18 @@ async function applyModel(gltf, name, hash = null, { isStale } = {}) {
   await yieldToMain()
   if (isStale?.()) return
 
-  for (const object of modelMeshes) {
-    if (object.geometry && !object.geometry.boundsTree) {
-      object.geometry.computeBoundsTree()
+  try {
+    for (const object of modelMeshes) {
+      if (object.geometry && !object.geometry.boundsTree) {
+        object.geometry.computeBoundsTree()
+      }
+      await yieldToMain()
+      if (isStale?.()) return
     }
-    await yieldToMain()
-    if (isStale?.()) return
+    await rebuildSurfaceGraph({ isStale })
+  } catch (error) {
+    console.warn('Surface graph rebuild failed', error)
   }
-  await rebuildSurfaceGraph({ isStale })
   if (isStale?.()) return
   refreshBodyFrontAxis()
 }
@@ -5488,14 +5589,20 @@ async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
     setModelLoadingUi(`正在載入${preset.label}模型…`)
     await yieldToMain()
     if (isStale()) return false
-    const gltf = await createModelLoader().loadAsync(bodyModelHref(body), (event) => {
+    // Free the current body (and JSON meridians) before decoding the next GLB.
+    // Male JSON + female mesh together previously exhausted memory and the
+    // female load then toasted 女性模型載入失敗.
+    releaseLoadedBody()
+    await yieldToMain()
+    if (isStale()) return false
+    const gltf = await loadStudioGltf(bodyModelHref(body), (event) => {
       if (isStale() || !event.total) return
       setModelLoadingUi(`正在載入${preset.label}模型 ${Math.round(event.loaded / event.total * 100)}%`)
     })
     if (isStale()) return false
     prepareModelMaterials(gltf)
     if (!keepDocument) {
-      state = structuredClone(documentsByBody[body] || emptyDocument(body))
+      state = cloneStudioDocument(documentsByBody[body]) || emptyDocument(body)
       history.replace(state)
       linkedMeridianIds.clear()
       state.meridians.forEach((route) => linkedMeridianIds.add(route.meridianId))
@@ -5514,7 +5621,7 @@ async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
   } catch (error) {
     if (isStale()) return false
     toast(`${preset.label}模型載入失敗：${error.message}`, 'error')
-    setModelLoadingUi(`${preset.label}模型載入失敗`)
+    clearModelLoadingUi()
     return false
   } finally {
     if (loadingBody === body && seq === bodyLoadSeq) loadingBody = null
@@ -5532,14 +5639,21 @@ async function setActiveBodyModel(bodyId) {
     syncBodyModelSelect()
     return
   }
-  if (modelMeshes.length) documentsByBody[activeBody] = structuredClone(state)
+  if (modelMeshes.length) {
+    documentsByBody[activeBody] = cloneStudioDocument(state) || emptyDocument(activeBody)
+  }
   selected = null
   detachOrbitLock({ restorePerspective: false })
   const loaded = await loadBodyModel(body, { keepDocument: false })
   if (!loaded) return
-  autoEnsureCompletedMeridians()
-  rebuildAnnotations()
-  updateUI()
+  try {
+    autoEnsureCompletedMeridians()
+    rebuildAnnotations()
+    updateUI()
+  } catch (error) {
+    toast(`已切換為${BODY_MODELS[body].label}模型，但穴位重繪失敗：${error.message}`, 'error')
+    return
+  }
   toast(`已切換為${BODY_MODELS[body].label}模型（穴位資料各自獨立；匯入 JSON 套用到目前模型）`)
 }
 
@@ -5552,7 +5666,7 @@ async function loadModel(file) {
   const url = URL.createObjectURL(file)
   try {
     setModelLoadingUi(`正在載入 ${file.name}…`)
-    const gltf = await createModelLoader().loadAsync(url)
+    const gltf = await loadStudioGltf(url)
     prepareModelMaterials(gltf)
     const inferred = inferBodyModel({ name: file.name, body: activeBody })
     activeBody = inferred
@@ -5562,7 +5676,7 @@ async function loadModel(file) {
     toast(`已載入 ${file.name}`)
   } catch (error) {
     toast(`模型載入失敗：${error.message}`, 'error')
-    setModelLoadingUi('模型載入失敗')
+    clearModelLoadingUi()
   } finally {
     URL.revokeObjectURL(url)
   }

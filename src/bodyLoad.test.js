@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isCurrentBodyLoad, resolveStudioBodyId, shouldLoadBodyModel } from './bodyLoad.js'
+import { cloneStudioDocument, isCurrentBodyLoad, resolveStudioBodyId, shouldLoadBodyModel } from './bodyLoad.js'
 
 describe('resolveStudioBodyId', () => {
   it('falls back to male', () => {
@@ -58,5 +58,24 @@ describe('isCurrentBodyLoad', () => {
     expect(isCurrentBodyLoad(1, 2, 'female', 'male')).toBe(false)
     expect(isCurrentBodyLoad(2, 2, 'female', 'female')).toBe(true)
     expect(isCurrentBodyLoad(2, 2, 'female', 'male')).toBe(false)
+  })
+})
+
+describe('cloneStudioDocument', () => {
+  it('clones plain JSON documents', () => {
+    const source = { model: { body: 'male' }, meridians: [{ id: 'a' }] }
+    const cloned = cloneStudioDocument(source)
+    expect(cloned).toEqual(source)
+    expect(cloned).not.toBe(source)
+    cloned.meridians[0].id = 'b'
+    expect(source.meridians[0].id).toBe('a')
+  })
+
+  it('falls back to JSON when structuredClone cannot copy the value', () => {
+    const source = { name: 'ok', nested: { n: 2 }, fn: () => 1 }
+    const cloned = cloneStudioDocument(source)
+    expect(cloned.name).toBe('ok')
+    expect(cloned.nested.n).toBe(2)
+    expect(cloned.fn).toBeUndefined()
   })
 })
