@@ -49,6 +49,8 @@ import {
   posteriorWrapGuide,
   shouldFrontWrap,
   shouldPosteriorWrap,
+  isSagittalMidlineSpan,
+  hitStaysOnSagittalSpan,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -164,6 +166,39 @@ describe('skin path wrapping', () => {
     const guide = posteriorWrapGuide([0.01, 1.22, -0.04])
     expect(guide[2]).toBeLessThan(-0.9)
     expect(Math.abs(guide[0])).toBeLessThan(0.2)
+  })
+
+  it('keeps 神庭→素髎 and 玉堂→膻中 on the sagittal midline, not in the sky or off the sternum', () => {
+    const shenting = [0.004, 1.62, 0.08]
+    const suliao = [-0.003, 1.51, 0.12]
+    const faceMid = [0.002, 1.565, 0.10]
+    const skyLoop = [0.22, 1.70, 0.18]
+    const yutang = [0.006, 1.28, 0.09]
+    const danzhong = [-0.005, 1.22, 0.10]
+    const sternumMid = [0.001, 1.25, 0.095]
+    const chestJog = [0.12, 1.25, 0.08]
+    const jianjing = [0.1192, 1.5029, -0.0947]
+    const yuanye = [0.1886, 1.3039, -0.0628]
+    expect(isSagittalMidlineSpan(shenting, suliao)).toBe(true)
+    expect(isSagittalMidlineSpan(yutang, danzhong)).toBe(true)
+    expect(isSagittalMidlineSpan(jianjing, yuanye)).toBe(false)
+    expect(shouldFrontWrap(shenting, suliao)).toBe(true)
+    expect(shouldFrontWrap(yutang, danzhong)).toBe(true)
+    expect(hitStaysOnSagittalSpan(faceMid, shenting, suliao)).toBe(true)
+    expect(hitStaysOnSagittalSpan(skyLoop, shenting, suliao)).toBe(false)
+    expect(hitStaysOnSagittalSpan(sternumMid, yutang, danzhong)).toBe(true)
+    expect(hitStaysOnSagittalSpan(chestJog, yutang, danzhong)).toBe(false)
+    expect(isHitOnWrapSide(faceMid, shenting, suliao)).toBe(true)
+    expect(isHitOnWrapSide(skyLoop, shenting, suliao)).toBe(false)
+    expect(isHitOnWrapSide(sternumMid, yutang, danzhong)).toBe(true)
+    expect(isHitOnWrapSide(chestJog, yutang, danzhong)).toBe(false)
+    const femaleShenting = shenting.map((value) => value * 232)
+    const femaleSuliao = suliao.map((value) => value * 232)
+    const femaleSky = skyLoop.map((value) => value * 232)
+    const femaleFace = faceMid.map((value) => value * 232)
+    expect(isSagittalMidlineSpan(femaleShenting, femaleSuliao)).toBe(true)
+    expect(hitStaysOnSagittalSpan(femaleFace, femaleShenting, femaleSuliao)).toBe(true)
+    expect(hitStaysOnSagittalSpan(femaleSky, femaleShenting, femaleSuliao)).toBe(false)
   })
 
   it('wraps 少府→少衝 around the pinky tip instead of cutting through the finger', () => {
