@@ -77,6 +77,8 @@ import {
   pruneBacktracking,
   shouldFrontWrap,
   shouldPosteriorWrap,
+  isSagittalMidlineSpan,
+  hitStaysOnSagittalSpan,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -1890,7 +1892,7 @@ function sampleWrapGuide(a, b, chord, t) {
   return mixed.map((value) => value / length)
 }
 
-function wrapProbeGuides(guide, sideX, frontBias, backBias = false) {
+function wrapProbeGuides(guide, sideX, frontBias, backBias = false, midline = false) {
   const lateral = Number.isFinite(sideX) && Math.abs(sideX) > 1e-6 ? Math.sign(sideX) : 1
   const guides = [guide]
   if (backBias) {
@@ -1901,8 +1903,12 @@ function wrapProbeGuides(guide, sideX, frontBias, backBias = false) {
   if (frontBias) {
     guides.push([0, 0, 1])
     guides.push(normalizeGuide([guide[0], Math.max(guide[1], 0.15), 1]))
-    guides.push(normalizeGuide([lateral * 0.45, 0.2, 1]))
-    guides.push(normalizeGuide([lateral * 0.7, 0.35, 0.55]))
+    // Lateral chest probes are for 肩井→淵腋. On 任督 they fly into the
+    // sky beside the face or jog the sternum sideways.
+    if (!midline) {
+      guides.push(normalizeGuide([lateral * 0.45, 0.2, 1]))
+      guides.push(normalizeGuide([lateral * 0.7, 0.35, 0.55]))
+    }
   }
   return guides
 }
@@ -1925,14 +1931,18 @@ function acceptWrapHit(hit, from, to, previous) {
 function hitFromWrapProbe(chord, guide, sideX, from, to, previous = null) {
   const frontBias = shouldFrontWrap(from, to)
   const backBias = shouldPosteriorWrap(from, to)
-  const standoffs = frontBias ? [0.1, 0.16, 0.24, 0.34] : backBias ? [0.08, 0.14, 0.22] : [0.14, 0.22]
-  for (const nextGuide of wrapProbeGuides(guide, sideX, frontBias, backBias)) {
+  const midline = isSagittalMidlineSpan(from, to)
+  const wrapSideX = midline ? null : sideX
+  const standoffs = midline && frontBias
+    ? [0.04, 0.08, 0.12]
+    : frontBias ? [0.1, 0.16, 0.24, 0.34] : backBias ? [0.08, 0.14, 0.22] : [0.14, 0.22]
+  for (const nextGuide of wrapProbeGuides(guide, sideX, frontBias, backBias, midline)) {
     for (const standoff of standoffs) {
       const pushed = chord.clone().addScaledVector(new THREE.Vector3(...nextGuide), standoff)
       const hit = projectFromOutside(pushed, nextGuide, standoff * 1.8)
         || closestSkinHit(toArray(pushed), {
-          maxDistance: 0.28,
-          sideX,
+          maxDistance: midline ? 0.10 : 0.28,
+          sideX: wrapSideX,
           guideNormal: nextGuide,
           preferPosterior: backBias,
         })
@@ -1974,12 +1984,13 @@ function snapChordSamplesToSkin(a, b) {
 
 function keepOuterSkinPolyline(points, sideX, from, to) {
   if (!points || points.length < 2) return points
+  const wrapSideX = isSagittalMidlineSpan(from, to) ? null : sideX
   const out = [points[0]]
   for (let index = 1; index < points.length - 1; index += 1) {
     const point = points[index]
     const hit = closestSkinHit(toArray(point), {
       maxDistance: 0.14,
-      sideX,
+      sideX: wrapSideX,
       preferPosterior: shouldPosteriorWrap(from, to),
     })
     if (!hit || !isHitOnWrapSide(hit.position, from, to)) continue
@@ -2727,7 +2738,14 @@ function skinSegmentPoints(a, b, {
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
       : geodesicIsStable(geodesic)
-    if (geodesic && stable) return geodesic
+    const midlineOk = !isSagittalMidlineSpan(a.position, b.position)
+      || !geodesic
+      || geodesic.every((point) => hitStaysOnSagittalSpan(
+        point?.isVector3 ? toArray(point) : point,
+        a.position,
+        b.position,
+      ))
+    if (geodesic && stable && midlineOk) return geodesic
   }
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples

@@ -163,6 +163,37 @@ export function shouldFrontWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   return dropY > 0.1 && Math.abs(meanX) > 0.09 && meanZ > -0.035
 }
 
+/**
+ * 任脈／督脈 (and other near-x=0 pairs). Span-relative so male and female
+ * both count as midline; 肩井→淵腋 stays lateral.
+ */
+export function isSagittalMidlineSpan(from = [0, 0, 0], to = [0, 0, 0]) {
+  const ax = Number(from[0]) || 0
+  const bx = Number(to[0]) || 0
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  const meanX = (ax + bx) / 2
+  const maxAbs = Math.max(Math.abs(ax), Math.abs(bx))
+  return Math.abs(meanX) <= Math.max(0.045, span * 0.12)
+    && maxAbs <= Math.max(0.08, span * 0.22)
+}
+
+/** How far a midline sample may leave the sagittal strip. */
+export function sagittalAbsXCap(from = [0, 0, 0], to = [0, 0, 0]) {
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.max(
+    Math.abs(Number(from[0]) || 0),
+    Math.abs(Number(to[0]) || 0),
+    span * 0.12,
+    0.02,
+  ) + Math.max(0.035, span * 0.08)
+}
+
+/** Reject wrap/geodesic samples that flew off the face or sternum into the sky. */
+export function hitStaysOnSagittalSpan(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  if (!isSagittalMidlineSpan(from, to)) return true
+  return Math.abs(Number(hit[0]) || 0) <= sagittalAbsXCap(from, to)
+}
+
 /** 肩井 GB21 ↔ 淵腋 GB22 only. Geodesic through the armpit crease is skipped; a lateral-chest corridor is used instead. */
 export function isJianjingYuanyePair(fromCode = '', toCode = '') {
   const codes = new Set([String(fromCode || ''), String(toCode || '')])
@@ -1016,6 +1047,7 @@ export function isHitOnWrapSide(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0
   const hitX = Number(hit[0])
   const hitZ = Number(hit[2])
   if (!Number.isFinite(hitX) || !Number.isFinite(hitZ)) return false
+  if (!hitStaysOnSagittalSpan(hit, from, to)) return false
   const side = Math.sign(((Number(from[0]) || 0) + (Number(to[0]) || 0)) / 2) || Math.sign(hitX) || 1
   if (side * hitX < 0 && Math.abs(hitX) > 0.04) return false
   if (shouldPosteriorWrap(from, to)) {
