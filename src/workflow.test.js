@@ -414,6 +414,9 @@ describe('meridian authoring workflow', () => {
     expect(isProbeOnSameLimbSegment(rest, beside, 0.36)).toBe(false)
     expect(isProbeOnSameLimbSegment(rest, beside, 0.36, { skipLimbGap: true })).toBe(true)
     expect(isProbeOnSameLimbSegment(rest, [-0.22, 1.16, -0.09], 0.36, { skipLimbGap: true })).toBe(false)
+    const far = [mid[0] + 0.5, mid[1], mid[2]]
+    expect(isProbeOnSameLimbSegment(rest, far, 0.36)).toBe(false)
+    expect(isProbeOnSameLimbSegment(rest, far, 0.36, { skipLimbGap: true })).toBe(true)
   })
 
   it('lets 肩井–淵腋 locators sit on the lateral chest, not only the rest chord', () => {

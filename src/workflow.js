@@ -540,7 +540,9 @@ export function isProbeOnSameLimbSegment(
   }
   const closest = pointAtPolylineT(rest, closestTOnPolyline(rest, probe))
   const off = dist3(probe, closest)
-  if (off > maxOffPath) return false
+  // Locators on 小海–肩貞 / 肩井–淵腋 / TE head ARE the path. Do not clamp
+  // them to HANDLE_STRETCH_MAX_OFF_PATH or they cannot leave the rest curve.
+  if (off > maxOffPath && !options?.skipLimbGap) return false
   const restX = closest[0]
   const probeX = probe[0]
   if (Math.abs(restX) > 0.035 * scale && restX * probeX < 0) return false

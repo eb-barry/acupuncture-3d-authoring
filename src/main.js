@@ -54,6 +54,8 @@ import {
   gbJianjingYuanyeGuidePoints,
   gbJianjingYuanyeOuterPoint,
   gbLateralChestGuide,
+  gbLocatorCastStandoff,
+  gbLocatorOutsideProbe,
   gbPairSpan,
   isSiXiaohaiJianzhenPair,
   isSiXiaohaiJianzhenAxillaHollow,
@@ -97,6 +99,7 @@ import {
   conformPath,
   densifyPath,
   markerScreenScale,
+  MAX_CONFORM_PULL,
   perspectivePixelScale,
   sampleStepForQuality,
   smoothPathNormals,
@@ -1053,16 +1056,38 @@ function screenPointer(event) {
 }
 
 function surfaceHit(event) {
-  screenPointer(event)
-  const hit = raycaster.intersectObjects(modelMeshes, false)[0]
-  if (!hit?.face) return null
+  return surfaceHits(event)[0] || null
+}
+
+function mapRaySkinHit(hit, outward = null) {
   const normal = hit.face.normal.clone()
     .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
     .normalize()
-  // Orient toward the camera — body-radial flips break medial limbs / 肘窩.
-  const toCamera = camera.position.clone().sub(hit.point)
-  if (toCamera.lengthSq() > 1e-10 && normal.dot(toCamera) < 0) normal.negate()
-  return { position: toArray(hit.point), normal: toArray(normal) }
+  if (outward && outward.lengthSq() > 1e-10 && normal.dot(outward) < 0) normal.negate()
+  return { position: toArray(hit.point), normal: toArray(normal), distance: hit.distance }
+}
+
+function surfaceHits(event) {
+  screenPointer(event)
+  const toCamera = new THREE.Vector3()
+  return raycaster.intersectObjects(modelMeshes, false)
+    .filter((hit) => hit?.face)
+    .map((hit) => {
+      toCamera.copy(camera.position).sub(hit.point)
+      return mapRaySkinHit(hit, toCamera)
+    })
+}
+
+function raySkinHits(origin, direction, maxDistance, outward = null) {
+  if (!modelMeshes.length) return []
+  const dir = direction.clone()
+  if (dir.lengthSq() < 1e-10) return []
+  dir.normalize()
+  const guide = outward?.lengthSq() > 1e-10 ? outward : dir.clone().negate()
+  const caster = new THREE.Raycaster(origin, dir, 0, maxDistance)
+  return caster.intersectObjects(modelMeshes, false)
+    .filter((hit) => hit?.face)
+    .map((hit) => mapRaySkinHit(hit, guide))
 }
 
 function annotationHit(event, types) {
@@ -1085,6 +1110,13 @@ function projectHandleToScreen(mesh) {
     x: rect.left + (ndc.x + 1) * 0.5 * rect.width,
     y: rect.top + (-ndc.y + 1) * 0.5 * rect.height,
   }
+}
+
+function screenDistanceToHit(event, hit) {
+  if (!hit?.object) return Infinity
+  const screen = projectHandleToScreen(hit.object)
+  if (!screen) return Infinity
+  return Math.hypot(screen.x - event.clientX, screen.y - event.clientY)
 }
 
 /** Prefer the visible acupoint marker, even when a meridian line is closer in 3D. */
@@ -1392,39 +1424,92 @@ function handleSkinHit(event, drag) {
   const route = state.meridians.find((item) => item.id === drag.routeId)
   const pair = route && acupointPairs(route).find((item) =>
     item.fromPointId === drag.fromPointId && item.toPointId === drag.toPointId)
+  const fromNode = pair?.fromNode
+  const toNode = pair?.toNode
+  const from = fromNode ? resolvedNode(fromNode) : null
+  const to = toNode ? resolvedNode(toNode) : null
   const skipLimbGap = Boolean(pair && pairKeepsOffPathLocators(
-    routeNodeCode(pair.fromNode),
-    routeNodeCode(pair.toNode),
+    routeNodeCode(fromNode),
+    routeNodeCode(toNode),
+  ))
+  const gbPair = Boolean(pair && from && to && isGbShoulderAxillaSpan(
+    routeNodeCode(fromNode),
+    routeNodeCode(toNode),
+    from.position,
+    to.position,
   ))
   const scale = statureScale()
   const maxOffPath = statureWorld(HANDLE_STRETCH_MAX_OFF_PATH)
   const snapRadius = statureWorld(HANDLE_SKIN_SNAP_RADIUS)
-  const projectRadius = statureWorld(Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7))
-  const accept = (hit) => hit && isProbeOnSameLimbSegment(
-    rest,
-    hit.position,
-    maxOffPath,
-    { skipLimbGap, worldScale: scale },
-  )
-  const direct = surfaceHit(event)
-  if (accept(direct)) return direct
+  const projectRadius = gbPair
+    ? Math.max(
+      statureWorld(HANDLE_STRETCH_PROJECT_RADIUS * 1.6),
+      gbPairSpan(from.position, to.position) * 0.45,
+    )
+    : statureWorld(Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7))
+  const accept = (hit) => {
+    if (!hit) return false
+    if (!isProbeOnSameLimbSegment(rest, hit.position, maxOffPath, {
+      skipLimbGap,
+      worldScale: scale,
+    })) return false
+    if (gbPair && !isGbJianjingYuanyeHandleOk(hit.position, from.position, to.position)) return false
+    return true
+  }
+  const pickAccepted = (hits, near = null) => {
+    const ok = (hits || []).filter(accept)
+    if (!ok.length) return null
+    if (near) {
+      ok.sort((left, right) => dist3(left.position, near) - dist3(right.position, near))
+    }
+    return ok[0]
+  }
+  if (gbPair) {
+    // First legal hit along the camera ray. Skip the T-pose arm; do not
+    // snap back to the old locator or the meridian cannot move right.
+    const alongRay = pickAccepted(surfaceHits(event))
+    if (alongRay) return alongRay
+  } else {
+    const direct = surfaceHit(event)
+    if (accept(direct)) return direct
+  }
   const planePoint = cameraPlanePoint(event, new THREE.Vector3(...anchor.position))
   if (planePoint) {
+    const planeArr = toArray(planePoint)
+    const guide = gbPair
+      ? gbLateralChestGuide(planeArr, sideX)
+      : anchor.normal
     const projected = projectHandleOnSkin(
       planePoint,
-      anchor.normal,
+      guide,
       projectRadius,
       sideX,
     )
     if (accept(projected)) return projected
+    if (gbPair) {
+      const standoff = gbLocatorCastStandoff(from.position, to.position)
+      const probe = gbLocatorOutsideProbe(planeArr, from.position, to.position)
+      const side = Math.sign(sideX) || Math.sign(from.position[0]) || 1
+      const inward = new THREE.Vector3(-side, 0, 0)
+      const reach = Math.max(projectRadius * 2, standoff * 3)
+      const picked = pickAccepted([
+        ...projectFromOutsideHits(planePoint, guide, standoff),
+        ...projectFromOutsideHits(new THREE.Vector3(...probe), guide, standoff),
+        ...raySkinHits(planePoint, inward, reach, new THREE.Vector3(side, 0, 0)),
+      ], planeArr)
+      if (picked) return picked
+    }
   }
-  if (direct) {
-    const snapped = closestSkinHit(direct.position, {
-      maxDistance: snapRadius,
-      sideX,
-      guideNormal: direct.normal,
-    })
-    if (accept(snapped)) return snapped
+  if (!gbPair) {
+    const direct = surfaceHit(event)
+    if (direct) {
+      const snapped = closestSkinHit(direct.position, {
+        maxDistance: snapRadius,
+        sideX,
+        guideNormal: direct.normal,
+      })
+      if (accept(snapped)) return snapped
+    }
   }
   return null
 }
@@ -1577,19 +1662,16 @@ function appendSkinPoint(points, point, previousRef) {
 }
 
 /** Cast from a short stand-off along a guide normal onto the nearest skin hit. */
-function projectFromOutside(chordPoint, guide, standoff) {
+function projectFromOutsideHits(chordPoint, guide, standoff) {
   const normal = new THREE.Vector3(...guide)
-  if (normal.lengthSq() < 1e-10) return null
+  if (normal.lengthSq() < 1e-10) return []
   normal.normalize()
   const origin = chordPoint.clone().addScaledVector(normal, standoff)
-  const caster = new THREE.Raycaster(origin, normal.clone().negate(), 0, standoff * 2.2)
-  const hit = caster.intersectObjects(modelMeshes, false)[0]
-  if (!hit?.face) return null
-  const hitNormal = hit.face.normal.clone()
-    .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld))
-    .normalize()
-  if (hitNormal.dot(normal) < 0) hitNormal.negate()
-  return { position: toArray(hit.point), normal: toArray(hitNormal) }
+  return raySkinHits(origin, normal.clone().negate(), standoff * 2.2, normal)
+}
+
+function projectFromOutside(chordPoint, guide, standoff) {
+  return projectFromOutsideHits(chordPoint, guide, standoff)[0] || null
 }
 
 function triangleCornerIds(geometry, faceIndex) {
@@ -2471,33 +2553,40 @@ function snapGbHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   const span = gbPairSpan(from, to)
   const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
   const guide = placed.normal || gbLateralChestGuide(placed.position, sideX)
-  const hit = closestSkinHit(placed.position, {
-    maxDistance: Math.max(0.32, span * 1.4),
+  const near = Math.max(0.02, span * 0.05)
+  const standoff = gbLocatorCastStandoff(from, to)
+  const probe = gbLocatorOutsideProbe(placed.position, from, to)
+  const legalHit = (hit) => hit && isGbJianjingYuanyeHandleOk(hit.position, from, to)
+  const nearHit = closestSkinHit(placed.position, {
+    maxDistance: near,
     sideX,
     guideNormal: guide,
   })
-    || closestSkinHit(placed.position, {
-      maxDistance: Math.max(0.5, span * 2.2),
-      sideX,
-      guideNormal: guide,
-    })
-    || projectFromOutside(new THREE.Vector3(...placed.position), guide, Math.max(0.55, span * 2.4))
-  if (hit && isGbJianjingYuanyeHandleOk(hit.position, from, to)) {
+  const hit = legalHit(nearHit)
+    ? nearHit
+    : projectFromOutsideHits(new THREE.Vector3(...probe), guide, standoff).find(legalHit)
+      || projectFromOutsideHits(new THREE.Vector3(...placed.position), guide, standoff).find(legalHit)
+      || null
+  if (hit) {
     return { position: hit.position, normal: hit.normal }
+  }
+  // Keep a legal 側胸 drag. Never rescue onto the default corridor — that
+  // pinned the black dots while the user pulled them to the right.
+  if (isGbJianjingYuanyeHandleOk(placed.position, from, to)) {
+    return { position: [...placed.position], normal: [...(placed.normal || guide)] }
   }
   const outer = gbJianjingYuanyeOuterPoint(from, to, t)
   const fallbackGuide = gbLateralChestGuide(outer, sideX)
   const fallback = closestSkinHit(outer, {
-    maxDistance: Math.max(0.26, span * 1.2),
+    maxDistance: Math.max(0.08, span * 0.18),
     sideX,
     guideNormal: fallbackGuide,
   })
-    || projectFromOutside(new THREE.Vector3(...outer), fallbackGuide, Math.max(0.4, span * 1.8))
+    || projectFromOutside(new THREE.Vector3(...outer), fallbackGuide, standoff)
   if (fallback && isGbJianjingYuanyeHandleOk(fallback.position, from, to)) {
     return { position: fallback.position, normal: fallback.normal }
   }
-  if (fallback) return { position: fallback.position, normal: fallback.normal }
-  return { position: [...outer], normal: [...(placed.normal || fallbackGuide)] }
+  return null
 }
 
 function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
@@ -2511,7 +2600,7 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
     .map((record) => snapGbHandleToSkin(record, a, b, path))
     .filter(Boolean)
   const hasUserHandles = sanitized.length > 0
-  const sampleCount = Math.max(18, Math.ceil(span / 0.006))
+  const sampleCount = 28
   const samples = hasUserHandles
     ? catmullRomThrough(
       [a.position, ...sanitized.map((record) => record.position), b.position],
@@ -2522,6 +2611,8 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
   const previousRef = { current: null }
   const probeRadius = Math.max(0.028, span * 0.12)
   const snapRadius = Math.max(0.05, span * 0.22)
+  const locatorStandoff = gbLocatorCastStandoff(a.position, b.position)
+  const locatorNear = Math.max(0.06, span * 0.14)
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
   const accept = (hit) => {
@@ -2541,33 +2632,38 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
     const outer = gbJianjingYuanyeOuterPoint(a.position, b.position, t)
     const sample = samples[index]
     const side = Math.sign(sideX) || 1
-    let probe = sample
-    if (!hasUserHandles) {
-      const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - span * 0.012
-      const tooAnterior = sample[2] > outer[2] + span * 0.08
-      const tooLateral = Math.abs(sample[0]) > Math.abs(outer[0]) + span * 0.12
-      const tooPosterior = sample[2] < outer[2] - span * 0.10
-      if (tooMedial || tooAnterior || tooLateral || tooPosterior) probe = outer
+    if (hasUserHandles) {
+      const guide = gbLateralChestGuide(sample, side)
+      const probe = gbLocatorOutsideProbe(sample, a.position, b.position)
+      const hit = projectFromOutside(new THREE.Vector3(...probe), guide, locatorStandoff)
+        || projectFromOutside(new THREE.Vector3(...sample), guide, locatorStandoff)
+        || closestSkinHit(sample, { maxDistance: locatorNear, sideX: side, guideNormal: guide })
+      // Locators are the path. Always emit a point under the curve; never
+      // rescue onto the default mid-axillary corridor, and never drop the
+      // sample (that left a jagged ribbon while the black dots moved).
+      if (hit) accept(hit)
+      else accept({ position: [...sample], normal: [...guide] })
+      continue
     }
+    let probe = sample
+    const tooMedial = Math.abs(sample[0]) < Math.abs(outer[0]) - span * 0.012
+    const tooAnterior = sample[2] > outer[2] + span * 0.08
+    const tooLateral = Math.abs(sample[0]) > Math.abs(outer[0]) + span * 0.12
+    const tooPosterior = sample[2] < outer[2] - span * 0.10
+    if (tooMedial || tooAnterior || tooLateral || tooPosterior) probe = outer
     const guide = gbLateralChestGuide(probe, side)
     const rescueGuide = gbLateralChestGuide(outer, side)
     let hit = projectFromOutside(new THREE.Vector3(...probe), guide, probeRadius)
-      || closestSkinHit(probe, { maxDistance: hasUserHandles ? Math.max(0.22, span) : snapRadius, sideX: side, guideNormal: guide })
-    if (hasUserHandles) {
-      hit = closestSkinHit(sample, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: guide })
-        || closestSkinHit(sample, { maxDistance: Math.max(0.38, span * 1.7), sideX: side, guideNormal: guide })
-        || projectFromOutside(new THREE.Vector3(...sample), guide, Math.max(0.45, span * 2))
-        || hit
-    }
+      || closestSkinHit(probe, { maxDistance: snapRadius, sideX: side, guideNormal: guide })
     if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position))) {
       hit = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, probeRadius)
         || closestSkinHit(outer, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: rescueGuide })
         || projectFromOutside(new THREE.Vector3(...outer), rescueGuide, Math.max(0.08, span * 0.4))
+      if (!hitOk(hit, t)) {
+        hit = { position: [...outer], normal: [...rescueGuide] }
+      }
     }
-    if (!hitOk(hit, t)) {
-      hit = { position: [...outer], normal: [...rescueGuide] }
-    }
-    accept(hit)
+    if (hitOk(hit, t)) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
   return points.length >= 3 ? points : null
@@ -3270,7 +3366,10 @@ function trimCache(cache, limit) {
  * rebuild refines it.
  */
 function conformRunToSkin(points) {
-  const step = sampleStepForQuality(dragging ? 'coarse' : 'fine')
+  const scale = Math.max(statureScale(), 1e-3)
+  const step = sampleStepForQuality(dragging ? 'coarse' : 'fine') * scale
+  const snap = 0.02 * scale
+  const pull = MAX_CONFORM_PULL * scale
   const mid = points[Math.floor(points.length / 2)]
   const key = [
     points.length,
@@ -3285,9 +3384,12 @@ function conformRunToSkin(points) {
   // Two passes: nearest-point first, only to learn a stable normal per sample,
   // then drop each sample along that normal so the drawn line keeps the
   // authored route instead of sliding toward whichever crease wall is nearer.
-  const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point))
+  const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point, null, snap), { maxPull: pull })
   const guides = smoothPathNormals(estimate.normals, 2)
-  const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide), { guides })
+  const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide, snap), {
+    guides,
+    maxPull: pull,
+  })
   const run = {
     points: conformed.points.map((point, index) => (
       // A sample neither pass could place stays where the nearest-point pass
@@ -3625,8 +3727,8 @@ function addRouteEditHandles(route) {
             new THREE.SphereGeometry(0.5, 12, 10),
             createGizmoMaterial(0x111111, { selected: true }),
           )
-          handle.position.copy(offsetPosition(placed, 0.006))
-          handle.scale.setScalar(0.012)
+          handle.position.copy(offsetPosition(placed, statureWorld(0.006)))
+          handle.scale.setScalar(statureWorld(0.012))
           handle.renderOrder = 12
           handle.material.depthTest = !skinDecalXray()
           handle.userData = {
@@ -4300,7 +4402,7 @@ function previewHandleDrag(drag, hit) {
         position: [-skinHit.position[0], skinHit.position[1], skinHit.position[2]],
         normal: [-skinHit.normal[0], skinHit.normal[1], skinHit.normal[2]],
       }
-    mesh.position.copy(offsetPosition(node, 0.006))
+    mesh.position.copy(offsetPosition(node, statureWorld(0.006)))
   })
   if (!drag.records?.length || drag.handleIndex == null) return
   if (!route || !pair) return
@@ -4437,7 +4539,10 @@ function removeLocatorFromSelectedPair() {
 
 function placeAt(event) {
   const markerHit = nearestAcupointMarkerHit(event)
-  if (markerHit) {
+  const routeHit = annotationHit(event, ['meridian'])
+  const acupointDist = screenDistanceToHit(event, markerHit)
+  const preferAcupoint = markerHit && (!routeHit || acupointDist <= 8)
+  if (preferAcupoint) {
     const point = getPoint(markerHit.object.userData.id)
     selected = { type: 'acupoint', id: point.id, pairId: point.pairId || null }
     if (appMode === 'edit') {
@@ -4449,7 +4554,6 @@ function placeAt(event) {
     return
   }
 
-  const routeHit = annotationHit(event, ['meridian'])
   if (routeHit) {
     const route = state.meridians.find((item) => item.id === routeHit.object.userData.id)
     const pair = route && !isRenDuMeridian(route.meridianId)
@@ -5261,15 +5365,8 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return true
   }
 
-  const acupointHit = nearestAcupointMarkerHit(event)
-  if (acupointHit) {
-    startAcupointDrag(acupointHit)
-    return
-  }
-
-  const handleHit = nearestHandleHit(event)
-  if (handleHit) {
-    const data = handleHit.object.userData
+  const startHandleDrag = (hit) => {
+    const data = hit.object.userData
     selected = {
       type: 'meridian',
       id: data.routeId,
@@ -5293,6 +5390,25 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     syncAppModeUI()
     syncControlsEnabled()
     capturePointer(event)
+    return true
+  }
+
+  const acupointHit = nearestAcupointMarkerHit(event)
+  const handleHit = nearestHandleHit(event)
+  const routeHit = annotationHit(event, ['meridian'])
+  // Black locators sit on the ribbon next to large female acupoint discs.
+  // Prefer whichever gizmo is closer on screen so a click on a black dot
+  // reshapes the meridian instead of dragging 肩井/淵腋.
+  if (handleHit && (!acupointHit || screenDistanceToHit(event, handleHit) <= screenDistanceToHit(event, acupointHit))) {
+    startHandleDrag(handleHit)
+    return
+  }
+  // A click on the ribbon selects the span. Only the inner 8 px of an
+  // acupoint disc starts a point drag, so large female 肩井/淵腋 markers do
+  // not swallow GB21–GB22.
+  if (acupointHit && (!routeHit || screenDistanceToHit(event, acupointHit) <= 8)) {
+    startAcupointDrag(acupointHit)
+    return
   }
 })
 renderer.domElement.addEventListener('pointermove', (event) => {

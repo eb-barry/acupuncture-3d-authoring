@@ -221,6 +221,30 @@ export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0) {
   return normalize([side * 0.90, 0.16, 0.38])
 }
 
+/** Stand-off that clears the female torso before the inward skin ray. */
+export function gbLocatorCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
+  return Math.max(0.05, gbPairSpan(from, to) * 0.28)
+}
+
+/**
+ * Push a 肩井–淵腋 locator-curve sample outside the ribcage. Catmull-Rom
+ * chords dive into the thorax; casting from there hits pecs/pit or keeps the
+ * sample interior, so the red line ignores the black dots.
+ */
+export function gbLocatorOutsideProbe(sample = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const p = asPathPoint(sample)
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  const guide = gbLateralChestGuide(p, side)
+  const standoff = gbLocatorCastStandoff(a, b)
+  return [
+    p[0] + guide[0] * standoff,
+    p[1] + guide[1] * standoff,
+    p[2] + guide[2] * standoff,
+  ]
+}
+
 function smoothstep01(value) {
   const x = clamp01(value)
   return x * x * (3 - 2 * x)
@@ -312,7 +336,12 @@ export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0
   return onChest || tooMedial || tooLateral || throughPit
 }
 
-/** User locators may sit beside the default lateral path; only the pit / pecs / other side is rejected. */
+/**
+ * User locators may leave the default mid-axillary corridor to reshape the
+ * span. Opposite side, a y jump, the pecs, the T-pose inner arm, or the
+ * deep axillary crease is rejected. Posterior-lateral wraps along the ribs
+ * (the usual “drag the black dots to the right” on this span) stay legal.
+ */
 export function isGbJianjingYuanyeHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
   const p = asPathPoint(point)
   const a = asPathPoint(from)
@@ -320,10 +349,22 @@ export function isGbJianjingYuanyeHandleOk(point = [0, 0, 0], from = [0, 0, 0], 
   const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
   const span = gbPairSpan(a, b)
   if (p[0] * side < 0 && Math.abs(p[0]) > span * 0.12) return false
-  const yMin = Math.min(a[1], b[1]) - span * 0.22
-  const yMax = Math.max(a[1], b[1]) + span * 0.22
+  const yMin = Math.min(a[1], b[1]) - span * 0.28
+  const yMax = Math.max(a[1], b[1]) + span * 0.28
   if (p[1] < yMin || p[1] > yMax) return false
-  return !isGbAxillaHollow(p, a, b)
+  const y0 = Math.min(a[1], b[1])
+  const y1 = Math.max(a[1], b[1])
+  const midSpan = p[1] > y0 + span * 0.08 && p[1] < y1 - span * 0.08
+  const yT = y1 - y0 > 1e-8 ? clamp01((p[1] - y0) / (y1 - y0)) : 0.5
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
+  const wallAbs = Math.max(corridor.wallAbsX, Math.abs(a[0]), Math.abs(b[0]))
+  const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.40
+  // T-pose inner arm is often near 淵腋 height, so do not require midSpan.
+  const tooLateral = Math.abs(p[0]) > wallAbs + span * 0.38
+  const throughPit = midSpan
+    && p[2] < Math.min(a[2], b[2], corridor.point[2]) - span * 0.22
+    && Math.abs(p[0]) < wallAbs - span * 0.06
+  return !onChest && !tooLateral && !throughPit
 }
 
 /** Reject samples that fell into the axilla crease or jumped onto the chest. */
