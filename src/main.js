@@ -3533,6 +3533,10 @@ function conformRunToSkin(points) {
   const cached = conformCache.get(key)
   if (cached) return cached
   const dense = densifyPath(points.map((point) => toArray(point)), step)
+  const start = toArray(points[0])
+  const end = toArray(points[points.length - 1])
+  const lockMidlineX = Math.abs(start[0]) <= statureWorld(0.02)
+    && Math.abs(end[0]) <= statureWorld(0.02)
   // Two passes: nearest-point first, only to learn a stable normal per sample,
   // then drop each sample along that normal so the drawn line keeps the
   // authored route instead of sliding toward whichever crease wall is nearer.
@@ -3543,11 +3547,13 @@ function conformRunToSkin(points) {
     maxPull: pull,
   })
   const run = {
-    points: conformed.points.map((point, index) => (
-      // A sample neither pass could place stays where the nearest-point pass
-      // left it — on the skin — rather than at its authored height.
-      conformed.resolved[index] ? point : estimate.points[index]
-    )),
+    points: conformed.points.map((point, index) => {
+      const placed = conformed.resolved[index] ? point : estimate.points[index]
+      // 任督 x=0: nearest-point conform otherwise slides into the breasts
+      // at the xiphoid dip and makes 鳩尾–巨闕 look crooked from the front.
+      if (!lockMidlineX || !placed) return placed
+      return [dense[index][0], placed[1], placed[2]]
+    }),
     normals: smoothPathNormals(conformed.normals, 2),
     unresolved: conformed.resolved.reduce(
       (total, ok, index) => (ok || estimate.resolved[index] ? total : total + 1),
