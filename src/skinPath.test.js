@@ -53,6 +53,8 @@ import {
   hitStaysOnSagittalSpan,
   hitStaysOnFrontMidline,
   hitStaysNearMidlineChord,
+  midlineFrontProbeOrigin,
+  hitMatchesMidlineSampleY,
   isGvFacePair,
   isCvAnteriorPair,
   slerpUnitVectors,
@@ -217,6 +219,14 @@ describe('skin path wrapping', () => {
     expect(hitStaysNearMidlineChord([0.08, 1.10, 0.09], jiuwei, juque)).toBe(false)
     expect(hitStaysNearMidlineChord([0.001, 1.00, 0.085], zhongwan, jianli)).toBe(true)
     expect(hitStaysNearMidlineChord([0.07, 1.00, 0.085], zhongwan, jianli)).toBe(false)
+    const midProbe = midlineFrontProbeOrigin(shenting, suliao, 0.5, 0.08)
+    expect(midProbe[1]).toBeCloseTo(1.565, 3)
+    expect(midProbe[2]).toBeGreaterThan(Math.max(shenting[2], suliao[2]))
+    expect(hitMatchesMidlineSampleY(faceMid, shenting, suliao, 0.5)).toBe(true)
+    expect(hitMatchesMidlineSampleY(suliao, shenting, suliao, 0.5)).toBe(false)
+    const yutangProbe = midlineFrontProbeOrigin(yutang, danzhong, 0.5, 0.05)
+    expect(Math.abs(yutangProbe[0])).toBeLessThan(0.01)
+    expect(yutangProbe[1]).toBeCloseTo(1.25, 3)
     const femaleShenting = shenting.map((value) => value * 232)
     const femaleSuliao = suliao.map((value) => value * 232)
     const femaleSky = skyLoop.map((value) => value * 232)

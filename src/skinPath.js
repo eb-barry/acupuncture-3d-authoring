@@ -234,7 +234,30 @@ export function hitStaysNearMidlineChord(hit = [0, 0, 0], from = [0, 0, 0], to =
   const span = Math.max(length3(ab), 1e-6)
   const t = clamp01(dot3(sub3(p, a), ab) / (span * span))
   const proj = add3(a, scale3(ab, t))
-  return length3(sub3(p, proj)) <= Math.max(0.012, span * 0.08)
+  return length3(sub3(p, proj)) <= Math.max(0.008, span * 0.05)
+}
+
+/**
+ * Probe origin in front of the face/chest at sample t.
+ * A −Z ray from here hits skin at that Y, not the nose tip from every Y.
+ */
+export function midlineFrontProbeOrigin(from = [0, 0, 0], to = [0, 0, 0], t = 0.5, standoff = 0) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const u = clamp01(t)
+  const maxZ = Math.max(a[2], b[2])
+  return [
+    a[0] + (b[0] - a[0]) * u,
+    a[1] + (b[1] - a[1]) * u,
+    maxZ + Math.max(0, Number(standoff) || 0),
+  ]
+}
+
+/** Face samples must keep their own Y — snapping every t to 素髎 is the sky loop. */
+export function hitMatchesMidlineSampleY(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const origin = midlineFrontProbeOrigin(from, to, t, 0)
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.abs((Number(hit[1]) || 0) - origin[1]) <= Math.max(0.008, span * 0.06)
 }
 
 /** 肩井 GB21 ↔ 淵腋 GB22 only. Geodesic through the armpit crease is skipped; a lateral-chest corridor is used instead. */

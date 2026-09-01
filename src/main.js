@@ -80,6 +80,8 @@ import {
   isSagittalMidlineSpan,
   hitStaysOnFrontMidline,
   hitStaysNearMidlineChord,
+  midlineFrontProbeOrigin,
+  hitMatchesMidlineSampleY,
   isGvFacePair,
   isCvAnteriorPair,
   slerpUnitVectors,
@@ -2088,8 +2090,8 @@ function simplifyLiftedPolyline(points) {
  * cutting through / spawning multiple floating chords.
  */
 /**
- * 任督中線：把和弦樣本貼回皮膚。臉段沿 +Z 找到顏面，胸腹段貼近穴位和弦
- * 保持一直線，避免飛到鼻前空中或繞到胸骨旁邊。
+ * 任督中線：依 Y 切片從前方 −Z 貼回皮膚。
+ * 臉段跟著輪廓（額→鼻→唇），胸腹段鎖在穴位和弦的 X，避免飛到鼻前空中或繞到胸骨旁邊。
  */
 function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = false } = {}) {
   const start = new THREE.Vector3(...a.position)
@@ -2097,52 +2099,65 @@ function snapMidlineChordToSkin(a, b, { followProfile = false, keepStraight = fa
   const from = a.position
   const to = b.position
   const span = Math.max(start.distanceTo(end), 1e-6)
-  const count = Math.min(56, Math.max(16, Math.ceil(span / Math.max(0.006, span * 0.04)) + 8))
-  const front = shouldFrontWrap(from, to) && !shouldPosteriorWrap(from, to)
-  const guide = front ? [0, 0, 1] : posteriorWrapGuide([
-    (from[0] + to[0]) / 2,
-    (from[1] + to[1]) / 2,
-    (from[2] + to[2]) / 2,
-  ])
+  const count = Math.min(72, Math.max(20, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 10))
+  const maxZ = Math.max(from[2], to[2])
+  const minZ = Math.min(from[2], to[2])
+  const inward = new THREE.Vector3(0, 0, -1)
+  const outward = new THREE.Vector3(0, 0, 1)
   const standoffs = followProfile
-    ? [span * 0.18, span * 0.32, span * 0.50]
-    : [span * 0.08, span * 0.16]
-  const snapR = followProfile ? Math.max(span * 0.22, span * 0.12) : span * 0.14
+    ? [statureWorld(0.06), statureWorld(0.10), statureWorld(0.16)]
+    : [statureWorld(0.05), statureWorld(0.09)]
+  const extraReach = Math.max(statureWorld(0.12), maxZ - minZ + statureWorld(0.04))
+  const xSlack = Math.max(statureWorld(0.008), span * 0.05)
   const points = []
   const previousRef = { current: null }
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
-  const legal = (hit) => {
+  const legal = (hit, t, sampleX) => {
     if (!hit) return false
     if (!hitStaysOnFrontMidline(hit.position, from, to)) return false
+    if (!hitMatchesMidlineSampleY(hit.position, from, to, t)) return false
     if (keepStraight && !hitStaysNearMidlineChord(hit.position, from, to)) return false
+    if (keepStraight && Math.abs(hit.position[0] - sampleX) > xSlack) return false
     return true
   }
+  const pickFrontHit = (origin, maxDistance, t, sampleX) => {
+    const hits = raySkinHits(origin, inward, maxDistance, outward)
+    for (const hit of hits) {
+      if (legal(hit, t, sampleX)) return hit
+    }
+    return null
+  }
+
   appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), SKIN_LIFT), previousRef)
   for (let index = 1; index < count - 1; index += 1) {
     const t = index / (count - 1)
-    const chord = start.clone().lerp(end, t)
+    const sample = midlineFrontProbeOrigin(from, to, t, 0)
+    const x = sample[0]
+    const y = sample[1]
     let hit = null
     for (const standoff of standoffs) {
-      const pushed = chord.clone().addScaledVector(new THREE.Vector3(...guide), standoff)
-      const candidate = projectFromOutside(pushed, guide, standoff * 2.2)
-        || closestSkinHit(toArray(pushed), {
-          maxDistance: snapR,
-          sideX: null,
-          guideNormal: guide,
-        })
-      if (legal(candidate)) {
-        hit = candidate
-        break
+      const origin = new THREE.Vector3(...midlineFrontProbeOrigin(from, to, t, standoff))
+      hit = pickFrontHit(origin, standoff + extraReach, t, x)
+      if (hit) break
+    }
+    if (!hit && followProfile) {
+      const dx = Math.max(statureWorld(0.0025), span * 0.015)
+      const standoff = standoffs[0]
+      for (const ox of [x + dx, x - dx, (from[0] + to[0]) / 2]) {
+        const origin = new THREE.Vector3(ox, y, maxZ + standoff)
+        hit = pickFrontHit(origin, standoff + extraReach, t, x)
+        if (hit) break
       }
     }
-    if (!hit) {
+    if (!hit && keepStraight) {
+      const chord = start.clone().lerp(end, t)
       const nearby = closestSkinHit(toArray(chord), {
-        maxDistance: snapR,
+        maxDistance: Math.max(statureWorld(0.012), span * 0.08),
         sideX: null,
-        guideNormal: guide,
+        guideNormal: [0, 0, 1],
       })
-      if (legal(nearby)) hit = nearby
+      if (legal(nearby, t, x)) hit = nearby
     }
     if (!hit) continue
     appendSkinPoint(points, liftHit(hit), previousRef)
