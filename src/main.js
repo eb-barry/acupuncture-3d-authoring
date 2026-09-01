@@ -16,6 +16,8 @@ import {
   sanitizeRouteNode,
   validateDocument,
 } from './document.js'
+import { isCurrentBodyLoad, resolveStudioBodyId, shouldLoadBodyModel } from './bodyLoad.js'
+import { isDevMode } from './devFlag.js'
 import { bindDocumentToBody, mapDocumentAnnotations, scalePosition } from './retarget.js'
 import {
   IDLE_SHADOW_MAP_SIZE,
@@ -228,7 +230,7 @@ $('#app').innerHTML = `
     </div>
   </aside>
   <section class="stage">
-    <div id="viewport" tabindex="0"><div id="viewport-grid" class="viewport-grid" aria-hidden="true"></div></div>
+    <div id="viewport" tabindex="0"><div id="viewport-grid" class="viewport-grid" aria-hidden="true"></div><div id="model-loading" class="model-loading"><p id="model-loading-text">正在載入人體模型…</p></div></div>
     <div id="zoom-indicator" class="zoom-indicator" aria-live="polite">1.00×</div>
     <div class="stage-help" id="stage-help">拖曳旋轉 · 滾輪縮放 · 右鍵／Shift 平移</div>
     <div class="axis"><i class="x"></i>X <i class="y"></i>Y <i class="z"></i>Z</div>
@@ -436,6 +438,9 @@ let handleVisuals = []
 let midpointVisuals = []
 let bodyFront = new THREE.Vector3(0, 0, 1)
 let activeBody = 'male'
+let bodyLoadSeq = 0
+let wantedBody = 'male'
+let loadingBody = null
 let state = emptyDocument('male')
 const documentsByBody = {
   male: structuredClone(state),
@@ -492,6 +497,18 @@ const linkedMeridianIds = new Set()
 const storageKeyForBody = (body) => `meridian-studio-document-v2-${inferBodyModel({ body })}`
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
+const BODY_MODEL_HREFS = {
+  male: new URL('../models/male_character.glb', import.meta.url).href,
+  female: new URL('../models/female-character.glb', import.meta.url).href,
+}
+const bodyModelHref = (bodyId) => BODY_MODEL_HREFS[resolveStudioBodyId(bodyId)]
+const yieldToMain = () => new Promise((resolve) => {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => requestAnimationFrame(resolve))
+  } else {
+    setTimeout(resolve, 0)
+  }
+})
 const createModelLoader = () => {
   const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
   const draco = new DRACOLoader()
@@ -509,6 +526,20 @@ const escapeHtml = (value) => {
 }
 
 function setStatus(message) { $('#status').textContent = message }
+
+function setModelLoadingUi(message) {
+  const overlay = $('#model-loading')
+  const text = $('#model-loading-text')
+  if (text) text.textContent = message
+  if (overlay) overlay.hidden = false
+  const status = $('#model-status')
+  if (status) status.textContent = message
+}
+
+function clearModelLoadingUi() {
+  const overlay = $('#model-loading')
+  if (overlay) overlay.hidden = true
+}
 let toastTimer
 function toast(message, kind = 'ok') {
   const element = $('#toast')
@@ -1757,7 +1788,7 @@ function clearPathCaches() {
   shortArcCache = null
 }
 
-function rebuildSurfaceGraph() {
+async function rebuildSurfaceGraph({ isStale } = {}) {
   clearPathCaches()
   normalMatrices.clear()
   const chunks = []
@@ -1784,6 +1815,10 @@ function rebuildSurfaceGraph() {
       } else {
         normals.push([0, 1, 0])
       }
+      if (index > 0 && index % 32768 === 0) {
+        await yieldToMain()
+        if (isStale?.()) return
+      }
     }
     const triangles = []
     const indexAttr = geometry.getIndex()
@@ -1794,6 +1829,8 @@ function rebuildSurfaceGraph() {
     }
     meshOffsets.set(mesh, chunks.reduce((sum, chunk) => sum + chunk.positions.length, 0))
     chunks.push({ positions, normals, triangles })
+    await yieldToMain()
+    if (isStale?.()) return
   }
   if (!chunks.length) {
     surfaceGraph = null
@@ -2187,7 +2224,7 @@ function snapMidlineChordToSkin(a, b, {
     appendSkinPoint(points, liftHit(hit), previousRef)
   }
   appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), lift), previousRef)
-  if (import.meta.env.DEV) {
+  if (isDevMode(import.meta.env)) {
     window.__midlineSnap = window.__midlineSnap || []
     window.__midlineSnap.push({
       followProfile,
@@ -3917,7 +3954,7 @@ function refreshRouteEditHandles() {
 }
 
 function rebuildAnnotations() {
-  if (import.meta.env.DEV) window.__midlineSnap = []
+  if (isDevMode(import.meta.env)) window.__midlineSnap = []
   // Decal materials are per visual; drop them before the group is cleared so
   // the shader material set does not grow with every rebuild.
   routeVisuals.forEach(({ line }) => disposeSkinDecalMaterial(line?.material))
@@ -4904,9 +4941,7 @@ async function measureFramedHeight(bodyId) {
     rememberFramedHeight(body, bodyHeightWorld)
     return bodyHeightWorld
   }
-  const preset = BODY_MODELS[body]
-  const modelUrl = new URL(`../models/${preset.fileName}`, import.meta.url)
-  const gltf = await createModelLoader().loadAsync(modelUrl.href)
+  const gltf = await createModelLoader().loadAsync(bodyModelHref(body))
   const root = gltf.scene
   const box = new THREE.Box3().setFromObject(root)
   const center = box.getCenter(new THREE.Vector3())
@@ -4919,7 +4954,7 @@ async function measureFramedHeight(bodyId) {
   return height
 }
 
-function applyModel(gltf, name, hash = null) {
+async function applyModel(gltf, name, hash = null, { isStale } = {}) {
   const root = gltf.scene
   const box = new THREE.Box3().setFromObject(root)
   const size = box.getSize(new THREE.Vector3())
@@ -4973,15 +5008,11 @@ function applyModel(gltf, name, hash = null) {
       if (!object.geometry.getAttribute('normal')) {
         object.geometry.computeVertexNormals()
       }
-      if (!object.geometry.boundsTree) {
-        object.geometry.computeBoundsTree()
-      }
       // Lets the conform pass skip meshes that cannot own the nearest point.
       if (!object.geometry.boundingBox) object.geometry.computeBoundingBox()
     }
     modelMeshes.push(object)
   })
-  rebuildSurfaceGraph()
 
   const fovRad = THREE.MathUtils.degToRad(perspectiveCamera.fov)
   const dist = (maxDim / 2) / Math.tan(fovRad / 2) * 1.65
@@ -5017,6 +5048,21 @@ function applyModel(gltf, name, hash = null) {
   $('#model-status').textContent = `${BODY_MODELS[body].label} · ${state.model.name}`
   refreshBodyFrontAxis()
   updateUI()
+
+  // Paint the mesh before BVH / surface-graph work freezes the main thread.
+  await yieldToMain()
+  if (isStale?.()) return
+
+  for (const object of modelMeshes) {
+    if (object.geometry && !object.geometry.boundsTree) {
+      object.geometry.computeBoundsTree()
+    }
+    await yieldToMain()
+    if (isStale?.()) return
+  }
+  await rebuildSurfaceGraph({ isStale })
+  if (isStale?.()) return
+  refreshBodyFrontAxis()
 }
 
 let surfaceFinish = 'skin'
@@ -5336,19 +5382,22 @@ function applySurfaceFinish(root = modelGroup) {
 }
 
 async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
-  const body = BODY_MODELS[bodyId] ? bodyId : 'male'
+  const body = resolveStudioBodyId(bodyId)
   const preset = BODY_MODELS[body]
+  wantedBody = body
+  const seq = ++bodyLoadSeq
+  loadingBody = body
+  const isStale = () => !isCurrentBodyLoad(seq, bodyLoadSeq, wantedBody, body)
   try {
-    $('#model-status').textContent = `正在載入${preset.label}模型…`
-    const modelUrl = new URL(`../models/${preset.fileName}`, import.meta.url)
-    modelUrl.searchParams.set('v', 'body-2')
-    const gltf = await createModelLoader().loadAsync(modelUrl.href, (event) => {
-      if (event.total) {
-        $('#model-status').textContent = `正在載入${preset.label}模型 ${Math.round(event.loaded / event.total * 100)}%`
-      }
+    setModelLoadingUi(`正在載入${preset.label}模型…`)
+    await yieldToMain()
+    if (isStale()) return false
+    const gltf = await createModelLoader().loadAsync(bodyModelHref(body), (event) => {
+      if (isStale() || !event.total) return
+      setModelLoadingUi(`正在載入${preset.label}模型 ${Math.round(event.loaded / event.total * 100)}%`)
     })
+    if (isStale()) return false
     prepareModelMaterials(gltf)
-    activeBody = body
     if (!keepDocument) {
       state = structuredClone(documentsByBody[body] || emptyDocument(body))
       history.replace(state)
@@ -5357,23 +5406,41 @@ async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
       state = { ...state, meridians: normalizeMeridianColors(state.meridians) }
       syncVisibleMeridiansFromDocument({ selectAll: true })
     }
-    applyModel(gltf, preset.fileName)
+    activeBody = body
     syncBodyModelSelect()
+    setModelLoadingUi(`正在顯示${preset.label}模型…`)
+    await applyModel(gltf, preset.fileName, null, { isStale })
+    if (isStale()) return false
     setStatus(`${preset.label}模型已就緒 · 請匯入對應 JSON 穴位資料`)
+    $('#model-status').textContent = `${preset.label} · ${preset.fileName}`
+    clearModelLoadingUi()
     return true
   } catch (error) {
+    if (isStale()) return false
     toast(`${preset.label}模型載入失敗：${error.message}`, 'error')
+    setModelLoadingUi(`${preset.label}模型載入失敗`)
     return false
+  } finally {
+    if (loadingBody === body && seq === bodyLoadSeq) loadingBody = null
   }
 }
 
 async function setActiveBodyModel(bodyId) {
-  const body = BODY_MODELS[bodyId] ? bodyId : 'male'
-  if (body === activeBody) return
-  documentsByBody[activeBody] = structuredClone(state)
+  const body = resolveStudioBodyId(bodyId)
+  if (!shouldLoadBodyModel({
+    requestedBody: body,
+    activeBody,
+    meshCount: modelMeshes.length,
+    inFlightBody: loadingBody,
+  })) {
+    syncBodyModelSelect()
+    return
+  }
+  if (modelMeshes.length) documentsByBody[activeBody] = structuredClone(state)
   selected = null
   detachOrbitLock({ restorePerspective: false })
-  await loadBodyModel(body, { keepDocument: false })
+  const loaded = await loadBodyModel(body, { keepDocument: false })
+  if (!loaded) return
   autoEnsureCompletedMeridians()
   rebuildAnnotations()
   updateUI()
@@ -5388,15 +5455,18 @@ async function loadModel(file) {
   if (!file?.name.toLowerCase().endsWith('.glb')) return toast('目前僅支援二進位 .glb 模型', 'error')
   const url = URL.createObjectURL(file)
   try {
+    setModelLoadingUi(`正在載入 ${file.name}…`)
     const gltf = await createModelLoader().loadAsync(url)
     prepareModelMaterials(gltf)
     const inferred = inferBodyModel({ name: file.name, body: activeBody })
     activeBody = inferred
-    applyModel(gltf, file.name)
+    await applyModel(gltf, file.name)
     syncBodyModelSelect()
+    clearModelLoadingUi()
     toast(`已載入 ${file.name}`)
   } catch (error) {
     toast(`模型載入失敗：${error.message}`, 'error')
+    setModelLoadingUi('模型載入失敗')
   } finally {
     URL.revokeObjectURL(url)
   }
@@ -5850,7 +5920,7 @@ controls.addEventListener('end', () => {
 $('#body-model-filter').addEventListener('change', (event) => {
   setActiveBodyModel(event.target.value)
 })
-if (import.meta.env.DEV) {
+if (isDevMode(import.meta.env)) {
   window.__studio = {
     dump() {
       const summarize = (pts) => {

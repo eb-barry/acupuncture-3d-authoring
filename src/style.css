@@ -256,6 +256,22 @@ body.app-view-mode .catalog-panel {
   background: rgba(12, 18, 17, .86); color: #f4d2a6; font: 600 18px 'Noto Serif TC', serif;
 }
 #drop-hint.visible { display: grid; }
+.model-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(12, 18, 17, .58);
+  color: #f4d2a6;
+  font: 600 16px 'Noto Serif TC', serif;
+  letter-spacing: .06em;
+  text-align: center;
+  padding: 24px;
+}
+.model-loading[hidden] { display: none !important; }
+.model-loading p { margin: 0; max-width: 22em; }
 
 .object-filters { flex: 0 0 auto; display: grid; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
 .object-filters .scene-meridian-field {
