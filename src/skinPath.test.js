@@ -51,6 +51,12 @@ import {
   shouldPosteriorWrap,
   isSagittalMidlineSpan,
   hitStaysOnSagittalSpan,
+  hitStaysOnFrontMidline,
+  hitStaysNearMidlineChord,
+  midlineFrontProbeOrigin,
+  hitMatchesMidlineSampleY,
+  isGvFacePair,
+  isCvAnteriorPair,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -192,6 +198,36 @@ describe('skin path wrapping', () => {
     expect(isHitOnWrapSide(skyLoop, shenting, suliao)).toBe(false)
     expect(isHitOnWrapSide(sternumMid, yutang, danzhong)).toBe(true)
     expect(isHitOnWrapSide(chestJog, yutang, danzhong)).toBe(false)
+    const skyFront = [0.002, 1.565, 0.28]
+    expect(isGvFacePair('GV24', 'GV25')).toBe(true)
+    expect(isGvFacePair('GV28', 'GV25')).toBe(true)
+    expect(isGvFacePair('GV14', 'GV15')).toBe(false)
+    expect(isCvAnteriorPair('CV18', 'CV17')).toBe(true)
+    expect(isCvAnteriorPair('CV15', 'CV14')).toBe(true)
+    expect(isCvAnteriorPair('CV12', 'CV11')).toBe(true)
+    expect(isCvAnteriorPair('CV1', 'CV2')).toBe(false)
+    expect(hitStaysOnFrontMidline(faceMid, shenting, suliao)).toBe(true)
+    expect(hitStaysOnFrontMidline(skyFront, shenting, suliao)).toBe(false)
+    expect(hitStaysOnFrontMidline([0.002, 1.565, -0.12], shenting, suliao)).toBe(false)
+    expect(isHitOnWrapSide(skyFront, shenting, suliao)).toBe(false)
+    expect(hitStaysNearMidlineChord(sternumMid, yutang, danzhong)).toBe(true)
+    expect(hitStaysNearMidlineChord(chestJog, yutang, danzhong)).toBe(false)
+    const jiuwei = [0.004, 1.12, 0.09]
+    const juque = [-0.003, 1.08, 0.09]
+    const zhongwan = [0.002, 1.02, 0.085]
+    const jianli = [-0.002, 0.98, 0.085]
+    expect(hitStaysNearMidlineChord([0.003, 1.10, 0.09], jiuwei, juque)).toBe(true)
+    expect(hitStaysNearMidlineChord([0.08, 1.10, 0.09], jiuwei, juque)).toBe(false)
+    expect(hitStaysNearMidlineChord([0.001, 1.00, 0.085], zhongwan, jianli)).toBe(true)
+    expect(hitStaysNearMidlineChord([0.07, 1.00, 0.085], zhongwan, jianli)).toBe(false)
+    const midProbe = midlineFrontProbeOrigin(shenting, suliao, 0.5, 0.08)
+    expect(midProbe[1]).toBeCloseTo(1.565, 3)
+    expect(midProbe[2]).toBeGreaterThan(Math.max(shenting[2], suliao[2]))
+    expect(hitMatchesMidlineSampleY(faceMid, shenting, suliao, 0.5)).toBe(true)
+    expect(hitMatchesMidlineSampleY(suliao, shenting, suliao, 0.5)).toBe(false)
+    const yutangProbe = midlineFrontProbeOrigin(yutang, danzhong, 0.5, 0.05)
+    expect(Math.abs(yutangProbe[0])).toBeLessThan(0.01)
+    expect(yutangProbe[1]).toBeCloseTo(1.25, 3)
     const femaleShenting = shenting.map((value) => value * 232)
     const femaleSuliao = suliao.map((value) => value * 232)
     const femaleSky = skyLoop.map((value) => value * 232)
