@@ -1,5 +1,9 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
+import { isKiYinguChangqiangPair } from './catalog.js'
+
+export { isKiYinguChangqiangPair }
+
 /** Tiny lift so tubes clear the mesh without looking floaty. */
 export const SKIN_LIFT = 0.0055
 
@@ -152,6 +156,61 @@ export function shouldPosteriorWrap(from = [0, 0, 0], to = [0, 0, 0]) {
   if (Math.abs(meanX) > Math.max(0.08, span * 0.25)) return false
   if (maxZ > Math.max(0.025, span * 0.15) && meanZ > Math.max(0.008, span * 0.05)) return false
   return meanZ < Math.max(0.008, span * 0.05)
+}
+
+/** 陰谷 (KI10) → 長強 (GV1): posterior thigh then into the natal cleft. */
+function kiYinguChangqiangEnds(from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const start = Math.abs(a[0]) >= Math.abs(b[0]) ? a : b
+  const end = start === a ? b : a
+  return { start, end, flipped: start !== a }
+}
+
+/** Outside-skin sample on the medial/posterior thigh, easing into 長強. */
+export function kiYinguChangqiangOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { start, end, flipped } = kiYinguChangqiangEnds(from, to)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const span = Math.max(length3(sub3(end, start)), 1e-6)
+  const medial = smoothstep01((tt - 0.58) / 0.42)
+  const y = start[1] + (end[1] - start[1]) * tt
+  const x = start[0] + (end[0] - start[0]) * medial
+  const zLerp = start[2] + (end[2] - start[2]) * tt
+  const posteriorBulge = Math.sin(Math.PI * tt) * Math.max(0.02, span * 0.10)
+  return [x, y, zLerp - posteriorBulge]
+}
+
+/** Cast from behind the thigh / cleft onto the back skin (−Z outward). */
+export function kiYinguChangqiangGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { start, end, flipped } = kiYinguChangqiangEnds(from, to)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const medial = smoothstep01((tt - 0.58) / 0.42)
+  const side = Math.sign(start[0]) || 1
+  return normalize([side * 0.28 * (1 - medial), 0.10, -1])
+}
+
+export function kiYinguChangqiangCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.max(0.04, span * 0.22)
+}
+
+/** Keep samples on this thigh, posterior, then into the midline cleft. */
+export function isKiYinguChangqiangHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { start, end, flipped } = kiYinguChangqiangEnds(from, to)
+  const p = asPathPoint(hit)
+  const span = Math.max(length3(sub3(end, start)), 1e-6)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const yMin = Math.min(start[1], end[1]) - span * 0.08
+  const yMax = Math.max(start[1], end[1]) + span * 0.08
+  if (p[1] < yMin || p[1] > yMax) return false
+  const posteriorCeiling = Math.max(start[2], end[2]) + Math.max(0.02, span * 0.08)
+  if (p[2] > posteriorCeiling) return false
+  const side = Math.sign(start[0]) || 1
+  if (side * p[0] < -Math.max(0.02, span * 0.04)) return false
+  const medial = smoothstep01((tt - 0.58) / 0.42)
+  const maxAbsX = Math.abs(start[0]) * (1 - medial * 0.85) + Math.abs(end[0]) * medial + span * 0.14
+  if (Math.abs(p[0]) > maxAbsX + span * 0.10) return false
+  return true
 }
 
 /** Push a through-spine chord out onto the back skin (−Z). */
@@ -335,6 +394,7 @@ export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to
     isTeHeadPair(fromCode, toCode)
     || isSiXiaohaiJianzhenPair(fromCode, toCode)
     || isJianjingYuanyePair(fromCode, toCode)
+    || isKiYinguChangqiangPair(fromCode, toCode)
   ) {
     return false
   }

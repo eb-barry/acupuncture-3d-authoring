@@ -91,12 +91,22 @@ export function meridianById(id) {
  * Consecutive catalog points that have no classical surface pathway.
  * The editor still keeps both acupoints; it just does not draw a geodesic
  * between them (足太陽膀胱經 委中 BL40 → 附分 BL41；
- * 足陽明胃經 頭維 ST8 → 人迎 ST9). Applies to male and female.
+ * 足陽明胃經 頭維 ST8 → 人迎 ST9；
+ * 足少陰腎經 陰谷 KI10 → 橫骨 KI11，改由陰谷連到督脈長強 GV1). Applies to male and female.
  */
 export const OMITTED_SURFACE_SPANS = Object.freeze([
   Object.freeze(['BL40', 'BL41']),
   Object.freeze(['ST8', 'ST9']),
+  // 陰谷→橫骨 is not a surface pathway; 陰谷 connects to 長強 (GV1) instead.
+  Object.freeze(['KI10', 'KI11']),
 ])
+
+/** 足少陰腎經 exception: 陰谷 (KI10) → 長強 (GV1), both bodies. */
+export function isKiYinguChangqiangPair(fromCode = '', toCode = '') {
+  const a = String(fromCode || '')
+  const b = String(toCode || '')
+  return (a === 'KI10' && b === 'GV1') || (a === 'GV1' && b === 'KI10')
+}
 
 export function isOmittedSurfaceSpan(fromCode, toCode) {
   const a = String(fromCode || '')

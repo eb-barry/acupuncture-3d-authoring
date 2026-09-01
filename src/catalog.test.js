@@ -3,6 +3,7 @@ import {
   MERIDIANS,
   POINTS,
   POINT_BY_CODE,
+  isKiYinguChangqiangPair,
   isOmittedSurfaceSpan,
   isRenDuCodePair,
   meridianLineColor,
@@ -62,6 +63,23 @@ describe('authorized acupuncture catalog', () => {
     expect(isOmittedSurfaceSpan('ST9', 'ST10')).toBe(false)
     expect(isOmittedSurfaceSpan('', 'ST9')).toBe(false)
     expect(isOmittedSurfaceSpan('ST8', 'BL41')).toBe(false)
+  })
+
+  it('omits 陰谷–橫骨 and treats 陰谷–長強 as the kidney exception', () => {
+    const kidney = pointsForMeridian('KI')
+    const ki10 = kidney.findIndex((point) => point.code === 'KI10')
+    expect(POINT_BY_CODE.get('KI10').name).toBe('陰谷')
+    expect(POINT_BY_CODE.get('KI11').name).toBe('橫骨')
+    expect(POINT_BY_CODE.get('GV1').name).toBe('長強')
+    expect(kidney[ki10 + 1].code).toBe('KI11')
+    expect(isOmittedSurfaceSpan('KI10', 'KI11')).toBe(true)
+    expect(isOmittedSurfaceSpan('KI11', 'KI10')).toBe(true)
+    expect(isOmittedSurfaceSpan('KI9', 'KI10')).toBe(false)
+    expect(isOmittedSurfaceSpan('KI11', 'KI12')).toBe(false)
+    expect(isKiYinguChangqiangPair('KI10', 'GV1')).toBe(true)
+    expect(isKiYinguChangqiangPair('GV1', 'KI10')).toBe(true)
+    expect(isKiYinguChangqiangPair('KI10', 'KI11')).toBe(false)
+    expect(isKiYinguChangqiangPair('KI11', 'GV1')).toBe(false)
   })
 
   it('keeps 任督 consecutive pairs drawable even when they are not BL40–BL41', () => {

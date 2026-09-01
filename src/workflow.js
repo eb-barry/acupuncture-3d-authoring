@@ -700,6 +700,21 @@ export function drawableSurfacePairRuns(pairs = [], isOmittedSpan = () => false)
   return runs
 }
 
+/** Glue extra exception spans (陰谷→長強) onto the run that ends at `fromPointId`. */
+export function appendExtraPairsToRuns(pairRuns = [], extraPairs = []) {
+  const runs = pairRuns.map((run) => [...run])
+  extraPairs.forEach((pair) => {
+    const fromId = pair.fromPointId
+    const attached = runs.find((run) => {
+      const last = run[run.length - 1]
+      return last && last.toPointId === fromId
+    })
+    if (attached) attached.push(pair)
+    else runs.push([pair])
+  })
+  return runs
+}
+
 export function isSurfaceFacingCamera(position, normal, cameraPosition) {
   const towardCamera = cameraPosition.map((value, index) => value - position[index])
   const length = Math.hypot(...towardCamera) || 1

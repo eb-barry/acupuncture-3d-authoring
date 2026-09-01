@@ -109,6 +109,75 @@ describe('陰谷–橫骨 on the built-in body meshes', () => {
   })
 })
 
+describe('陰谷–長強 on the built-in body meshes', () => {
+  it('keeps 陰谷→長強 on the left posterior thigh into the natal cleft (male)', async () => {
+    const { height, graph } = await loadFramedChunks('models/male_character.glb')
+    const ki10 = nearestVertex(
+      graph.positions,
+      (point) => point[0] < -0.03 && point[1] > height * 0.24 && point[1] < height * 0.34 && point[2] < 0,
+      [-0.08, height * 0.29, -0.08],
+    )
+    const gv1 = nearestVertex(
+      graph.positions,
+      (point) => Math.abs(point[0]) < 0.04 && point[1] > height * 0.46 && point[1] < height * 0.56 && point[2] < -0.02,
+      [0, height * 0.50, -0.09],
+    )
+    expect(ki10).toBeGreaterThanOrEqual(0)
+    expect(gv1).toBeGreaterThanOrEqual(0)
+    const start = graph.remap[ki10]
+    const goal = graph.remap[gv1]
+    const path = shortestSurfacePath({
+      adjacency: graph.adjacency,
+      positions: graph.positions,
+      startSeeds: [{ id: start, cost: 0 }],
+      goalIds: [goal],
+      goalPoint: graph.positions[goal],
+      maxExplored: 300000,
+    })
+    expect(path).toBeTruthy()
+    expect(path.points[0][0]).toBeLessThan(0)
+    expect(Math.abs(path.points[path.points.length - 1][0])).toBeLessThan(0.05)
+    expect(path.points.every((point) => point[2] < 0.05)).toBe(true)
+    const mid = path.points[Math.floor(path.points.length / 2)]
+    expect(mid[1]).toBeGreaterThan(path.points[0][1])
+    expect(mid[2]).toBeLessThan(0.02)
+    expect(maxPolylineStep(path.points)).toBeLessThan(0.04)
+  })
+
+  it('keeps 陰谷→長強 on the left posterior thigh into the natal cleft (female)', async () => {
+    const { height, graph } = await loadFramedChunks('models/female-character.glb')
+    const ki10 = nearestVertex(
+      graph.positions,
+      (point) => point[0] < -height * 0.015 && point[1] > height * 0.24 && point[1] < height * 0.34 && point[2] < 0,
+      [-height * 0.045, height * 0.29, -height * 0.045],
+    )
+    const gv1 = nearestVertex(
+      graph.positions,
+      (point) => Math.abs(point[0]) < height * 0.025 && point[1] > height * 0.46 && point[1] < height * 0.56 && point[2] < -height * 0.01,
+      [0, height * 0.50, -height * 0.05],
+    )
+    expect(ki10).toBeGreaterThanOrEqual(0)
+    expect(gv1).toBeGreaterThanOrEqual(0)
+    const start = graph.remap[ki10]
+    const goal = graph.remap[gv1]
+    const path = shortestSurfacePath({
+      adjacency: graph.adjacency,
+      positions: graph.positions,
+      startSeeds: [{ id: start, cost: 0 }],
+      goalIds: [goal],
+      goalPoint: graph.positions[goal],
+      maxExplored: 400000,
+    })
+    expect(path).toBeTruthy()
+    expect(path.points[0][0]).toBeLessThan(0)
+    expect(Math.abs(path.points[path.points.length - 1][0])).toBeLessThan(height * 0.03)
+    expect(path.points.every((point) => point[2] < height * 0.03)).toBe(true)
+    const mid = path.points[Math.floor(path.points.length / 2)]
+    expect(mid[1]).toBeGreaterThan(path.points[0][1])
+    expect(mid[2]).toBeLessThan(height * 0.015)
+  })
+})
+
 describe('geodesic-first problem spans on the male mesh', () => {
   it('keeps 雲門→天府, 食竇→腹哀, 隱白→大都 and 角孫→耳門 spike-free', async () => {
     const { graph } = await loadFramedChunks('models/male_character.glb')

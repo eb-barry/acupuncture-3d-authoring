@@ -43,6 +43,10 @@ import {
   isGbJianjingYuanyeHandleOk,
   isGbJianjingYuanyeHit,
   pairPrefersWrap,
+  kiYinguChangqiangOuterPoint,
+  kiYinguChangqiangGuide,
+  isKiYinguChangqiangHit,
+  isKiYinguChangqiangPair,
   pathFollowsFacingChord,
   pickPairAlongPolyline,
   isDuBackWrapPair,
@@ -338,6 +342,24 @@ describe('skin path wrapping', () => {
     expect(pairPrefersWrap('SP17', 'SP16', shidou, fuai)).toBe(false)
     expect(pairPrefersWrap('TE20', 'TE21', [0.078, 1.694, -0.041], [0.075, 1.666, -0.012])).toBe(false)
     expect(isFacingLimbSpan(jianjing, yuanye, 0.4)).toBe(false)
+
+    const gv1 = [0.0, 0.88, -0.10]
+    expect(isKiYinguChangqiangPair('KI10', 'GV1')).toBe(true)
+    expect(pairPrefersWrap('KI10', 'GV1', ki10, gv1)).toBe(false)
+    const thighMid = kiYinguChangqiangOuterPoint(ki10, gv1, 0.35)
+    expect(thighMid[0]).toBeLessThan(-0.04)
+    expect(thighMid[2]).toBeLessThan(Math.max(ki10[2], gv1[2]))
+    expect(isKiYinguChangqiangHit(thighMid, ki10, gv1, 0.35)).toBe(true)
+    const cleft = kiYinguChangqiangOuterPoint(ki10, gv1, 0.92)
+    expect(Math.abs(cleft[0])).toBeLessThan(0.04)
+    expect(isKiYinguChangqiangHit(cleft, ki10, gv1, 0.92)).toBe(true)
+    expect(isKiYinguChangqiangHit([0.12, 0.7, 0.12], ki10, gv1, 0.5)).toBe(false)
+    const femaleKi10 = ki10.map((value) => value * 232)
+    const femaleGv1 = gv1.map((value) => value * 232)
+    const femaleThigh = kiYinguChangqiangOuterPoint(femaleKi10, femaleGv1, 0.35)
+    expect(femaleThigh[0]).toBeLessThan(femaleKi10[0] * 0.4)
+    expect(isKiYinguChangqiangHit(femaleThigh, femaleKi10, femaleGv1, 0.35)).toBe(true)
+    expect(kiYinguChangqiangGuide(ki10, gv1, 0.3)[2]).toBeLessThan(0)
 
     const midChord = [
       (jianjing[0] + yuanye[0]) / 2,
