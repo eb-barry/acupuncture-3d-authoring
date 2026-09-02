@@ -2930,11 +2930,9 @@ function snapLiFutuHeliaoToSkin(a, b) {
   const neck = Math.abs(a.position[0]) >= Math.abs(b.position[0]) ? a.position : b.position
   const face = neck === a.position ? b.position : a.position
   const count = Math.min(72, Math.max(28, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 14))
-  const extraReach = Math.max(statureWorld(0.1), span * 0.7)
+  const extraReach = Math.max(statureWorld(0.12), (maxZ - minZ) + span * 0.55, span * 0.85)
   const lift = statureWorld(SKIN_LIFT)
   const side = Math.sign(neck[0]) || 1
-  const maxZ = Math.max(a.position[2], b.position[2])
-  const minZ = Math.min(a.position[2], b.position[2])
   const points = []
   const previousRef = { current: null }
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
@@ -2951,7 +2949,7 @@ function snapLiFutuHeliaoToSkin(a, b) {
     return true
   }
   const frontHitsAt = (x, y) => raySkinHits(
-    new THREE.Vector3(x, y, maxZ + extraReach * 0.65),
+    new THREE.Vector3(x, y, maxZ + statureWorld(0.08)),
     new THREE.Vector3(0, 0, -1),
     extraReach,
     new THREE.Vector3(0, 0, 1),
@@ -2985,7 +2983,9 @@ function snapLiFutuHeliaoToSkin(a, b) {
     }
     let hit = silhouette
     if (silhouette) {
-      const cheek = Math.max(0, (t - 0.18) / 0.82)
+      const ySpan = face[1] - neck[1]
+      const yT = Math.abs(ySpan) > 1e-6 ? (y - neck[1]) / ySpan : t
+      const cheek = Math.max(0, (yT - 0.18) / 0.82)
       const ease = cheek * cheek * (3 - 2 * cheek)
       const targetX = silhouette.position[0] + (xMedial - silhouette.position[0]) * ease
       hit = pickAtXY(targetX, y, t, outer) || silhouette
