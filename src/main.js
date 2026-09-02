@@ -94,7 +94,6 @@ import {
   kiYinguChangqiangGuide,
   kiYinguChangqiangOuterPoint,
   isLiFutuHeliaoHit,
-  liFutuHeliaoCastStandoff,
   liFutuHeliaoGuide,
   liFutuHeliaoOuterPoint,
   slerpUnitVectors,
@@ -2964,7 +2963,7 @@ function snapLiFutuHeliaoToSkin(a, b) {
       && hit.position[2] > minZ - span * 0.05
     ))
     if (!hits.length) return null
-    hits.sort((left, right) => dist3(left.position, outer) - dist3(right.position, outer))
+    hits.sort((left, right) => right.position[2] - left.position[2])
     return hits[0]
   }
   accept({ position: a.position, normal: a.normal })
