@@ -352,6 +352,38 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   return length3(sub3(p, outer)) <= Math.max(0.04, span * 0.62)
 }
 
+/**
+ * Locator drag box for 扶突–禾髎: same-side neck / cheek / in front of the
+ * jaw. Reject the opposite face, occiput, and a through-mandible dive.
+ */
+export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const { neck, face } = liFutuHeliaoEnds(from, to)
+  const p = asPathPoint(point)
+  const span = Math.max(length3(sub3(face, neck)), 1e-6)
+  const side = Math.sign(neck[0]) || 1
+  if (side * p[0] < -span * 0.08) return false
+  const yMin = Math.min(neck[1], face[1]) - span * 0.22
+  const yMax = Math.max(neck[1], face[1]) + span * 0.22
+  if (p[1] < yMin || p[1] > yMax) return false
+  if (p[2] < Math.min(neck[2], face[2]) - span * 0.22) return false
+  if (p[2] > Math.max(neck[2], face[2]) + span * 0.9) return false
+  const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
+  if (Math.abs(p[0]) > maxAbsX + span * 0.45) return false
+  const yT = Math.abs(face[1] - neck[1]) > 1e-6
+    ? clamp01((p[1] - neck[1]) / (face[1] - neck[1]))
+    : 0.5
+  const chordZ = neck[2] + (face[2] - neck[2]) * yT
+  if (
+    yT > 0.18
+    && yT < 0.82
+    && p[2] < chordZ + span * 0.02
+    && Math.abs(p[0]) < Math.abs(neck[0]) * 0.72
+  ) {
+    return false
+  }
+  return true
+}
+
 /** Cranial-cavity estimate so a radial from here points out through the scalp. */
 function gbScalpInterior(from = [0, 0, 0], to = [0, 0, 0]) {
   const a = asPathPoint(from)
@@ -1199,6 +1231,7 @@ export function pairKeepsOffPathLocators(fromCode = '', toCode = '') {
   return isSiXiaohaiJianzhenPair(fromCode, toCode)
     || isTeHeadPair(fromCode, toCode)
     || isJianjingYuanyePair(fromCode, toCode)
+    || isLiFutuHeliaoPair(fromCode, toCode)
 }
 
 /** Stay on the back of the arm/shoulder — not into the axilla or chest. */
