@@ -108,6 +108,12 @@ export function isKiYinguChangqiangPair(fromCode = '', toCode = '') {
   return (a === 'KI10' && b === 'GV1') || (a === 'GV1' && b === 'KI10')
 }
 
+/** 手陽明大腸經 扶突 (LI18) → 禾髎 (LI19): neck then cheek / upper lip. */
+export function isLiFutuHeliaoPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('LI18') && codes.has('LI19')
+}
+
 /** 足少陽膽經 承靈 (GB18) → 腦空 (GB19), parietal–occipital scalp. */
 export function isGbChenglingNaokongPair(fromCode = '', toCode = '') {
   const codes = new Set([String(fromCode || ''), String(toCode || '')])

@@ -28,7 +28,6 @@ import {
   siArmShoulderWrapGuide,
   maxPolylineEdge,
   teEarArcGuide,
-  teEarCircumferenceArc,
   TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
   isJianjingYuanyePair,
@@ -49,6 +48,12 @@ import {
   kiYinguChangqiangGuide,
   isKiYinguChangqiangHit,
   isKiYinguChangqiangPair,
+  LI_FUTU_HELIAO_JAW_T,
+  liFutuHeliaoCheekT,
+  liFutuHeliaoOuterPoint,
+  liFutuHeliaoGuide,
+  isLiFutuHeliaoHit,
+  isLiFutuHeliaoPair,
   isGbChenglingNaokongPair,
   gbChenglingNaokongOuterPoint,
   gbChenglingNaokongGuide,
@@ -384,6 +389,44 @@ describe('skin path wrapping', () => {
     )
     expect(Math.abs(femaleHalf[0])).toBeLessThan(Math.abs(femaleKi10[0]) * 0.7)
     expect(kiYinguChangqiangGuide(ki10, gv1, 0.3)[2]).toBeLessThan(0)
+
+    const li18 = [0.062, 1.498, 0.048]
+    const li19 = [0.013, 1.638, 0.108]
+    const chordMid = [
+      (li18[0] + li19[0]) / 2,
+      (li18[1] + li19[1]) / 2,
+      (li18[2] + li19[2]) / 2,
+    ]
+    expect(isLiFutuHeliaoPair('LI18', 'LI19')).toBe(true)
+    expect(pairPrefersWrap('LI18', 'LI19', li18, li19)).toBe(false)
+    expect(liFutuHeliaoCheekT(LI_FUTU_HELIAO_JAW_T)).toBe(0)
+    expect(liFutuHeliaoCheekT(1)).toBe(1)
+    const neckHold = liFutuHeliaoOuterPoint(li18, li19, 0.10)
+    expect(Math.abs(neckHold[0])).toBeGreaterThan(Math.abs(li18[0]) * 0.8)
+    expect(neckHold[2]).toBeGreaterThan(li18[2] - 0.01)
+    const jawFront = liFutuHeliaoOuterPoint(li18, li19, 0.40)
+    expect(Math.abs(jawFront[0])).toBeGreaterThan(Math.abs(li18[0]) * 0.7)
+    expect(jawFront[2]).toBeGreaterThan(chordMid[2] + 0.006)
+    expect(isLiFutuHeliaoHit(jawFront, li18, li19, 0.40)).toBe(true)
+    const cheek = liFutuHeliaoOuterPoint(li18, li19, 0.68)
+    expect(Math.abs(cheek[0])).toBeLessThan(Math.abs(li18[0]) - 0.01)
+    expect(Math.abs(cheek[0])).toBeGreaterThan(Math.abs(li19[0]))
+    expect(cheek[2]).toBeGreaterThan(chordMid[2] + 0.02)
+    expect(isLiFutuHeliaoHit(cheek, li18, li19, 0.68)).toBe(true)
+    expect(isLiFutuHeliaoHit(chordMid, li18, li19, 0.5)).toBe(false)
+    expect(isLiFutuHeliaoHit([-0.06, 1.56, 0.08], li18, li19, 0.5)).toBe(false)
+    expect(liFutuHeliaoGuide(li18, li19, 0.5)[2]).toBeGreaterThan(0.5)
+    const femaleLi18 = li18.map((value) => value * 232)
+    const femaleLi19 = li19.map((value) => value * 232)
+    const femaleCheek = liFutuHeliaoOuterPoint(femaleLi18, femaleLi19, 0.68)
+    expect(femaleCheek[2]).toBeGreaterThan((femaleLi18[2] + femaleLi19[2]) / 2)
+    expect(isLiFutuHeliaoHit(femaleCheek, femaleLi18, femaleLi19, 0.68)).toBe(true)
+    const femaleJaw = [
+      (femaleLi18[0] + femaleLi19[0]) / 2,
+      (femaleLi18[1] + femaleLi19[1]) / 2,
+      (femaleLi18[2] + femaleLi19[2]) / 2,
+    ]
+    expect(isLiFutuHeliaoHit(femaleJaw, femaleLi18, femaleLi19, 0.5)).toBe(false)
 
     const gb18 = [0.055, 1.70, -0.055]
     const gb19 = [0.062, 1.58, -0.102]

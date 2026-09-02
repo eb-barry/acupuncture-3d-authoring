@@ -1,8 +1,8 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
-import { isGbChenglingNaokongPair, isKiYinguChangqiangPair } from './catalog.js'
+import { isGbChenglingNaokongPair, isKiYinguChangqiangPair, isLiFutuHeliaoPair } from './catalog.js'
 
-export { isGbChenglingNaokongPair, isKiYinguChangqiangPair }
+export { isGbChenglingNaokongPair, isKiYinguChangqiangPair, isLiFutuHeliaoPair }
 
 /** Tiny lift so tubes clear the mesh without looking floaty. */
 export const SKIN_LIFT = 0.0055
@@ -229,6 +229,127 @@ export function isKiYinguChangqiangHit(hit = [0, 0, 0], from = [0, 0, 0], to = [
   const slack = span * (medial > 0.02 ? 0.07 : 0.12)
   if (Math.abs(p[0]) > corridorX + slack) return false
   return true
+}
+
+/** 扶突 is the lateral neck end; 禾髎 is the near-midline lip end. */
+function liFutuHeliaoEnds(from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const neck = Math.abs(a[0]) >= Math.abs(b[0]) ? a : b
+  const face = neck === a ? b : a
+  return { neck, face, flipped: neck !== a }
+}
+
+/**
+ * Hold neck laterality until here, then sweep across the cheek to 禾髎.
+ * Earlier medial lerp cuts through the mandible / under-chin hollow.
+ */
+export const LI_FUTU_HELIAO_JAW_T = 0.36
+
+/** 0 on the neck climb; 0→1 across the cheek to 禾髎. */
+export function liFutuHeliaoCheekT(t = 0) {
+  const tt = clamp01(t)
+  if (tt <= LI_FUTU_HELIAO_JAW_T) return 0
+  return (tt - LI_FUTU_HELIAO_JAW_T) / (1 - LI_FUTU_HELIAO_JAW_T)
+}
+
+/** Outside-skin sample: anterolateral neck, then the cheek, then 禾髎. */
+export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const points = liFutuHeliaoGuidePoints(from, to, 25)
+  const tt = clamp01(t)
+  const u = tt * (points.length - 1)
+  const index = Math.min(Math.floor(u), points.length - 2)
+  return lerp3(points[index], points[index + 1], u - index)
+}
+
+/**
+ * Neck → hold the side → sit in front of the jaw hollow → cheek → lip.
+ * The female chin starts much higher than 扶突; a 3D chord dives under it.
+ */
+export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count = 28) {
+  const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
+  const span = Math.max(length3(sub3(face, neck)), 1e-6)
+  const side = Math.sign(neck[0]) || 1
+  const yAt = (t) => neck[1] + (face[1] - neck[1]) * t
+  const frontZ = Math.max(
+    neck[2] + (face[2] - neck[2]) * 0.70,
+    (neck[2] + face[2]) * 0.5 + span * 0.08,
+  )
+  const neckClimb = [
+    neck[0] + side * span * 0.015,
+    yAt(0.16),
+    neck[2] + (frontZ - neck[2]) * 0.70,
+  ]
+  const jawFront = [
+    neck[0] * 0.90 + face[0] * 0.10,
+    yAt(0.42),
+    frontZ,
+  ]
+  const cheek = [
+    neck[0] * 0.40 + face[0] * 0.60,
+    yAt(0.74),
+    Math.max(frontZ, face[2] + span * 0.04),
+  ]
+  const anchors = flipped
+    ? [face, cheek, jawFront, neckClimb, neck]
+    : [neck, neckClimb, jawFront, cheek, face]
+  const samples = Math.max(8, Math.floor(Number(count) || 28))
+  const points = []
+  for (let index = 0; index < samples; index += 1) {
+    const t = samples === 1 ? 0 : index / (samples - 1)
+    const u = t * (anchors.length - 1)
+    const slot = Math.min(Math.floor(u), anchors.length - 2)
+    points.push(lerp3(anchors[slot], anchors[slot + 1], u - slot))
+  }
+  return points
+}
+
+/** Cast from in front of the cheek / neck onto the face (+Z, slightly lateral). */
+export function liFutuHeliaoGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { neck, flipped } = liFutuHeliaoEnds(from, to)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const cheek = liFutuHeliaoCheekT(tt)
+  const side = Math.sign(neck[0]) || 1
+  return normalize([
+    side * (0.72 - 0.38 * cheek),
+    0.10,
+    0.58 + 0.38 * cheek,
+  ])
+}
+
+export function liFutuHeliaoCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.max(0.02, span * 0.12)
+}
+
+/** Keep samples on this neck–cheek; reject jaw interior and the far face. */
+export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
+  const p = asPathPoint(hit)
+  const span = Math.max(length3(sub3(face, neck)), 1e-6)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const yMin = Math.min(neck[1], face[1]) - span * 0.14
+  const yMax = Math.max(neck[1], face[1]) + span * 0.14
+  if (p[1] < yMin || p[1] > yMax) return false
+  const side = Math.sign(neck[0]) || 1
+  if (side * p[0] < -span * 0.06) return false
+  const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
+  if (Math.abs(p[0]) > maxAbsX + span * 0.18) return false
+  if (p[2] < Math.min(neck[2], face[2]) - span * 0.08) return false
+  if (p[2] > Math.max(neck[2], face[2]) + span * 0.5) return false
+  const chord = [
+    neck[0] + (face[0] - neck[0]) * tt,
+    neck[1] + (face[1] - neck[1]) * tt,
+    neck[2] + (face[2] - neck[2]) * tt,
+  ]
+  const distChord = length3(sub3(p, chord))
+  if (tt > 0.12 && tt < 0.88 && distChord < span * 0.08 && p[2] < chord[2] + span * 0.035) {
+    return false
+  }
+  if (tt < 0.42 && Math.abs(p[0]) < Math.abs(neck[0]) * 0.68) return false
+  const outer = liFutuHeliaoOuterPoint(from, to, t)
+  if (tt > 0.16 && tt < 0.84 && p[2] < outer[2] - span * 0.16) return false
+  return length3(sub3(p, outer)) <= Math.max(0.04, span * 0.62)
 }
 
 /** Cranial-cavity estimate so a radial from here points out through the scalp. */
@@ -476,6 +597,7 @@ export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to
     || isSiXiaohaiJianzhenPair(fromCode, toCode)
     || isJianjingYuanyePair(fromCode, toCode)
     || isKiYinguChangqiangPair(fromCode, toCode)
+    || isLiFutuHeliaoPair(fromCode, toCode)
     || isGbChenglingNaokongPair(fromCode, toCode)
   ) {
     return false

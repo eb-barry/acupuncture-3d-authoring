@@ -4,6 +4,7 @@ import {
   POINTS,
   POINT_BY_CODE,
   isKiYinguChangqiangPair,
+  isLiFutuHeliaoPair,
   isGbChenglingNaokongPair,
   isOmittedSurfaceSpan,
   isRenDuCodePair,
@@ -81,6 +82,15 @@ describe('authorized acupuncture catalog', () => {
     expect(isKiYinguChangqiangPair('GV1', 'KI10')).toBe(true)
     expect(isKiYinguChangqiangPair('KI10', 'KI11')).toBe(false)
     expect(isKiYinguChangqiangPair('KI11', 'GV1')).toBe(false)
+  })
+
+  it('treats 扶突–禾髎 as the large-intestine neck-to-lip pair', () => {
+    expect(POINT_BY_CODE.get('LI18').name).toBe('扶突')
+    expect(POINT_BY_CODE.get('LI19').name).toBe('禾髎')
+    expect(isLiFutuHeliaoPair('LI18', 'LI19')).toBe(true)
+    expect(isLiFutuHeliaoPair('LI19', 'LI18')).toBe(true)
+    expect(isLiFutuHeliaoPair('LI17', 'LI18')).toBe(false)
+    expect(isLiFutuHeliaoPair('LI19', 'LI20')).toBe(false)
   })
 
   it('treats 承靈–腦空 as the gallbladder occiput scalp pair', () => {
