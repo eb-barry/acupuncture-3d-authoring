@@ -2973,17 +2973,22 @@ function snapLiFutuHeliaoToSkin(a, b) {
     const y = outer[1]
     const xLateral = neck[0]
     const xMedial = face[0]
-    const xs = []
-    const steps = 10
+    const steps = 12
+    let silhouette = null
     for (let step = 0; step <= steps; step += 1) {
-      const u = step / steps
-      xs.push(outer[0] + (xMedial - outer[0]) * u * 0.85)
+      const ox = xLateral + (xMedial - xLateral) * (step / steps)
+      const candidate = pickAtXY(ox, y, t, outer)
+      if (candidate) {
+        silhouette = candidate
+        break
+      }
     }
-    for (const frac of [0.15, 0.3, 0.45]) xs.push(outer[0] + (xLateral - outer[0]) * frac)
-    let hit = null
-    for (const ox of xs) {
-      hit = pickAtXY(ox, y, t, outer)
-      if (hit) break
+    let hit = silhouette
+    if (silhouette) {
+      const cheek = Math.max(0, (t - 0.18) / 0.82)
+      const ease = cheek * cheek * (3 - 2 * cheek)
+      const targetX = silhouette.position[0] + (xMedial - silhouette.position[0]) * ease
+      hit = pickAtXY(targetX, y, t, outer) || silhouette
     }
     if (!hit) {
       const nearest = closestSkinHit(outer, {
@@ -2991,7 +2996,11 @@ function snapLiFutuHeliaoToSkin(a, b) {
         sideX: neck[0],
         guideNormal: liFutuHeliaoGuide(a.position, b.position, t),
       })
-      if (nearest && isLiFutuHeliaoHit(nearest.position, a.position, b.position, t)) {
+      if (
+        nearest
+        && isLiFutuHeliaoHit(nearest.position, a.position, b.position, t)
+        && nearest.position[2] >= minZ - span * 0.02
+      ) {
         hit = nearest
       }
     }
