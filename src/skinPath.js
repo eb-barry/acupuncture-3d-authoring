@@ -255,15 +255,37 @@ export function liFutuHeliaoCheekT(t = 0) {
 
 /** Outside-skin sample: anterolateral neck, then the cheek, then 禾髎. */
 export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const points = liFutuHeliaoGuidePoints(from, to, 25)
+  const tt = clamp01(t)
+  const u = tt * (points.length - 1)
+  const index = Math.min(Math.floor(u), points.length - 2)
+  return lerp3(points[index], points[index + 1], u - index)
+}
+
+/** Neck → jaw → cheek → lip anchors sitting just outside the face. */
+export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count = 28) {
   const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
-  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
   const span = Math.max(length3(sub3(face, neck)), 1e-6)
-  const cheek = smoothstep01(liFutuHeliaoCheekT(tt))
-  const x = neck[0] + (face[0] - neck[0]) * cheek
-  const y = neck[1] + (face[1] - neck[1]) * tt
-  const zLerp = neck[2] + (face[2] - neck[2]) * tt
-  const anterior = Math.sin(Math.PI * tt) * span * 0.10
-  return [x, y, zLerp + anterior]
+  const jaw = [
+    neck[0] * 0.86 + face[0] * 0.14,
+    neck[1] + (face[1] - neck[1]) * 0.40,
+    neck[2] + (face[2] - neck[2]) * 0.28 + span * 0.07,
+  ]
+  const cheek = [
+    neck[0] * 0.38 + face[0] * 0.62,
+    neck[1] + (face[1] - neck[1]) * 0.74,
+    face[2] + span * 0.09,
+  ]
+  const anchors = flipped ? [face, cheek, jaw, neck] : [neck, jaw, cheek, face]
+  const samples = Math.max(8, Math.floor(Number(count) || 28))
+  const points = []
+  for (let index = 0; index < samples; index += 1) {
+    const t = samples === 1 ? 0 : index / (samples - 1)
+    const u = t * (anchors.length - 1)
+    const slot = Math.min(Math.floor(u), anchors.length - 2)
+    points.push(lerp3(anchors[slot], anchors[slot + 1], u - slot))
+  }
+  return points
 }
 
 /** Cast from in front of the cheek / neck onto the face (+Z, slightly lateral). */

@@ -94,8 +94,9 @@ import {
   kiYinguChangqiangGuide,
   kiYinguChangqiangOuterPoint,
   isLiFutuHeliaoHit,
-  liFutuHeliaoGuide,
   liFutuHeliaoOuterPoint,
+  liFutuHeliaoGuidePoints,
+  liFutuHeliaoGuide,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -2971,31 +2972,12 @@ function snapLiFutuHeliaoToSkin(a, b) {
     return hits[0]
   }
   accept({ position: a.position, normal: a.normal })
-  for (let index = 1; index < count - 1; index += 1) {
-    const t = index / (count - 1)
-    const outer = liFutuHeliaoOuterPoint(a.position, b.position, t)
+  const guides = liFutuHeliaoGuidePoints(a.position, b.position, count)
+  for (let index = 1; index < guides.length - 1; index += 1) {
+    const t = index / (guides.length - 1)
+    const outer = guides[index]
     const y = outer[1]
-    const xLateral = neck[0]
-    const xMedial = face[0]
-    const steps = 12
-    let silhouette = null
-    for (let step = 0; step <= steps; step += 1) {
-      const ox = xLateral + (xMedial - xLateral) * (step / steps)
-      const candidate = pickAtXY(ox, y, t, outer)
-      if (candidate) {
-        silhouette = candidate
-        break
-      }
-    }
-    let hit = silhouette
-    if (silhouette) {
-      const ySpan = face[1] - neck[1]
-      const yT = Math.abs(ySpan) > 1e-6 ? (y - neck[1]) / ySpan : t
-      const cheek = Math.max(0, (yT - 0.18) / 0.82)
-      const ease = cheek * cheek * (3 - 2 * cheek)
-      const targetX = silhouette.position[0] + (xMedial - silhouette.position[0]) * ease
-      hit = pickAtXY(targetX, y, t, outer) || silhouette
-    }
+    let hit = pickAtXY(outer[0], y, t, outer)
     if (!hit) {
       const nearest = closestSkinHit(outer, {
         maxDistance: extraReach,
@@ -3011,8 +2993,9 @@ function snapLiFutuHeliaoToSkin(a, b) {
       }
     }
     if (!hit) {
-      const fallbackHits = frontHitsAt(outer[0] + (xMedial - outer[0]) * 0.4, y)
+      const fallbackHits = frontHitsAt(outer[0], y)
         .filter((candidate) => yOk(candidate, t) && candidate.position[0] * side > 0)
+      fallbackHits.sort((left, right) => right.position[2] - left.position[2])
       if (fallbackHits.length) hit = fallbackHits[0]
     }
     if (hit) accept(hit)
