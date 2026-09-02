@@ -114,6 +114,12 @@ export function isLiFutuHeliaoPair(fromCode = '', toCode = '') {
   return codes.has('LI18') && codes.has('LI19')
 }
 
+/** 足少陽膽經 承靈 (GB18) → 腦空 (GB19), parietal–occipital scalp. */
+export function isGbChenglingNaokongPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('GB18') && codes.has('GB19')
+}
+
 export function isOmittedSurfaceSpan(fromCode, toCode) {
   const a = String(fromCode || '')
   const b = String(toCode || '')

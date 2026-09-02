@@ -28,7 +28,6 @@ import {
   siArmShoulderWrapGuide,
   maxPolylineEdge,
   teEarArcGuide,
-  teEarCircumferenceArc,
   TE_EAR_GEODESIC_STABLE,
   isFacingLimbSpan,
   isJianjingYuanyePair,
@@ -55,6 +54,10 @@ import {
   liFutuHeliaoGuide,
   isLiFutuHeliaoHit,
   isLiFutuHeliaoPair,
+  isGbChenglingNaokongPair,
+  gbChenglingNaokongOuterPoint,
+  gbChenglingNaokongGuide,
+  isGbChenglingNaokongHit,
   pathFollowsFacingChord,
   pickPairAlongPolyline,
   isDuBackWrapPair,
@@ -424,6 +427,25 @@ describe('skin path wrapping', () => {
       (femaleLi18[2] + femaleLi19[2]) / 2,
     ]
     expect(isLiFutuHeliaoHit(femaleJaw, femaleLi18, femaleLi19, 0.5)).toBe(false)
+
+    const gb18 = [0.055, 1.70, -0.055]
+    const gb19 = [0.062, 1.58, -0.102]
+    expect(isGbChenglingNaokongPair('GB18', 'GB19')).toBe(true)
+    expect(pairPrefersWrap('GB18', 'GB19', gb18, gb19)).toBe(false)
+    const scalpMid = gbChenglingNaokongOuterPoint(gb18, gb19, 0.5)
+    expect(scalpMid[1]).toBeGreaterThan(gb19[1])
+    expect(scalpMid[1]).toBeLessThan(gb18[1])
+    expect(Math.abs(gbChenglingNaokongGuide(gb18, gb19, 0.5)[0])).toBeGreaterThan(0.35)
+    expect(isGbChenglingNaokongHit(scalpMid, gb18, gb19, 0.5)).toBe(true)
+    expect(isGbChenglingNaokongHit([0.06, 1.64, -0.22], gb18, gb19, 0.5)).toBe(false)
+    expect(isGbChenglingNaokongHit([-0.08, 1.64, -0.08], gb18, gb19, 0.5)).toBe(false)
+    expect(isGbChenglingNaokongHit([0.018, 1.64, -0.09], gb18, gb19, 0.5)).toBe(false)
+    const femaleGb18 = gb18.map((value) => value * 232)
+    const femaleGb19 = gb19.map((value) => value * 232)
+    const femaleScalp = gbChenglingNaokongOuterPoint(femaleGb18, femaleGb19, 0.5)
+    expect(isGbChenglingNaokongHit(femaleScalp, femaleGb18, femaleGb19, 0.5)).toBe(true)
+    const femaleBun = [femaleGb18[0], (femaleGb18[1] + femaleGb19[1]) / 2, Math.min(femaleGb18[2], femaleGb19[2]) - 232 * 0.12]
+    expect(isGbChenglingNaokongHit(femaleBun, femaleGb18, femaleGb19, 0.5)).toBe(false)
 
     const midChord = [
       (jianjing[0] + yuanye[0]) / 2,
