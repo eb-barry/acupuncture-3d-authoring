@@ -6605,6 +6605,17 @@ if (isDevMode(import.meta.env)) {
       })
       return hit ? { position: hit.position, distance: hit.distance, normal: hit.normal } : null
     },
+    projectScreen(position) {
+      if (!position) return null
+      const vector = new THREE.Vector3(...position).project(camera)
+      const canvas = renderer.domElement
+      const rect = canvas.getBoundingClientRect()
+      return {
+        x: (vector.x * 0.5 + 0.5) * rect.width + rect.left,
+        y: (-vector.y * 0.5 + 0.5) * rect.height + rect.top,
+        visible: vector.z >= -1 && vector.z <= 1,
+      }
+    },
     selectPair(fromCode, toCode, side = null) {
       const fromPoint = state.acupoints.find((point) => (
         point.code === fromCode && (!side || point.side === side)
