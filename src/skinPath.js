@@ -271,11 +271,14 @@ export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count 
   const span = Math.max(length3(sub3(face, neck)), 1e-6)
   const side = Math.sign(neck[0]) || 1
   const yAt = (t) => neck[1] + (face[1] - neck[1]) * t
-  const frontZ = Math.max(neck[2], face[2]) + span * 0.10
+  const frontZ = Math.max(
+    neck[2] + (face[2] - neck[2]) * 0.70,
+    (neck[2] + face[2]) * 0.5 + span * 0.08,
+  )
   const neckClimb = [
-    neck[0] + side * span * 0.02,
+    neck[0] + side * span * 0.015,
     yAt(0.16),
-    neck[2] + (frontZ - neck[2]) * 0.52,
+    neck[2] + (frontZ - neck[2]) * 0.70,
   ]
   const jawFront = [
     neck[0] * 0.90 + face[0] * 0.10,
@@ -285,7 +288,7 @@ export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count 
   const cheek = [
     neck[0] * 0.40 + face[0] * 0.60,
     yAt(0.74),
-    frontZ + span * 0.02,
+    Math.max(frontZ, face[2] + span * 0.04),
   ]
   const anchors = flipped
     ? [face, cheek, jawFront, neckClimb, neck]
