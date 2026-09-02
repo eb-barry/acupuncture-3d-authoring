@@ -94,6 +94,7 @@ import {
   kiYinguChangqiangGuide,
   kiYinguChangqiangOuterPoint,
   isLiFutuHeliaoHit,
+  isLiFutuHeliaoHandleOk,
   liFutuHeliaoOuterPoint,
   liFutuHeliaoGuidePoints,
   liFutuHeliaoGuide,
@@ -1502,6 +1503,10 @@ function handleSkinHit(event, drag) {
     from.position,
     to.position,
   ))
+  const liFace = Boolean(pair && from && to && isLiFutuHeliaoPair(
+    routeNodeCode(fromNode),
+    routeNodeCode(toNode),
+  ))
   const scale = statureScale()
   const maxOffPath = statureWorld(HANDLE_STRETCH_MAX_OFF_PATH)
   const snapRadius = statureWorld(HANDLE_SKIN_SNAP_RADIUS)
@@ -1510,7 +1515,12 @@ function handleSkinHit(event, drag) {
       statureWorld(HANDLE_STRETCH_PROJECT_RADIUS * 1.6),
       gbPairSpan(from.position, to.position) * 0.45,
     )
-    : statureWorld(Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7))
+    : liFace
+      ? Math.max(
+        statureWorld(HANDLE_STRETCH_PROJECT_RADIUS),
+        new THREE.Vector3(...from.position).distanceTo(new THREE.Vector3(...to.position)) * 0.4,
+      )
+      : statureWorld(Math.max(HANDLE_STRETCH_PROJECT_RADIUS, HANDLE_SKIN_SNAP_RADIUS * 0.7))
   const accept = (hit) => {
     if (!hit) return false
     if (!isProbeOnSameLimbSegment(rest, hit.position, maxOffPath, {
@@ -1518,6 +1528,7 @@ function handleSkinHit(event, drag) {
       worldScale: scale,
     })) return false
     if (gbPair && !isGbJianjingYuanyeHandleOk(hit.position, from.position, to.position)) return false
+    if (liFace && !isLiFutuHeliaoHandleOk(hit.position, from.position, to.position)) return false
     return true
   }
   const pickAccepted = (hits, near = null) => {
@@ -1528,12 +1539,13 @@ function handleSkinHit(event, drag) {
     }
     return ok[0]
   }
-  if (gbPair) {
+  const alongRay = (gbPair || liFace) ? pickAccepted(surfaceHits(event)) : null
+  if (gbPair && alongRay) {
     // First legal hit along the camera ray. Skip the T-pose arm; do not
     // snap back to the old locator or the meridian cannot move right.
-    const alongRay = pickAccepted(surfaceHits(event))
-    if (alongRay) return alongRay
-  } else {
+    return alongRay
+  }
+  if (!gbPair && !liFace) {
     const direct = surfaceHit(event)
     if (accept(direct)) return direct
   }
@@ -1542,14 +1554,16 @@ function handleSkinHit(event, drag) {
     const planeArr = toArray(planePoint)
     const guide = gbPair
       ? gbLateralChestGuide(planeArr, sideX)
-      : anchor.normal
+      : liFace
+        ? liFutuHeliaoGuide(from.position, to.position, 0.5)
+        : anchor.normal
     const projected = projectHandleOnSkin(
       planePoint,
       guide,
       projectRadius,
       sideX,
     )
-    if (accept(projected)) return projected
+    if (accept(projected) && !liFace) return projected
     if (gbPair) {
       const standoff = gbLocatorCastStandoff(from.position, to.position)
       const probe = gbLocatorOutsideProbe(planeArr, from.position, to.position)
@@ -1563,8 +1577,40 @@ function handleSkinHit(event, drag) {
       ], planeArr)
       if (picked) return picked
     }
+    if (liFace) {
+      const span = new THREE.Vector3(...from.position).distanceTo(new THREE.Vector3(...to.position))
+      const extraReach = Math.max(statureWorld(0.12), span * 0.7)
+      const maxZ = Math.max(from.position[2], to.position[2], planeArr[2])
+      const picked = pickAccepted(raySkinHits(
+        new THREE.Vector3(planeArr[0], planeArr[1], maxZ + extraReach * 0.55),
+        new THREE.Vector3(0, 0, -1),
+        extraReach * 1.7,
+        new THREE.Vector3(0, 0, 1),
+      ), planeArr)
+      const planeLegal = isLiFutuHeliaoHandleOk(planeArr, from.position, to.position)
+        && isProbeOnSameLimbSegment(rest, planeArr, maxOffPath, {
+          skipLimbGap,
+          worldScale: scale,
+        })
+      const skinHits = [alongRay, picked].filter(Boolean)
+      skinHits.sort((left, right) => right.position[2] - left.position[2])
+      const bestSkin = skinHits[0]
+      if (planeLegal) {
+        // Empty space in front of the jaw hollow has no mesh. Keep the
+        // plane point so locators can sit there instead of snapping to
+        // the throat behind the camera ray.
+        if (!bestSkin || bestSkin.position[2] < planeArr[2] - span * 0.015) {
+          return {
+            position: [...planeArr],
+            normal: [...liFutuHeliaoGuide(from.position, to.position, 0.5)],
+          }
+        }
+      }
+      if (bestSkin) return bestSkin
+    }
   }
-  if (!gbPair) {
+  if (alongRay) return alongRay
+  if (!gbPair && !liFace) {
     const direct = surfaceHit(event)
     if (direct) {
       const snapped = closestSkinHit(direct.position, {
@@ -2926,13 +2972,72 @@ function snapKiYinguChangqiangToSkin(a, b) {
 }
 
 /** 扶突→禾髎: climb the neck, sit in front of the jaw hollow, then the cheek. */
-function snapLiFutuHeliaoToSkin(a, b) {
+function snapLiHandleToSkin(placed, fromResolved, toResolved, rest = []) {
+  if (!placed?.position) return null
+  const from = fromResolved.position
+  const to = toResolved.position
+  const span = Math.max(
+    new THREE.Vector3(...from).distanceTo(new THREE.Vector3(...to)),
+    1e-6,
+  )
+  const sideX = from[0]
+  const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
+  const guide = placed.normal || liFutuHeliaoGuide(from, to, t)
+  const legal = (hit) => hit && isLiFutuHeliaoHandleOk(hit.position, from, to)
+  const near = Math.max(statureWorld(0.012), span * 0.06)
+  const nearHit = closestSkinHit(placed.position, {
+    maxDistance: near,
+    sideX,
+    guideNormal: guide,
+  })
+  if (legal(nearHit) && nearHit.position[2] >= placed.position[2] - span * 0.02) {
+    return { position: nearHit.position, normal: nearHit.normal }
+  }
+  const maxZ = Math.max(from[2], to[2], placed.position[2])
+  const extraReach = Math.max(statureWorld(0.12), span * 0.7)
+  const frontHits = raySkinHits(
+    new THREE.Vector3(placed.position[0], placed.position[1], maxZ + extraReach * 0.55),
+    new THREE.Vector3(0, 0, -1),
+    extraReach * 1.7,
+    new THREE.Vector3(0, 0, 1),
+  ).filter(legal)
+  frontHits.sort((left, right) => right.position[2] - left.position[2])
+  if (frontHits[0] && frontHits[0].position[2] >= placed.position[2] - span * 0.02) {
+    return { position: frontHits[0].position, normal: frontHits[0].normal }
+  }
+  // In front of the jaw hollow: keep the authored point so locators are not
+  // sucked onto the under-chin recess.
+  if (isLiFutuHeliaoHandleOk(placed.position, from, to)) {
+    return { position: [...placed.position], normal: [...guide] }
+  }
+  const outer = liFutuHeliaoOuterPoint(from, to, t)
+  const fallback = closestSkinHit(outer, {
+    maxDistance: Math.max(statureWorld(0.04), span * 0.22),
+    sideX,
+    guideNormal: liFutuHeliaoGuide(from, to, t),
+  })
+  if (legal(fallback)) return { position: fallback.position, normal: fallback.normal }
+  if (isLiFutuHeliaoHandleOk(outer, from, to)) {
+    return { position: [...outer], normal: [...liFutuHeliaoGuide(from, to, t)] }
+  }
+  return null
+}
+
+function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
   const span = Math.max(
     new THREE.Vector3(...a.position).distanceTo(new THREE.Vector3(...b.position)),
     1e-6,
   )
   const neck = Math.abs(a.position[0]) >= Math.abs(b.position[0]) ? a.position : b.position
   const face = neck === a.position ? b.position : a.position
+  const path = rest.length >= 2 ? rest : liFutuHeliaoGuidePoints(a.position, b.position)
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
+  ))
+  const sanitized = ordered
+    .map((record) => snapLiHandleToSkin(record, a, b, path))
+    .filter(Boolean)
+  const hasUserHandles = sanitized.length > 0
   const maxZ = Math.max(a.position[2], b.position[2])
   const minZ = Math.min(a.position[2], b.position[2])
   const count = Math.min(80, Math.max(32, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.028)) + 18))
@@ -2967,7 +3072,9 @@ function snapLiFutuHeliaoToSkin(a, b) {
     const hits = (frontHitsAt(x, y) || []).filter((hit) => (
       yOk(hit, t)
       && hit.position[0] * side > -span * 0.04
-      && isLiFutuHeliaoHit(hit.position, a.position, b.position, t)
+      && (hasUserHandles
+        ? isLiFutuHeliaoHandleOk(hit.position, a.position, b.position)
+        : isLiFutuHeliaoHit(hit.position, a.position, b.position, t))
       && (!requireFace || hit.position[2] >= minFaceZ)
     ))
     if (!hits.length) return null
@@ -2975,27 +3082,32 @@ function snapLiFutuHeliaoToSkin(a, b) {
     return hits[0]
   }
   accept({ position: a.position, normal: a.normal })
-  const guides = liFutuHeliaoGuidePoints(a.position, b.position, count)
+  const guides = hasUserHandles
+    ? catmullRomThrough(
+      [a.position, ...sanitized.map((record) => record.position), b.position],
+      16,
+    )
+    : liFutuHeliaoGuidePoints(a.position, b.position, count)
   for (let index = 1; index < guides.length - 1; index += 1) {
     const t = index / (guides.length - 1)
-    const outer = guides[index]
+    const outer = hasUserHandles ? guides[index] : guides[index]
     const y = outer[1]
     const yT = Math.abs(face[1] - neck[1]) > 1e-6
       ? (y - neck[1]) / (face[1] - neck[1])
       : t
     const onNeck = yT < 0.24
     const xs = [outer[0]]
-    if (!onNeck) {
+    if (!onNeck && !hasUserHandles) {
       xs.push(outer[0] * 0.78 + face[0] * 0.22)
       xs.push(outer[0] * 0.55 + face[0] * 0.45)
     }
     let hit = null
     for (const x of xs) {
-      const candidate = pickAtXY(x, y, t, !onNeck)
+      const candidate = pickAtXY(x, y, t, !onNeck && !hasUserHandles)
       if (candidate && (!hit || candidate.position[2] > hit.position[2])) hit = candidate
     }
     if (hit && hit.position[2] < neck[2] - span * 0.03) hit = null
-    if (!hit && onNeck) {
+    if (!hit && onNeck && !hasUserHandles) {
       const nearest = closestSkinHit(outer, {
         maxDistance: Math.max(statureWorld(0.03), span * 0.18),
         sideX: neck[0],
@@ -3010,7 +3122,14 @@ function snapLiFutuHeliaoToSkin(a, b) {
       }
     }
     if (hit) accept(hit)
-    else appendSkinPoint(points, liftOuter(outer, t), previousRef)
+    else if (hasUserHandles) {
+      accept({
+        position: outer,
+        normal: liFutuHeliaoGuide(a.position, b.position, t),
+      })
+    } else {
+      appendSkinPoint(points, liftOuter(outer, t), previousRef)
+    }
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
@@ -3411,13 +3530,14 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
   teTemple = false,
   siArmShoulder = false,
   gbShoulderAxilla = false,
+  liFace = false,
   fromCode = '',
   toCode = '',
 } = {}) {
   const restGuide = rest?.length >= 2 ? rest : null
   const restArrays = restGuide ? arraysFromSkin(restGuide) : []
   const drawSpan = (fromNode, toNode) => skinSegmentPoints(fromNode, toNode, {
-    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap && !siArmShoulder && !gbShoulderAxilla,
+    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap && !siArmShoulder && !gbShoulderAxilla && !liFace,
     preferWrap,
     earArc,
     teTemple,
@@ -3457,12 +3577,17 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
     const wrapped = snapGbJianjingYuanyeToSkin(fromResolved, toResolved, records, restArrays)
     if (wrapped?.length >= 3) return wrapped
   }
+  if (liFace) {
+    const usable = keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
+    const wrapped = snapLiFutuHeliaoToSkin(fromResolved, toResolved, usable, restArrays)
+    if (wrapped?.length >= 3) return wrapped
+  }
   if (!records.length) {
     return restArrays.length >= 2
       ? vectorsFromArrays(restArrays)
       : drawSpan(fromResolved, toResolved)
   }
-  const usable = (siArmShoulder || gbShoulderAxilla || teHead
+  const usable = (siArmShoulder || gbShoulderAxilla || teHead || liFace
     ? keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
     : keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays))
   const spans = locatorSpans(restArrays, fromResolved, toResolved, usable)
@@ -3509,7 +3634,6 @@ function drawPairSkinSegment(route, pair, override = null) {
   const toCode = routeNodeCode(pair.toNode)
   if (!meridianUsesLocators(route.meridianId)
     || isKiYinguChangqiangPair(fromCode, toCode)
-    || isLiFutuHeliaoPair(fromCode, toCode)
     || isGbChenglingNaokongPair(fromCode, toCode)) {
     return vectorsFromArrays(rest)
   }
@@ -3525,13 +3649,15 @@ function drawPairSkinSegment(route, pair, override = null) {
   const earArc = isTeEarArcPair(fromCode, toCode)
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   const gbShoulderAxilla = isGbShoulderAxillaSpan(fromCode, toCode, a.position, b.position)
+  const liFace = isLiFutuHeliaoPair(fromCode, toCode)
   return pairDrawnSkinPoints(a, b, records, rest, {
-    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder && !gbShoulderAxilla,
+    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder && !gbShoulderAxilla && !liFace,
     preferWrap: pairPrefersWrap(fromCode, toCode, a.position, b.position),
     earArc,
     teTemple,
     siArmShoulder,
     gbShoulderAxilla,
+    liFace,
     fromCode,
     toCode,
   })
@@ -3663,6 +3789,9 @@ function snapHandleToSkin(placed, fromNode, toNode) {
   }
   if (isGbShoulderAxillaSpan(routeNodeCode(fromNode), routeNodeCode(toNode), from.position, to.position)) {
     return snapGbHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode)) || placed
+  }
+  if (isLiFutuHeliaoPair(routeNodeCode(fromNode), routeNodeCode(toNode))) {
+    return snapLiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode)) || placed
   }
   const sideX = pairSideX(fromNode, toNode)
   return closestSkinHit(placed.position, {
@@ -4295,7 +4424,6 @@ function addRouteEditHandles(route) {
   acupointPairs(route)
     .filter((pair) => isSegmentSelected(route, pair.fromPointId, pair.toPointId))
     .filter((pair) => !isKiYinguChangqiangPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
-    .filter((pair) => !isLiFutuHeliaoPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
     .filter((pair) => !isGbChenglingNaokongPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
     .forEach((pair) => {
       const rest = restPathArrays(pair.fromNode, pair.toNode)
@@ -4995,7 +5123,9 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
     ? snapSiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
     : isGbShoulderAxillaSpan(fromCode, toCode, resolvedNode(pair.fromNode).position, resolvedNode(pair.toNode).position)
       ? snapGbHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
-      : hit
+      : isLiFutuHeliaoPair(fromCode, toCode)
+        ? snapLiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
+        : hit
   if (!records.length) {
     records.push({
       type: 'control',
@@ -6423,6 +6553,13 @@ if (isDevMode(import.meta.env)) {
         bodyHeightWorld,
         stature: statureScale(),
         snaps: window.__midlineSnap || [],
+        selected,
+        handleCount: handleVisuals.length,
+        handles: handleVisuals.map(({ mesh }) => ({
+          position: [mesh.position.x, mesh.position.y, mesh.position.z],
+          fromPointId: mesh.userData.fromPointId,
+          toPointId: mesh.userData.toPointId,
+        })),
         routes: routeVisuals.map(({ line, route }) => {
           const pts = (line.userData.tubePoints || []).map((p) => [p.x, p.y, p.z])
           return {
@@ -6467,6 +6604,51 @@ if (isDevMode(import.meta.env)) {
         sideX: position?.[0],
       })
       return hit ? { position: hit.position, distance: hit.distance, normal: hit.normal } : null
+    },
+    projectScreen(position) {
+      if (!position) return null
+      const vector = new THREE.Vector3(...position).project(camera)
+      const canvas = renderer.domElement
+      const rect = canvas.getBoundingClientRect()
+      return {
+        x: (vector.x * 0.5 + 0.5) * rect.width + rect.left,
+        y: (-vector.y * 0.5 + 0.5) * rect.height + rect.top,
+        visible: vector.z >= -1 && vector.z <= 1,
+      }
+    },
+    selectPair(fromCode, toCode, side = null) {
+      const fromPoint = state.acupoints.find((point) => (
+        point.code === fromCode && (!side || point.side === side)
+      ))
+      const toPoint = state.acupoints.find((point) => (
+        point.code === toCode && (!side || point.side === side)
+      ))
+      if (!fromPoint || !toPoint) return { ok: false, reason: 'missing-points' }
+      const route = state.meridians.find((item) => acupointPairs(item).some((pair) => (
+        pair.fromPointId === fromPoint.id && pair.toPointId === toPoint.id
+      )))
+      if (!route) return { ok: false, reason: 'missing-route' }
+      const pair = acupointPairs(route).find((item) => (
+        item.fromPointId === fromPoint.id && item.toPointId === toPoint.id
+      ))
+      selected = {
+        type: 'meridian',
+        id: route.id,
+        pairId: route.pairId || null,
+        fromPointId: pair.fromPointId,
+        toPointId: pair.toPointId,
+      }
+      replaceRouteLine(route.id, skinCurveRuns(route))
+      refreshRouteEditHandles()
+      updateUI()
+      return {
+        ok: true,
+        routeId: route.id,
+        fromPointId: pair.fromPointId,
+        toPointId: pair.toPointId,
+        handleCount: handleVisuals.length,
+        restArc: polylineArcLength(restPathArrays(pair.fromNode, pair.toNode)),
+      }
     },
   }
 }

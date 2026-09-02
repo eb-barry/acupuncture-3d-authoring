@@ -53,6 +53,7 @@ import {
   liFutuHeliaoOuterPoint,
   liFutuHeliaoGuide,
   isLiFutuHeliaoHit,
+  isLiFutuHeliaoHandleOk,
   isLiFutuHeliaoPair,
   isGbChenglingNaokongPair,
   gbChenglingNaokongOuterPoint,
@@ -399,6 +400,7 @@ describe('skin path wrapping', () => {
     ]
     expect(isLiFutuHeliaoPair('LI18', 'LI19')).toBe(true)
     expect(pairPrefersWrap('LI18', 'LI19', li18, li19)).toBe(false)
+    expect(pairKeepsOffPathLocators('LI18', 'LI19')).toBe(true)
     expect(liFutuHeliaoCheekT(LI_FUTU_HELIAO_JAW_T)).toBe(0)
     expect(liFutuHeliaoCheekT(1)).toBe(1)
     const neckHold = liFutuHeliaoOuterPoint(li18, li19, 0.10)
@@ -427,6 +429,10 @@ describe('skin path wrapping', () => {
       (femaleLi18[2] + femaleLi19[2]) / 2,
     ]
     expect(isLiFutuHeliaoHit(femaleJaw, femaleLi18, femaleLi19, 0.5)).toBe(false)
+    expect(isLiFutuHeliaoHandleOk(jawFront, li18, li19)).toBe(true)
+    expect(isLiFutuHeliaoHandleOk(cheek, li18, li19)).toBe(true)
+    expect(isLiFutuHeliaoHandleOk([-0.06, 1.56, 0.08], li18, li19)).toBe(false)
+    expect(isLiFutuHeliaoHandleOk(chordMid, li18, li19)).toBe(false)
 
     const gb18 = [0.055, 1.70, -0.055]
     const gb19 = [0.062, 1.58, -0.102]
