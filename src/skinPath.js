@@ -242,9 +242,9 @@ function liFutuHeliaoEnds(from = [0, 0, 0], to = [0, 0, 0]) {
 
 /**
  * Hold neck laterality until here, then sweep across the cheek to 禾髎.
- * Earlier medial lerp cuts through the mandible.
+ * Earlier medial lerp cuts through the mandible / under-chin hollow.
  */
-export const LI_FUTU_HELIAO_JAW_T = 0.18
+export const LI_FUTU_HELIAO_JAW_T = 0.36
 
 /** 0 on the neck climb; 0→1 across the cheek to 禾髎. */
 export function liFutuHeliaoCheekT(t = 0) {
@@ -262,21 +262,34 @@ export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5
   return lerp3(points[index], points[index + 1], u - index)
 }
 
-/** Neck → jaw → cheek → lip anchors sitting just outside the face. */
+/**
+ * Neck → hold the side → sit in front of the jaw hollow → cheek → lip.
+ * The female chin starts much higher than 扶突; a 3D chord dives under it.
+ */
 export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count = 28) {
   const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
   const span = Math.max(length3(sub3(face, neck)), 1e-6)
-  const jaw = [
-    neck[0] * 0.86 + face[0] * 0.14,
-    neck[1] + (face[1] - neck[1]) * 0.40,
-    neck[2] + (face[2] - neck[2]) * 0.28 + span * 0.07,
+  const side = Math.sign(neck[0]) || 1
+  const yAt = (t) => neck[1] + (face[1] - neck[1]) * t
+  const frontZ = Math.max(neck[2], face[2]) + span * 0.10
+  const neckClimb = [
+    neck[0] + side * span * 0.02,
+    yAt(0.16),
+    neck[2] + (frontZ - neck[2]) * 0.52,
+  ]
+  const jawFront = [
+    neck[0] * 0.90 + face[0] * 0.10,
+    yAt(0.42),
+    frontZ,
   ]
   const cheek = [
-    neck[0] * 0.38 + face[0] * 0.62,
-    neck[1] + (face[1] - neck[1]) * 0.74,
-    face[2] + span * 0.09,
+    neck[0] * 0.40 + face[0] * 0.60,
+    yAt(0.74),
+    frontZ + span * 0.02,
   ]
-  const anchors = flipped ? [face, cheek, jaw, neck] : [neck, jaw, cheek, face]
+  const anchors = flipped
+    ? [face, cheek, jawFront, neckClimb, neck]
+    : [neck, neckClimb, jawFront, cheek, face]
   const samples = Math.max(8, Math.floor(Number(count) || 28))
   const points = []
   for (let index = 0; index < samples; index += 1) {
@@ -330,8 +343,10 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   if (tt > 0.12 && tt < 0.88 && distChord < span * 0.08 && p[2] < chord[2] + span * 0.035) {
     return false
   }
+  if (tt < 0.42 && Math.abs(p[0]) < Math.abs(neck[0]) * 0.68) return false
   const outer = liFutuHeliaoOuterPoint(from, to, t)
-  return length3(sub3(p, outer)) <= Math.max(0.04, span * 0.55)
+  if (tt > 0.16 && tt < 0.84 && p[2] < outer[2] - span * 0.16) return false
+  return length3(sub3(p, outer)) <= Math.max(0.04, span * 0.62)
 }
 
 /** Push a through-spine chord out onto the back skin (−Z). */

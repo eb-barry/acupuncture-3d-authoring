@@ -2922,7 +2922,7 @@ function snapKiYinguChangqiangToSkin(a, b) {
   return simplified.points.map((point) => new THREE.Vector3(...point))
 }
 
-/** 扶突→禾髎: stay on the neck and cheek, not inside the mandible. */
+/** 扶突→禾髎: climb the neck, sit in front of the jaw hollow, then the cheek. */
 function snapLiFutuHeliaoToSkin(a, b) {
   const span = Math.max(
     new THREE.Vector3(...a.position).distanceTo(new THREE.Vector3(...b.position)),
@@ -2932,14 +2932,17 @@ function snapLiFutuHeliaoToSkin(a, b) {
   const face = neck === a.position ? b.position : a.position
   const maxZ = Math.max(a.position[2], b.position[2])
   const minZ = Math.min(a.position[2], b.position[2])
-  const count = Math.min(72, Math.max(28, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 14))
-  const extraReach = Math.max(statureWorld(0.12), (maxZ - minZ) + span * 0.55, span * 0.85)
+  const count = Math.min(80, Math.max(32, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.028)) + 18))
+  const extraReach = Math.max(statureWorld(0.14), (maxZ - minZ) + span * 0.7, span * 1.05)
   const lift = statureWorld(SKIN_LIFT)
   const side = Math.sign(neck[0]) || 1
   const points = []
   const previousRef = { current: null }
+  const minFaceZ = minZ + (maxZ - minZ) * 0.38
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), lift)
+  const liftOuter = (outer, t) => new THREE.Vector3(...outer)
+    .addScaledVector(new THREE.Vector3(...liFutuHeliaoGuide(a.position, b.position, t)), lift)
   const yOk = (hit, t) => {
     if (!hit) return false
     const y = hit.position[1]
@@ -2952,20 +2955,17 @@ function snapLiFutuHeliaoToSkin(a, b) {
     return true
   }
   const frontHitsAt = (x, y) => raySkinHits(
-    new THREE.Vector3(x, y, maxZ + statureWorld(0.08)),
+    new THREE.Vector3(x, y, maxZ + extraReach * 0.55),
     new THREE.Vector3(0, 0, -1),
-    extraReach,
+    extraReach * 1.7,
     new THREE.Vector3(0, 0, 1),
   )
-  const pickAtXY = (x, y, t, outer) => {
-    const yT = Math.abs(face[1] - neck[1]) > 1e-6
-      ? (y - neck[1]) / (face[1] - neck[1])
-      : t
-    const zFloor = minZ + (maxZ - minZ) * Math.max(0, Math.min(0.82, yT * 1.15 - 0.12))
+  const pickAtXY = (x, y, t, requireFace) => {
     const hits = (frontHitsAt(x, y) || []).filter((hit) => (
       yOk(hit, t)
+      && hit.position[0] * side > -span * 0.04
       && isLiFutuHeliaoHit(hit.position, a.position, b.position, t)
-      && hit.position[2] >= zFloor - span * 0.04
+      && (!requireFace || hit.position[2] >= minFaceZ)
     ))
     if (!hits.length) return null
     hits.sort((left, right) => right.position[2] - left.position[2])
@@ -2977,28 +2977,36 @@ function snapLiFutuHeliaoToSkin(a, b) {
     const t = index / (guides.length - 1)
     const outer = guides[index]
     const y = outer[1]
-    let hit = pickAtXY(outer[0], y, t, outer)
-    if (!hit) {
+    const yT = Math.abs(face[1] - neck[1]) > 1e-6
+      ? (y - neck[1]) / (face[1] - neck[1])
+      : t
+    const onNeck = yT < 0.24
+    const xs = [outer[0]]
+    if (!onNeck) {
+      xs.push(outer[0] * 0.78 + face[0] * 0.22)
+      xs.push(outer[0] * 0.55 + face[0] * 0.45)
+    }
+    let hit = null
+    for (const x of xs) {
+      const candidate = pickAtXY(x, y, t, !onNeck)
+      if (candidate && (!hit || candidate.position[2] > hit.position[2])) hit = candidate
+    }
+    if (!hit && onNeck) {
       const nearest = closestSkinHit(outer, {
-        maxDistance: extraReach,
+        maxDistance: Math.max(statureWorld(0.04), span * 0.28),
         sideX: neck[0],
         guideNormal: liFutuHeliaoGuide(a.position, b.position, t),
       })
       if (
         nearest
         && isLiFutuHeliaoHit(nearest.position, a.position, b.position, t)
-        && nearest.position[2] >= minZ - span * 0.02
+        && nearest.position[2] >= minZ - span * 0.04
       ) {
         hit = nearest
       }
     }
-    if (!hit) {
-      const fallbackHits = frontHitsAt(outer[0], y)
-        .filter((candidate) => yOk(candidate, t) && candidate.position[0] * side > 0)
-      fallbackHits.sort((left, right) => right.position[2] - left.position[2])
-      if (fallbackHits.length) hit = fallbackHits[0]
-    }
     if (hit) accept(hit)
+    else appendSkinPoint(points, liftOuter(outer, t), previousRef)
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
@@ -3010,7 +3018,7 @@ function snapLiFutuHeliaoToSkin(a, b) {
       b.position,
       arrays.length > 1 ? index / (arrays.length - 1) : 0.5,
     )),
-    statureWorld(0.0015),
+    statureWorld(0.0012),
   )
   return simplified.points.map((point) => new THREE.Vector3(...point))
 }

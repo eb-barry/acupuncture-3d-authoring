@@ -187,10 +187,16 @@ describe('扶突–禾髎 neck–cheek corridor on the female mesh', () => {
     expect(isLiFutuHeliaoHit(chord, from, to, 0.5)).toBe(false)
     for (const t of [0.28, 0.55, 0.78]) {
       const outer = liFutuHeliaoOuterPoint(from, to, t)
+      const tChord = [
+        from[0] + (to[0] - from[0]) * t,
+        from[1] + (to[1] - from[1]) * t,
+        from[2] + (to[2] - from[2]) * t,
+      ]
       expect(isLiFutuHeliaoHit(outer, from, to, t)).toBe(true)
+      expect(outer[2]).toBeGreaterThan(tChord[2] - span * 0.04)
       const hit = closestHit(meshes, outer, snapRadius)
       expect(hit).toBeTruthy()
-      expect(hit.distance).toBeLessThan(span * 0.45)
+      expect(hit.distance).toBeLessThan(span * 0.72)
       expect(hit.position[0] * from[0]).toBeGreaterThan(0)
       expect(hit.position[2]).toBeGreaterThan(Math.min(from[2], to[2]) - span * 0.05)
     }
