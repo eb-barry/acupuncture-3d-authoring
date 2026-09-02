@@ -2929,6 +2929,8 @@ function snapLiFutuHeliaoToSkin(a, b) {
   )
   const neck = Math.abs(a.position[0]) >= Math.abs(b.position[0]) ? a.position : b.position
   const face = neck === a.position ? b.position : a.position
+  const maxZ = Math.max(a.position[2], b.position[2])
+  const minZ = Math.min(a.position[2], b.position[2])
   const count = Math.min(72, Math.max(28, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 14))
   const extraReach = Math.max(statureWorld(0.12), (maxZ - minZ) + span * 0.55, span * 0.85)
   const lift = statureWorld(SKIN_LIFT)
@@ -2955,10 +2957,14 @@ function snapLiFutuHeliaoToSkin(a, b) {
     new THREE.Vector3(0, 0, 1),
   )
   const pickAtXY = (x, y, t, outer) => {
+    const yT = Math.abs(face[1] - neck[1]) > 1e-6
+      ? (y - neck[1]) / (face[1] - neck[1])
+      : t
+    const zFloor = minZ + (maxZ - minZ) * Math.max(0, Math.min(0.82, yT * 1.15 - 0.12))
     const hits = (frontHitsAt(x, y) || []).filter((hit) => (
       yOk(hit, t)
       && isLiFutuHeliaoHit(hit.position, a.position, b.position, t)
-      && hit.position[2] > minZ - span * 0.05
+      && hit.position[2] >= zFloor - span * 0.04
     ))
     if (!hits.length) return null
     hits.sort((left, right) => right.position[2] - left.position[2])
