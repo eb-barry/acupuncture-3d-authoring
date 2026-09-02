@@ -4,6 +4,7 @@ import {
   POINTS,
   POINT_BY_CODE,
   isKiYinguChangqiangPair,
+  isGbChenglingNaokongPair,
   isOmittedSurfaceSpan,
   isRenDuCodePair,
   meridianLineColor,
@@ -80,6 +81,15 @@ describe('authorized acupuncture catalog', () => {
     expect(isKiYinguChangqiangPair('GV1', 'KI10')).toBe(true)
     expect(isKiYinguChangqiangPair('KI10', 'KI11')).toBe(false)
     expect(isKiYinguChangqiangPair('KI11', 'GV1')).toBe(false)
+  })
+
+  it('treats 承靈–腦空 as the gallbladder occiput scalp pair', () => {
+    expect(POINT_BY_CODE.get('GB18').name).toBe('承靈')
+    expect(POINT_BY_CODE.get('GB19').name).toBe('腦空')
+    expect(isGbChenglingNaokongPair('GB18', 'GB19')).toBe(true)
+    expect(isGbChenglingNaokongPair('GB19', 'GB18')).toBe(true)
+    expect(isGbChenglingNaokongPair('GB17', 'GB18')).toBe(false)
+    expect(isGbChenglingNaokongPair('GB19', 'GB20')).toBe(false)
   })
 
   it('keeps 任督 consecutive pairs drawable even when they are not BL40–BL41', () => {

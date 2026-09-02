@@ -6,7 +6,9 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { computeBoundsTree } from 'three-mesh-bvh'
 import {
   gbJianjingYuanyeGuidePoints,
+  gbChenglingNaokongOuterPoint,
   isGbAxillaHollow,
+  isGbChenglingNaokongHit,
   isPointBehindSurface,
 } from './skinPath.js'
 
@@ -147,5 +149,58 @@ describe('肩井–淵腋 corridor on the built-in body meshes', () => {
   it('stays outside the female mesh and on the lateral chest, not through the shoulder', async () => {
     const { height, meshes } = await loadFramedBody('models/female-character.glb')
     assertLateralChestCorridor(meshes, height, height / 1.79)
+  }, 180000)
+})
+
+describe('承靈–腦空 scalp corridor on the female mesh', () => {
+  it('keeps 承靈→腦空 samples on the scalp, not behind the occiput bun', async () => {
+    const { height, meshes } = await loadFramedBody('models/female-character.glb')
+    const gb18 = nearestVertex(
+      meshes,
+      (point) => (
+        point[0] > height * 0.018 && point[0] < height * 0.05
+        && point[1] > height * 0.93 && point[1] < height * 0.99
+        && point[2] < 0 && point[2] > -height * 0.06
+      ),
+      [height * 0.032, height * 0.96, -height * 0.03],
+    )
+    const gb19 = nearestVertex(
+      meshes,
+      (point) => (
+        point[0] > height * 0.018 && point[0] < height * 0.05
+        && point[1] > height * 0.86 && point[1] < height * 0.93
+        && point[2] < -height * 0.02 && point[2] > -height * 0.09
+      ),
+      [height * 0.034, height * 0.90, -height * 0.055],
+    )
+    expect(gb18).toBeTruthy()
+    expect(gb19).toBeTruthy()
+    const from = gb18.point
+    const to = gb19.point
+    const span = Math.hypot(from[0] - to[0], from[1] - to[1], from[2] - to[2])
+    const snapRadius = Math.max(height * 0.04, span * 0.5)
+    for (const t of [1 / 3, 0.5, 2 / 3]) {
+      const outer = gbChenglingNaokongOuterPoint(from, to, t)
+      expect(isGbChenglingNaokongHit(outer, from, to, t)).toBe(true)
+      const outerHit = closestHit(meshes, outer, snapRadius)
+      expect(outerHit).toBeTruthy()
+      expect(outerHit.distance).toBeLessThan(span * 0.35)
+      expect(isGbChenglingNaokongHit(outerHit.position, from, to, t)).toBe(true)
+      const chord = [
+        from[0] + (to[0] - from[0]) * t,
+        from[1] + (to[1] - from[1]) * t,
+        from[2] + (to[2] - from[2]) * t,
+      ]
+      const chordHit = closestHit(meshes, chord, snapRadius)
+      expect(chordHit).toBeTruthy()
+      expect(isGbChenglingNaokongHit(chordHit.position, from, to, t)).toBe(true)
+      expect(chordHit.position[2]).toBeGreaterThan(Math.min(from[2], to[2]) - span * 0.08)
+    }
+    const bun = [
+      (from[0] + to[0]) / 2,
+      (from[1] + to[1]) / 2,
+      Math.min(from[2], to[2]) - span * 0.35,
+    ]
+    expect(isGbChenglingNaokongHit(bun, from, to, 0.5)).toBe(false)
   }, 180000)
 })
