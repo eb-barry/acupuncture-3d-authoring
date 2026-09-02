@@ -290,21 +290,26 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   const p = asPathPoint(hit)
   const span = Math.max(length3(sub3(face, neck)), 1e-6)
   const tt = flipped ? 1 - clamp01(t) : clamp01(t)
-  const yMin = Math.min(neck[1], face[1]) - span * 0.12
-  const yMax = Math.max(neck[1], face[1]) + span * 0.12
+  const yMin = Math.min(neck[1], face[1]) - span * 0.14
+  const yMax = Math.max(neck[1], face[1]) + span * 0.14
   if (p[1] < yMin || p[1] > yMax) return false
   const side = Math.sign(neck[0]) || 1
   if (side * p[0] < -span * 0.06) return false
   const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
-  if (Math.abs(p[0]) > maxAbsX + span * 0.16) return false
-  const cheek = liFutuHeliaoCheekT(tt)
-  if (cheek < 0.02 && Math.abs(p[0]) < Math.abs(neck[0]) * 0.35) return false
-  if (p[2] < Math.min(neck[2], face[2]) - span * 0.06) return false
-  if (p[2] > Math.max(neck[2], face[2]) + span * 0.42) return false
-  const zLerp = neck[2] + (face[2] - neck[2]) * tt
-  if (p[2] < zLerp + Math.sin(Math.PI * tt) * span * 0.008) return false
+  if (Math.abs(p[0]) > maxAbsX + span * 0.18) return false
+  if (p[2] < Math.min(neck[2], face[2]) - span * 0.08) return false
+  if (p[2] > Math.max(neck[2], face[2]) + span * 0.5) return false
+  const chord = [
+    neck[0] + (face[0] - neck[0]) * tt,
+    neck[1] + (face[1] - neck[1]) * tt,
+    neck[2] + (face[2] - neck[2]) * tt,
+  ]
+  const distChord = length3(sub3(p, chord))
+  if (tt > 0.12 && tt < 0.88 && distChord < span * 0.08 && p[2] < chord[2] + span * 0.035) {
+    return false
+  }
   const outer = liFutuHeliaoOuterPoint(from, to, t)
-  return length3(sub3(p, outer)) <= Math.max(0.03, span * 0.34)
+  return length3(sub3(p, outer)) <= Math.max(0.04, span * 0.55)
 }
 
 /** Push a through-spine chord out onto the back skin (−Z). */
