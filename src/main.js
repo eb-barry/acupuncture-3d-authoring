@@ -6,7 +6,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, getTriangleHitPointInfo } from 'three-mesh-bvh'
-import { MERIDIANS, POINTS, POINT_BY_CODE, isKiYinguChangqiangPair, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, acupointMarkerColor, pointsForMeridian } from './catalog.js'
+import { MERIDIANS, POINTS, POINT_BY_CODE, isKiYinguChangqiangPair, isLiFutuHeliaoPair, isOmittedSurfaceSpan, isRenDuCodePair, meridianById, meridianLineColor, acupointMarkerColor, pointsForMeridian } from './catalog.js'
 import {
   BODY_MODELS,
   emptyDocument,
@@ -93,6 +93,10 @@ import {
   kiYinguChangqiangCastStandoff,
   kiYinguChangqiangGuide,
   kiYinguChangqiangOuterPoint,
+  isLiFutuHeliaoHit,
+  liFutuHeliaoCastStandoff,
+  liFutuHeliaoGuide,
+  liFutuHeliaoOuterPoint,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -2918,6 +2922,102 @@ function snapKiYinguChangqiangToSkin(a, b) {
   return simplified.points.map((point) => new THREE.Vector3(...point))
 }
 
+/** 扶突→禾髎: stay on the neck and cheek, not inside the mandible. */
+function snapLiFutuHeliaoToSkin(a, b) {
+  const span = Math.max(
+    new THREE.Vector3(...a.position).distanceTo(new THREE.Vector3(...b.position)),
+    1e-6,
+  )
+  const count = Math.min(64, Math.max(22, Math.ceil(span / Math.max(statureWorld(0.005), span * 0.035)) + 12))
+  const standoff = liFutuHeliaoCastStandoff(a.position, b.position)
+  const extraReach = Math.max(standoff * 1.6, statureWorld(0.07), span * 0.45)
+  const lift = statureWorld(SKIN_LIFT)
+  const sideX = a.position[0]
+  const points = []
+  const previousRef = { current: null }
+  const liftHit = (hit) => new THREE.Vector3(...hit.position)
+    .addScaledVector(new THREE.Vector3(...hit.normal), lift)
+  const legal = (hit, t) => Boolean(hit) && isLiFutuHeliaoHit(
+    hit.position,
+    a.position,
+    b.position,
+    t,
+  )
+  const pickClosest = (hits, t, outer) => {
+    const legalHits = (hits || []).filter((hit) => legal(hit, t))
+    if (!legalHits.length) return null
+    legalHits.sort((left, right) => dist3(left.position, outer) - dist3(right.position, outer))
+    return legalHits[0]
+  }
+  const accept = (hit) => {
+    if (!hit) return false
+    appendSkinPoint(points, liftHit(hit), previousRef)
+    return true
+  }
+  accept({ position: a.position, normal: a.normal })
+  for (let index = 1; index < count - 1; index += 1) {
+    const t = index / (count - 1)
+    const outer = liFutuHeliaoOuterPoint(a.position, b.position, t)
+    const guide = liFutuHeliaoGuide(a.position, b.position, t)
+    const side = Math.sign(outer[0] || sideX) || 1
+    const faceX = Math.abs(a.position[0]) <= Math.abs(b.position[0]) ? a.position[0] : b.position[0]
+    const maxZ = Math.max(a.position[2], b.position[2], outer[2])
+    const dx = Math.max(statureWorld(0.006), span * 0.028)
+    const xs = [outer[0]]
+    for (const frac of [0.12, 0.24, 0.38, 0.55, 0.72]) {
+      xs.push(outer[0] + (faceX - outer[0]) * frac)
+    }
+    xs.push(outer[0] + side * dx)
+    const candidates = []
+    for (const ox of xs) {
+      const frontHits = raySkinHits(
+        new THREE.Vector3(ox, outer[1], maxZ + extraReach * 0.55),
+        new THREE.Vector3(0, 0, -1),
+        extraReach,
+        new THREE.Vector3(0, 0, 1),
+      )
+      const front = pickClosest(frontHits, t, outer)
+      if (front) {
+        candidates.push(front)
+        break
+      }
+    }
+    const probe = [
+      outer[0] + guide[0] * standoff,
+      outer[1] + guide[1] * standoff,
+      outer[2] + guide[2] * standoff,
+    ]
+    const inward = pickClosest(
+      projectFromOutsideHits(new THREE.Vector3(...probe), guide, standoff),
+      t,
+      outer,
+    )
+    if (inward) candidates.push(inward)
+    const nearest = closestSkinHit(outer, {
+      maxDistance: Math.min(extraReach, Math.max(statureWorld(0.04), span * 0.22)),
+      sideX,
+      guideNormal: guide,
+    })
+    if (legal(nearest, t)) candidates.push(nearest)
+    candidates.sort((left, right) => dist3(left.position, outer) - dist3(right.position, outer))
+    const hit = candidates[0] || null
+    if (hit) accept(hit)
+  }
+  accept({ position: b.position, normal: b.normal })
+  if (points.length < 3) return null
+  const arrays = points.map((point) => [point.x, point.y, point.z])
+  const simplified = simplifyPolylineWithNormals(
+    arrays,
+    arrays.map((_, index) => liFutuHeliaoGuide(
+      a.position,
+      b.position,
+      arrays.length > 1 ? index / (arrays.length - 1) : 0.5,
+    )),
+    statureWorld(0.0018),
+  )
+  return simplified.points.map((point) => new THREE.Vector3(...point))
+}
+
 function skinSegmentPoints(a, b, {
   allowGeodesic = true,
   preferWrap = false,
@@ -2936,6 +3036,7 @@ function skinSegmentPoints(a, b, {
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   const gbShoulderAxilla = isGbShoulderAxillaSpan(fromCode, toCode, a.position, b.position)
   const kiYingu = isKiYinguChangqiangPair(fromCode, toCode)
+  const liFace = isLiFutuHeliaoPair(fromCode, toCode)
   const duBack = isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)
   const teHead = isTeHeadPair(fromCode, toCode)
   if (siArmShoulder) {
@@ -2948,6 +3049,10 @@ function skinSegmentPoints(a, b, {
   }
   if (kiYingu) {
     const wrapped = snapKiYinguChangqiangToSkin(a, b)
+    if (wrapped?.length >= 3) return wrapped
+  }
+  if (liFace) {
+    const wrapped = snapLiFutuHeliaoToSkin(a, b)
     if (wrapped?.length >= 3) return wrapped
   }
   if (teHead) {
@@ -2963,7 +3068,7 @@ function skinSegmentPoints(a, b, {
       end.clone().addScaledVector(endNormal, SKIN_LIFT),
     ]
   }
-  const facingLimb = !siArmShoulder && !gbShoulderAxilla && !kiYingu && isFacingLimbSpan(a.position, b.position, normalDot)
+  const facingLimb = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && isFacingLimbSpan(a.position, b.position, normalDot)
   if (facingLimb) {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
@@ -2979,7 +3084,7 @@ function skinSegmentPoints(a, b, {
     })
     if (wrapped?.length >= 2) return wrapped
   }
-  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && (
+  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && (
     preferWrap
     || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
@@ -2987,7 +3092,7 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !kiYingu && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior) {
     const geodesic = geodesicOnSkin(a, b)
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
@@ -3003,7 +3108,7 @@ function skinSegmentPoints(a, b, {
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !gbShoulderAxilla && !kiYingu && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -3257,7 +3362,9 @@ function drawPairSkinSegment(route, pair, override = null) {
     : restPathArrays(pair.fromNode, pair.toNode)
   const fromCode = routeNodeCode(pair.fromNode)
   const toCode = routeNodeCode(pair.toNode)
-  if (!meridianUsesLocators(route.meridianId) || isKiYinguChangqiangPair(fromCode, toCode)) {
+  if (!meridianUsesLocators(route.meridianId)
+    || isKiYinguChangqiangPair(fromCode, toCode)
+    || isLiFutuHeliaoPair(fromCode, toCode)) {
     return vectorsFromArrays(rest)
   }
   const count = visibleHandleCount(
@@ -3338,6 +3445,10 @@ function restPathArrays(fromNode, toNode) {
     if (isKiYinguChangqiangPair(fromCode, toCode)) {
       const mid = cached[Math.floor(cached.length / 2)]
       return Boolean(mid) && isKiYinguChangqiangHit(mid, a.position, b.position, 0.5)
+    }
+    if (isLiFutuHeliaoPair(fromCode, toCode)) {
+      const mid = cached[Math.floor(cached.length / 2)]
+      return Boolean(mid) && isLiFutuHeliaoHit(mid, a.position, b.position, 0.5)
     }
     return true
   }
@@ -4034,6 +4145,7 @@ function addRouteEditHandles(route) {
   acupointPairs(route)
     .filter((pair) => isSegmentSelected(route, pair.fromPointId, pair.toPointId))
     .filter((pair) => !isKiYinguChangqiangPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
+    .filter((pair) => !isLiFutuHeliaoPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
     .forEach((pair) => {
       const rest = restPathArrays(pair.fromNode, pair.toNode)
       const count = visibleHandleCount(polylineArcLength(rest), referenceArc, pair.handles.length)
@@ -6197,6 +6309,13 @@ if (isDevMode(import.meta.env)) {
       camera.lookAt(controls.target)
       controls.update()
       syncZoomUI({ force: true })
+    },
+    closestSkin(position, maxDistance) {
+      const hit = closestSkinHit(position, {
+        maxDistance: Number(maxDistance) || statureWorld(0.08),
+        sideX: position?.[0],
+      })
+      return hit ? { position: hit.position, distance: hit.distance, normal: hit.normal } : null
     },
   }
 }

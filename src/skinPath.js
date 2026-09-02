@@ -1,8 +1,8 @@
 /** Skin-following helpers for meridian polylines (no Three.js dependency). */
 
-import { isKiYinguChangqiangPair } from './catalog.js'
+import { isKiYinguChangqiangPair, isLiFutuHeliaoPair } from './catalog.js'
 
-export { isKiYinguChangqiangPair }
+export { isKiYinguChangqiangPair, isLiFutuHeliaoPair }
 
 /** Tiny lift so tubes clear the mesh without looking floaty. */
 export const SKIN_LIFT = 0.0055
@@ -231,6 +231,82 @@ export function isKiYinguChangqiangHit(hit = [0, 0, 0], from = [0, 0, 0], to = [
   return true
 }
 
+/** 扶突 is the lateral neck end; 禾髎 is the near-midline lip end. */
+function liFutuHeliaoEnds(from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const neck = Math.abs(a[0]) >= Math.abs(b[0]) ? a : b
+  const face = neck === a ? b : a
+  return { neck, face, flipped: neck !== a }
+}
+
+/**
+ * Hold neck laterality until here, then sweep across the cheek to 禾髎.
+ * Earlier medial lerp cuts through the mandible.
+ */
+export const LI_FUTU_HELIAO_JAW_T = 0.18
+
+/** 0 on the neck climb; 0→1 across the cheek to 禾髎. */
+export function liFutuHeliaoCheekT(t = 0) {
+  const tt = clamp01(t)
+  if (tt <= LI_FUTU_HELIAO_JAW_T) return 0
+  return (tt - LI_FUTU_HELIAO_JAW_T) / (1 - LI_FUTU_HELIAO_JAW_T)
+}
+
+/** Outside-skin sample: anterolateral neck, then the cheek, then 禾髎. */
+export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const span = Math.max(length3(sub3(face, neck)), 1e-6)
+  const cheek = smoothstep01(liFutuHeliaoCheekT(tt))
+  const x = neck[0] + (face[0] - neck[0]) * cheek
+  const y = neck[1] + (face[1] - neck[1]) * tt
+  const zLerp = neck[2] + (face[2] - neck[2]) * tt
+  const anterior = Math.sin(Math.PI * tt) * span * 0.10
+  return [x, y, zLerp + anterior]
+}
+
+/** Cast from in front of the cheek / neck onto the face (+Z, slightly lateral). */
+export function liFutuHeliaoGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { neck, flipped } = liFutuHeliaoEnds(from, to)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const cheek = liFutuHeliaoCheekT(tt)
+  const side = Math.sign(neck[0]) || 1
+  return normalize([
+    side * (0.72 - 0.38 * cheek),
+    0.10,
+    0.58 + 0.38 * cheek,
+  ])
+}
+
+export function liFutuHeliaoCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.max(0.02, span * 0.12)
+}
+
+/** Keep samples on this neck–cheek; reject jaw interior and the far face. */
+export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
+  const p = asPathPoint(hit)
+  const span = Math.max(length3(sub3(face, neck)), 1e-6)
+  const tt = flipped ? 1 - clamp01(t) : clamp01(t)
+  const yMin = Math.min(neck[1], face[1]) - span * 0.12
+  const yMax = Math.max(neck[1], face[1]) + span * 0.12
+  if (p[1] < yMin || p[1] > yMax) return false
+  const side = Math.sign(neck[0]) || 1
+  if (side * p[0] < -span * 0.06) return false
+  const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
+  if (Math.abs(p[0]) > maxAbsX + span * 0.16) return false
+  const cheek = liFutuHeliaoCheekT(tt)
+  if (cheek < 0.02 && Math.abs(p[0]) < Math.abs(neck[0]) * 0.35) return false
+  if (p[2] < Math.min(neck[2], face[2]) - span * 0.06) return false
+  if (p[2] > Math.max(neck[2], face[2]) + span * 0.42) return false
+  const zLerp = neck[2] + (face[2] - neck[2]) * tt
+  if (p[2] < zLerp + Math.sin(Math.PI * tt) * span * 0.008) return false
+  const outer = liFutuHeliaoOuterPoint(from, to, t)
+  return length3(sub3(p, outer)) <= Math.max(0.03, span * 0.34)
+}
+
 /** Push a through-spine chord out onto the back skin (−Z). */
 export function posteriorWrapGuide(chordPoint = [0, 0, 0]) {
   const x = Number(chordPoint[0]) || 0
@@ -413,6 +489,7 @@ export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to
     || isSiXiaohaiJianzhenPair(fromCode, toCode)
     || isJianjingYuanyePair(fromCode, toCode)
     || isKiYinguChangqiangPair(fromCode, toCode)
+    || isLiFutuHeliaoPair(fromCode, toCode)
   ) {
     return false
   }

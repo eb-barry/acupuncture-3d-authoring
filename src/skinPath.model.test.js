@@ -8,6 +8,8 @@ import {
   gbJianjingYuanyeGuidePoints,
   isGbAxillaHollow,
   isPointBehindSurface,
+  liFutuHeliaoOuterPoint,
+  isLiFutuHeliaoHit,
 } from './skinPath.js'
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
@@ -147,5 +149,50 @@ describe('肩井–淵腋 corridor on the built-in body meshes', () => {
   it('stays outside the female mesh and on the lateral chest, not through the shoulder', async () => {
     const { height, meshes } = await loadFramedBody('models/female-character.glb')
     assertLateralChestCorridor(meshes, height, height / 1.79)
+  }, 180000)
+})
+
+describe('扶突–禾髎 neck–cheek corridor on the female mesh', () => {
+  it('keeps 扶突→禾髎 samples on the cheek, not inside the jaw', async () => {
+    const { height, meshes } = await loadFramedBody('models/female-character.glb')
+    const li18 = nearestVertex(
+      meshes,
+      (point) => (
+        point[0] > height * 0.022 && point[0] < height * 0.055
+        && point[1] > height * 0.82 && point[1] < height * 0.88
+        && point[2] > height * 0.012 && point[2] < height * 0.05
+      ),
+      [height * 0.035, height * 0.845, height * 0.028],
+    )
+    const li19 = nearestVertex(
+      meshes,
+      (point) => (
+        point[0] > height * 0.003 && point[0] < height * 0.018
+        && point[1] > height * 0.90 && point[1] < height * 0.945
+        && point[2] > height * 0.045
+      ),
+      [height * 0.008, height * 0.92, height * 0.06],
+    )
+    expect(li18).toBeTruthy()
+    expect(li19).toBeTruthy()
+    const from = li18.point
+    const to = li19.point
+    const span = Math.hypot(from[0] - to[0], from[1] - to[1], from[2] - to[2])
+    const snapRadius = Math.max(height * 0.05, span * 0.55)
+    const chord = [
+      (from[0] + to[0]) / 2,
+      (from[1] + to[1]) / 2,
+      (from[2] + to[2]) / 2,
+    ]
+    expect(isLiFutuHeliaoHit(chord, from, to, 0.5)).toBe(false)
+    for (const t of [0.28, 0.55, 0.78]) {
+      const outer = liFutuHeliaoOuterPoint(from, to, t)
+      expect(isLiFutuHeliaoHit(outer, from, to, t)).toBe(true)
+      const hit = closestHit(meshes, outer, snapRadius)
+      expect(hit).toBeTruthy()
+      expect(hit.distance).toBeLessThan(span * 0.45)
+      expect(hit.position[0] * from[0]).toBeGreaterThan(0)
+      expect(hit.position[2]).toBeGreaterThan(Math.min(from[2], to[2]) - span * 0.05)
+    }
   }, 180000)
 })
