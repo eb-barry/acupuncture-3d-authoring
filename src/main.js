@@ -2591,19 +2591,35 @@ function marchOnSkinHits(a, b, { hint = null, stepScale = 0.5 } = {}) {
 }
 
 /** Palm → pinky pad, then a short ordered wrap onto the nail — never orbit the tip. */
-function sampleDigitSkinPath(a, b, tipPos, tipNormal, { distal, palmar, sideX, tipOnSkin = false }) {
+function sampleDigitSkinPath(a, b, tipPos, tipNormal, {
+  distal,
+  palmar,
+  sideX,
+  tipOnSkin = false,
+  forcePalmar = false,
+} = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   const palmarVec = new THREE.Vector3(...palmar)
   const tipGuide = Array.isArray(tipNormal) ? tipNormal : toArray(tipNormal)
   const span = Math.max(start.distanceTo(end), 1e-6)
-  const wrapNeeded = new THREE.Vector3(...a.normal).normalize()
+  const wrapNeeded = !forcePalmar && new THREE.Vector3(...a.normal).normalize()
     .dot(new THREE.Vector3(...b.normal).normalize()) < 0.25
+  const palmarEnd = wrapNeeded
+    ? (tipOnSkin ? new THREE.Vector3(...toArray(tipPos)) : end.clone().addScaledVector(palmarVec, 0.008))
+    : end.clone()
+  const palmarFrom = toArray(start)
+  const palmarTo = toArray(palmarEnd)
   const points = []
   const previousRef = { current: null }
   let lastProgress = -Infinity
-  const accept = (hit) => {
+  const accept = (hit, corridorFrom, corridorTo, maxOff) => {
     if (!hit || !isOnDigitSkin(hit.position, a.position, b.position, 0.030)) return false
+    if (
+      corridorFrom
+      && corridorTo
+      && distanceToSegment3(hit.position, corridorFrom, corridorTo) > maxOff
+    ) return false
     const progress = digitAxisProgress(hit.position, a.position, b.position)
     if (progress < lastProgress - 0.002) return false
     const lifted = new THREE.Vector3(...hit.position)
@@ -2613,11 +2629,8 @@ function sampleDigitSkinPath(a, b, tipPos, tipNormal, { distal, palmar, sideX, t
     return true
   }
 
-  accept({ position: a.position, normal: a.normal })
+  accept({ position: a.position, normal: a.normal }, palmarFrom, palmarTo, 0.012)
 
-  const palmarEnd = wrapNeeded
-    ? (tipOnSkin ? new THREE.Vector3(...toArray(tipPos)) : end.clone().addScaledVector(palmarVec, 0.008))
-    : end.clone()
   const palmarCount = Math.min(24, Math.max(10, Math.ceil(span / 0.007) + 8))
   for (let index = 1; index < palmarCount; index += 1) {
     const t = index / palmarCount
@@ -2625,25 +2638,27 @@ function sampleDigitSkinPath(a, b, tipPos, tipNormal, { distal, palmar, sideX, t
     const outside = chord.clone().addScaledVector(palmarVec, 0.01)
     const hit = projectFromOutside(outside, palmar, 0.016)
       || closestSkinHit(toArray(outside), { maxDistance: 0.014, sideX, guideNormal: palmar })
-    accept(hit)
+    accept(hit, palmarFrom, palmarTo, 0.010)
   }
-  if (tipOnSkin) accept({ position: toArray(tipPos), normal: tipGuide })
+  if (tipOnSkin) accept({ position: toArray(tipPos), normal: tipGuide }, palmarFrom, palmarTo, 0.012)
 
   if (wrapNeeded) {
     const wrapFrom = points.length ? points[points.length - 1].clone() : palmarEnd
-    const wrapCount = 6
+    const wrapFromArr = toArray(wrapFrom)
+    const wrapToArr = toArray(end)
+    const wrapCount = 4
     for (let index = 1; index <= wrapCount; index += 1) {
       const t = index / wrapCount
       const sample = wrapFrom.clone().lerp(end, t)
       const guide = slerpUnitVectors(palmar, b.normal, t, distal)
-      const outside = sample.clone().addScaledVector(new THREE.Vector3(...guide), 0.01)
-      const hit = projectFromOutside(outside, guide, 0.016)
-        || closestSkinHit(toArray(outside), { maxDistance: 0.014, sideX, guideNormal: guide })
-      accept(hit)
+      const outside = sample.clone().addScaledVector(new THREE.Vector3(...guide), 0.008)
+      const hit = projectFromOutside(outside, guide, 0.014)
+        || closestSkinHit(toArray(outside), { maxDistance: 0.012, sideX, guideNormal: guide })
+      accept(hit, wrapFromArr, wrapToArr, 0.007)
     }
   }
 
-  accept({ position: b.position, normal: b.normal })
+  accept({ position: b.position, normal: b.normal }, palmarFrom, toArray(end), 0.012)
   return points
 }
 
@@ -2690,7 +2705,15 @@ function snapDigitTipWrap(a, b) {
 
   const fallback = finish(marchOnSkinHits(a, b, { hint: distal, stepScale: 0.45 }))
   if (fallback) return fallback
-  return null
+
+  const palmarOnly = finish(sampleDigitSkinPath(a, b, tipPos, tipNormal, {
+    distal,
+    palmar,
+    sideX,
+    tipOnSkin,
+    forcePalmar: true,
+  }))
+  return palmarOnly
 }
 
 function sameHeadSideHit(hit, sideX) {
@@ -3845,6 +3868,13 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
     const wrapped = snapLiFutuHeliaoToSkin(fromResolved, toResolved, usable, restArrays)
     if (wrapped?.length >= 3) return wrapped
   }
+  // Default locators would split 少府→少衝 and re-wrap each span around the
+  // nail, stacking into a knot at 少衝. Keep one palmar-to-nail polyline.
+  if (maleHtPinkyPair(fromCode, toCode)) {
+    return restArrays.length >= 2
+      ? vectorsFromArrays(restArrays)
+      : drawSpan(fromResolved, toResolved)
+  }
   if (!records.length) {
     return restArrays.length >= 2
       ? vectorsFromArrays(restArrays)
@@ -3897,7 +3927,8 @@ function drawPairSkinSegment(route, pair, override = null) {
   const toCode = routeNodeCode(pair.toNode)
   if (!meridianUsesLocators(route.meridianId)
     || isKiYinguChangqiangPair(fromCode, toCode)
-    || isGbChenglingNaokongPair(fromCode, toCode)) {
+    || isGbChenglingNaokongPair(fromCode, toCode)
+    || maleHtPinkyPair(fromCode, toCode)) {
     return vectorsFromArrays(rest)
   }
   const count = visibleHandleCount(
@@ -3992,6 +4023,11 @@ function restPathArrays(fromNode, toNode) {
     if (isGbChenglingNaokongPair(fromCode, toCode)) {
       const mid = cached[Math.floor(cached.length / 2)]
       return Boolean(mid) && isGbChenglingNaokongHit(mid, a.position, b.position, 0.5)
+    }
+    if (maleHtPinkyPair(fromCode, toCode)) {
+      const chord = dist3(a.position, b.position)
+      if (chord > 1e-4 && polylineArcLength(cached) > chord * 1.85) return false
+      return digitPathIsMonotonic(cached, a.position, b.position, 0.005)
     }
     return true
   }
