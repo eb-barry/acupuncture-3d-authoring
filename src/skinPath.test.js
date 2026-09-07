@@ -12,6 +12,7 @@ import {
   isDigitTipWrap,
   isOnDigitSkin,
   digitPathIsMonotonic,
+  pruneSharpPolylineTurns,
   isTeEarArcPair,
   isTeHeadPair,
   isTeHelixPair,
@@ -321,6 +322,10 @@ describe('skin path wrapping', () => {
       shaofu,
       shaochong,
     ], shaofu, shaochong)).toBe(false)
+    const spike = [shaofu, [0.52, 0.88, 0.03], [0.50, 0.90, 0.04], [0.52, 0.87, 0.03], shaochong]
+    const cleaned = pruneSharpPolylineTurns(spike, 0.15)
+    expect(cleaned.length).toBeLessThan(spike.length)
+    expect(digitPathIsMonotonic(cleaned, shaofu, shaochong)).toBe(true)
     const femaleShaofu = shaofu.map((value) => value * 232)
     const femaleShaochong = shaochong.map((value) => value * 232)
     expect(isDigitTipWrap(femaleShaofu, femaleShaochong, dot)).toBe(false)

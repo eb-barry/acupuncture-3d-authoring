@@ -1033,6 +1033,30 @@ export function digitPathIsMonotonic(points = [], from = [0, 0, 0], to = [0, 0, 
   return reversals <= 1
 }
 
+/** Drop vertices that reverse the running tangent (ribbon-scribble spikes). */
+export function pruneSharpPolylineTurns(points = [], minDot = 0.15) {
+  if (!points || points.length < 4) return points
+  const asVec = (point) => (point?.isVector3 ? [point.x, point.y, point.z] : asPathPoint(point))
+  const keep = [points[0]]
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const prev = asVec(keep[keep.length - 1])
+    const curr = asVec(points[index])
+    const next = asVec(points[index + 1])
+    const toCurr = sub3(curr, prev)
+    const toNext = sub3(next, curr)
+    const len1 = length3(toCurr)
+    if (len1 < 1e-6) continue
+    const len2 = length3(toNext)
+    if (len2 < 1e-6) continue
+    const dot = (toCurr[0] * toNext[0] + toCurr[1] * toNext[1] + toCurr[2] * toNext[2])
+      / (len1 * len2)
+    if (dot < minDot) continue
+    keep.push(points[index])
+  }
+  keep.push(points[points.length - 1])
+  return keep.length >= 2 ? keep : points
+}
+
 export function maxPolylineEdge(points = []) {
   let max = 0
   for (let index = 1; index < points.length; index += 1) {
