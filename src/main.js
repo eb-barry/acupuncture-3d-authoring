@@ -5129,6 +5129,16 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
         ? snapLiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest)
         : hit
   if (!placed?.position) return state
+  const placedTooClose = records.some((record, cursor) => {
+    if (cursor === index) return false
+    const gap = Math.hypot(
+      placed.position[0] - record.position[0],
+      placed.position[1] - record.position[1],
+      placed.position[2] - record.position[2],
+    )
+    return gap < minGap
+  })
+  if (isLiFutuHeliaoPair(fromCode, toCode) && placedTooClose) return state
   if (!records.length) {
     records.push({
       type: 'control',
@@ -6677,12 +6687,22 @@ if (isDevMode(import.meta.env)) {
         hit,
         handleIndex,
       )
+      const written = next.meridians.find((item) => item.id === route.id)
+      const controlYs = (written?.nodes || [])
+        .filter((node) => node.type === 'control')
+        .map((node) => node.position)
+      const changed = (controlYs.length > 0)
+        && controlYs.some((position, cursor) => {
+          const prev = (route.nodes || []).filter((node) => node.type === 'control')[cursor]
+          return !prev || dist3(position, prev.position) > 1e-4
+        })
+      if (!changed) return { ok: false, reason: 'unchanged', position: hit.position, stored: controlYs }
       state = history.commit(next)
       persistState()
       rebuildAnnotations()
       refreshRouteEditHandles()
       updateUI()
-      return { ok: true, position: hit.position }
+      return { ok: true, position: hit.position, stored: controlYs }
     },
   }
 }
