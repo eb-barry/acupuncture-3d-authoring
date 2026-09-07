@@ -354,8 +354,8 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   if (tt < 0.42 && Math.abs(p[0]) < Math.abs(neck[0]) * 0.68) return false
   const outer = liFutuHeliaoOuterPoint(from, to, t)
   // Male jaw/cheek skin sits behind this outer guide. Reject only a
-  // through-mandible / posterior-neck sample, not the face itself.
-  if (tt > 0.16 && tt < 0.84 && p[2] < chord[2] - span * 0.02) return false
+  // through-mandible sample, not the face itself.
+  if (tt > 0.16 && tt < 0.84 && p[2] < chord[2] - span * 0.08) return false
   return length3(sub3(p, outer)) <= Math.max(0.04, span * 0.85)
 }
 

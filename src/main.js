@@ -3085,6 +3085,15 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
   for (let index = 1; index < guides.length - 1; index += 1) {
     const t = index / (guides.length - 1)
     const sample = guides[index]
+    if (hasUserHandles) {
+      const control = sanitized.find((record) => (
+        Math.hypot(record.position[0] - sample[0], record.position[1] - sample[1]) < span * 0.012
+      ))
+      if (control) {
+        accept(control)
+        continue
+      }
+    }
     const hit = skinAt(sample[0], sample[1], t)
     if (hit) accept(hit)
   }
@@ -6624,6 +6633,34 @@ if (isDevMode(import.meta.env)) {
         handleCount: handleVisuals.length,
         restArc: polylineArcLength(restPathArrays(pair.fromNode, pair.toNode)),
       }
+    },
+    moveSelectedHandle(handleIndex, position) {
+      if (!selected || selected.type !== 'meridian') return { ok: false, reason: 'no-pair' }
+      const route = state.meridians.find((item) => item.id === selected.id)
+      if (!route) return { ok: false, reason: 'missing-route' }
+      const pair = acupointPairs(route).find((item) =>
+        item.fromPointId === selected.fromPointId && item.toPointId === selected.toPointId)
+      if (!pair) return { ok: false, reason: 'missing-pair' }
+      const hit = snapLiHandleToSkin(
+        { position, normal: [0, 0, 1] },
+        resolvedNode(pair.fromNode),
+        resolvedNode(pair.toNode),
+        restPathArrays(pair.fromNode, pair.toNode),
+      )
+      if (!hit) return { ok: false, reason: 'off-skin' }
+      const next = setSegmentHandle(
+        route.id,
+        pair.fromPointId,
+        pair.toPointId,
+        hit,
+        handleIndex,
+      )
+      state = history.commit(next)
+      persistState()
+      rebuildAnnotations()
+      refreshRouteEditHandles()
+      updateUI()
+      return { ok: true, position: hit.position }
     },
   }
 }
