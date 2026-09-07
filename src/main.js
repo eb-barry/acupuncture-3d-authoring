@@ -4368,6 +4368,9 @@ function trimCache(cache, limit) {
  */
 function conformRunToSkin(points) {
   const scale = Math.max(statureScale(), 1e-3)
+  const start = toArray(points[0])
+  const end = toArray(points[points.length - 1])
+  const digitRun = isDigitTipWrap(start, end, -1)
   const step = sampleStepForQuality(dragging ? 'coarse' : 'fine') * scale
   const snap = 0.02 * scale
   const pull = MAX_CONFORM_PULL * scale
@@ -4375,25 +4378,29 @@ function conformRunToSkin(points) {
   const key = [
     points.length,
     step,
+    digitRun ? 'digit' : 'body',
     quantizeKey(points[0]),
     quantizeKey(mid),
     quantizeKey(points[points.length - 1]),
   ].join('|')
   const cached = conformCache.get(key)
   if (cached) return cached
-  const dense = densifyPath(points.map((point) => toArray(point)), step)
-  const start = toArray(points[0])
-  const end = toArray(points[points.length - 1])
+  // Fingers are ~8 mm radius: 2 mm chords between palmar and nail samples cut
+  // through the digit, and nearest-surface hops to the opposite wall.
+  const dense = digitRun
+    ? points.map((point) => toArray(point))
+    : densifyPath(points.map((point) => toArray(point)), step)
   const lockMidlineX = Math.abs(start[0]) <= statureWorld(0.02)
     && Math.abs(end[0]) <= statureWorld(0.02)
-  // Two passes: nearest-point first, only to learn a stable normal per sample,
-  // then drop each sample along that normal so the drawn line keeps the
-  // authored route instead of sliding toward whichever crease wall is nearer.
-  const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point, null, snap), { maxPull: pull })
+  const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point, null, snap), {
+    maxPull: pull,
+    minNormalDot: digitRun ? -1 : 0.2,
+  })
   const guides = smoothPathNormals(estimate.normals, 2)
   const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide, snap), {
     guides,
     maxPull: pull,
+    minNormalDot: digitRun ? -1 : 0.2,
   })
   const run = {
     points: conformed.points.map((point, index) => {
