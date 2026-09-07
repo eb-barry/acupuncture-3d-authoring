@@ -410,6 +410,10 @@ describe('skin path wrapping', () => {
     expect(Math.abs(jawFront[0])).toBeGreaterThan(Math.abs(li18[0]) * 0.7)
     expect(jawFront[2]).toBeGreaterThan(chordMid[2] + 0.006)
     expect(isLiFutuHeliaoHit(jawFront, li18, li19, 0.40)).toBe(true)
+    const maleJawSkin = [jawFront[0], jawFront[1], chordMid[2] + 0.004]
+    expect(maleJawSkin[2]).toBeLessThan(jawFront[2])
+    expect(isLiFutuHeliaoHit(maleJawSkin, li18, li19, 0.40)).toBe(true)
+    expect(isLiFutuHeliaoHandleOk(maleJawSkin, li18, li19)).toBe(true)
     const cheek = liFutuHeliaoOuterPoint(li18, li19, 0.68)
     expect(Math.abs(cheek[0])).toBeLessThan(Math.abs(li18[0]) - 0.01)
     expect(Math.abs(cheek[0])).toBeGreaterThan(Math.abs(li19[0]))
