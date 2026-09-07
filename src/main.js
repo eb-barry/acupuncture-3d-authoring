@@ -1490,10 +1490,23 @@ function liFaceSkinAtXY(x, y, from, to, legal) {
     1e-6,
   )
   const neckX = Math.abs(from[0]) >= Math.abs(to[0]) ? from[0] : to[0]
+  const faceX = neckX === from[0] ? to[0] : from[0]
   const side = Math.sign(neckX) || 1
   const extraReach = Math.max(statureWorld(0.14), span * 1.05)
   const originZ = Math.max(from[2], to[2]) + extraReach * 0.7
   const yTol = Math.max(statureWorld(0.014), span * 0.08)
+  const xSlack = Math.max(span * 0.14, Math.abs(x) * 0.45)
+  const notLipJump = (hit) => {
+    if (Math.abs(hit.position[0] - x) > xSlack) return false
+    // A lateral cheek request must not snap onto the lips / philtrum.
+    if (
+      Math.abs(x) > Math.abs(faceX) + span * 0.05
+      && Math.abs(hit.position[0]) < Math.abs(x) * 0.55
+    ) {
+      return false
+    }
+    return true
+  }
   const tryXY = (px, py) => {
     const hits = (raySkinHits(
       new THREE.Vector3(px, py, originZ),
@@ -1502,6 +1515,7 @@ function liFaceSkinAtXY(x, y, from, to, legal) {
       new THREE.Vector3(0, 0, 1),
     ) || []).filter((hit) => (
       Math.abs(hit.position[1] - py) <= yTol
+      && notLipJump(hit)
       && legal(hit)
     ))
     if (!hits.length) return null
@@ -1512,13 +1526,23 @@ function liFaceSkinAtXY(x, y, from, to, legal) {
   if (direct) return direct
   let best = null
   let bestD = Infinity
-  for (const fraction of [0.035, 0.07, 0.11, 0.16, 0.22, 0.30]) {
-    for (const dx of [side * span * fraction, -side * span * fraction]) {
-      const candidate = tryXY(x + dx, y)
-      if (!candidate) continue
-      const d = Math.hypot(candidate.position[0] - x, candidate.position[1] - y)
+  for (const fraction of [0.03, 0.06, 0.1, 0.15, 0.22]) {
+    const lateral = tryXY(x + side * span * fraction, y)
+    if (lateral) {
+      const d = Math.hypot(lateral.position[0] - x, lateral.position[1] - y)
       if (d < bestD) {
-        best = candidate
+        best = lateral
+        bestD = d
+      }
+    }
+  }
+  if (best) return best
+  for (const fraction of [0.03, 0.06, 0.1]) {
+    const medial = tryXY(x - side * span * fraction, y)
+    if (medial) {
+      const d = Math.hypot(medial.position[0] - x, medial.position[1] - y)
+      if (d < bestD) {
+        best = medial
         bestD = d
       }
     }
@@ -3070,9 +3094,7 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
   const legalAt = (t) => (hit) => {
     if (!hit) return false
     if (hit.position[2] < neck[2] - span * 0.03) return false
-    return hasUserHandles
-      ? isLiFutuHeliaoHandleOk(hit.position, a.position, b.position)
-      : isLiFutuHeliaoHit(hit.position, a.position, b.position, t)
+    return isLiFutuHeliaoHandleOk(hit.position, a.position, b.position)
   }
   const skinAt = (x, y, t) => liFaceSkinAtXY(x, y, a.position, b.position, legalAt(t))
   accept({ position: a.position, normal: a.normal })
