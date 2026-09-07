@@ -92,6 +92,7 @@ describe('authorized acupuncture catalog', () => {
     expect(isHtShaofuShaochongPair('HT9', 'HT8')).toBe(true)
     expect(isHtShaofuShaochongPair('HT7', 'HT8')).toBe(false)
     expect(isHtShaofuShaochongPair('HT8', 'HT7')).toBe(false)
+    expect(isHtShaofuShaochongPair('HT7', 'HT9')).toBe(false)
   })
 
   it('treats 扶突–禾髎 as the large-intestine neck-to-lip pair', () => {
