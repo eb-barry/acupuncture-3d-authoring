@@ -309,7 +309,11 @@ describe('skin path wrapping', () => {
     expect(isOnDigitSkin(shaofu, shaofu, shaochong)).toBe(true)
     expect(isOnDigitSkin([0.48, 0.88, 0.03], shaofu, shaochong)).toBe(false)
     expect(isOnDigitSkin([0.58, 0.86, 0.03], shaofu, shaochong)).toBe(false)
+    expect(isOnDigitSkin(probe, shaofu, shaochong, 0.030)).toBe(true)
     expect(maxPolylineEdge([shaofu, [0.52, 0.88, 0.03], shaochong])).toBeLessThan(0.05)
+    const femaleShaofu = shaofu.map((value) => value * 232)
+    const femaleShaochong = shaochong.map((value) => value * 232)
+    expect(isDigitTipWrap(femaleShaofu, femaleShaochong, dot)).toBe(false)
   })
 
   it('treats 少海→靈道 as a straight inner-arm span, not a wrap through the limb', () => {
