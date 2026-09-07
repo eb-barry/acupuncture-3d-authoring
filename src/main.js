@@ -1587,26 +1587,23 @@ function handleSkinHit(event, drag) {
         extraReach * 1.7,
         new THREE.Vector3(0, 0, 1),
       ), planeArr)
+      const skinHits = [alongRay, picked].filter(Boolean)
+      skinHits.sort((left, right) => right.position[2] - left.position[2])
+      const bestSkin = skinHits[0]
+      if (bestSkin) return bestSkin
       const planeLegal = isLiFutuHeliaoHandleOk(planeArr, from.position, to.position)
         && isProbeOnSameLimbSegment(rest, planeArr, maxOffPath, {
           skipLimbGap,
           worldScale: scale,
         })
-      const skinHits = [alongRay, picked].filter(Boolean)
-      skinHits.sort((left, right) => right.position[2] - left.position[2])
-      const bestSkin = skinHits[0]
+      // Female jaw hollow has no mesh at this XY. Keep the plane point
+      // instead of snapping to the throat behind the camera ray.
       if (planeLegal) {
-        // Empty space in front of the jaw hollow has no mesh. Keep the
-        // plane point so locators can sit there instead of snapping to
-        // the throat behind the camera ray.
-        if (!bestSkin || bestSkin.position[2] < planeArr[2] - span * 0.015) {
-          return {
-            position: [...planeArr],
-            normal: [...liFutuHeliaoGuide(from.position, to.position, 0.5)],
-          }
+        return {
+          position: [...planeArr],
+          normal: [...liFutuHeliaoGuide(from.position, to.position, 0.5)],
         }
       }
-      if (bestSkin) return bestSkin
     }
   }
   if (alongRay) return alongRay
@@ -3002,11 +2999,12 @@ function snapLiHandleToSkin(placed, fromResolved, toResolved, rest = []) {
     new THREE.Vector3(0, 0, 1),
   ).filter(legal)
   frontHits.sort((left, right) => right.position[2] - left.position[2])
-  if (frontHits[0] && frontHits[0].position[2] >= placed.position[2] - span * 0.02) {
+  const minSkinZ = Math.min(from[2], to[2]) - span * 0.04
+  // Snap onto the face even when the outer guide sits in front of skin.
+  // Only keep a float when this XY has no anterior mesh (female jaw hollow).
+  if (frontHits[0] && frontHits[0].position[2] >= minSkinZ) {
     return { position: frontHits[0].position, normal: frontHits[0].normal }
   }
-  // In front of the jaw hollow: keep the authored point so locators are not
-  // sucked onto the under-chin recess.
   if (isLiFutuHeliaoHandleOk(placed.position, from, to)) {
     return { position: [...placed.position], normal: [...guide] }
   }
@@ -3046,16 +3044,20 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
   const side = Math.sign(neck[0]) || 1
   const points = []
   const previousRef = { current: null }
-  const minFaceZ = minZ + (maxZ - minZ) * 0.42
+  const yTol = Math.max(statureWorld(0.014), span * 0.08)
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), lift)
   const liftOuter = (outer, t) => new THREE.Vector3(...outer)
     .addScaledVector(new THREE.Vector3(...liFutuHeliaoGuide(a.position, b.position, t)), lift)
-  const yOk = (hit, t) => {
+  const chordZAtY = (y) => {
+    const yT = Math.abs(face[1] - neck[1]) > 1e-6
+      ? Math.min(1, Math.max(0, (y - neck[1]) / (face[1] - neck[1])))
+      : 0.5
+    return neck[2] + (face[2] - neck[2]) * yT
+  }
+  const yOk = (hit, yTarget) => {
     if (!hit) return false
-    const y = hit.position[1]
-    const yLerp = a.position[1] + (b.position[1] - a.position[1]) * t
-    return Math.abs(y - yLerp) <= Math.max(statureWorld(0.014), span * 0.08)
+    return Math.abs(hit.position[1] - yTarget) <= yTol
   }
   const accept = (hit) => {
     if (!hit) return false
@@ -3070,12 +3072,12 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
   )
   const pickAtXY = (x, y, t, requireFace) => {
     const hits = (frontHitsAt(x, y) || []).filter((hit) => (
-      yOk(hit, t)
+      yOk(hit, y)
       && hit.position[0] * side > -span * 0.04
       && (hasUserHandles
         ? isLiFutuHeliaoHandleOk(hit.position, a.position, b.position)
         : isLiFutuHeliaoHit(hit.position, a.position, b.position, t))
-      && (!requireFace || hit.position[2] >= minFaceZ)
+      && (!requireFace || hit.position[2] >= chordZAtY(y) - span * 0.02)
     ))
     if (!hits.length) return null
     hits.sort((left, right) => right.position[2] - left.position[2])
@@ -3097,13 +3099,14 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
       : t
     const onNeck = yT < 0.24
     const xs = [outer[0]]
-    if (!onNeck && !hasUserHandles) {
+    if (!onNeck) {
       xs.push(outer[0] * 0.78 + face[0] * 0.22)
       xs.push(outer[0] * 0.55 + face[0] * 0.45)
+      xs.push(outer[0] * 0.35 + face[0] * 0.65)
     }
     let hit = null
     for (const x of xs) {
-      const candidate = pickAtXY(x, y, t, !onNeck && !hasUserHandles)
+      const candidate = pickAtXY(x, y, t, !onNeck)
       if (candidate && (!hit || candidate.position[2] > hit.position[2])) hit = candidate
     }
     if (hit && hit.position[2] < neck[2] - span * 0.03) hit = null
