@@ -108,6 +108,12 @@ export function isKiYinguChangqiangPair(fromCode = '', toCode = '') {
   return (a === 'KI10' && b === 'GV1') || (a === 'GV1' && b === 'KI10')
 }
 
+/** 手少陰心經 少府 (HT8) → 少衝 (HT9): palm pad to the little-finger nail. */
+export function isHtShaofuShaochongPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('HT8') && codes.has('HT9')
+}
+
 /** 手陽明大腸經 扶突 (LI18) → 禾髎 (LI19): neck then cheek / upper lip. */
 export function isLiFutuHeliaoPair(fromCode = '', toCode = '') {
   const codes = new Set([String(fromCode || ''), String(toCode || '')])

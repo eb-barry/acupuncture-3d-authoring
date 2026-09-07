@@ -3,6 +3,7 @@ import {
   MERIDIANS,
   POINTS,
   POINT_BY_CODE,
+  isHtShaofuShaochongPair,
   isKiYinguChangqiangPair,
   isLiFutuHeliaoPair,
   isGbChenglingNaokongPair,
@@ -82,6 +83,15 @@ describe('authorized acupuncture catalog', () => {
     expect(isKiYinguChangqiangPair('GV1', 'KI10')).toBe(true)
     expect(isKiYinguChangqiangPair('KI10', 'KI11')).toBe(false)
     expect(isKiYinguChangqiangPair('KI11', 'GV1')).toBe(false)
+  })
+
+  it('treats 少府–少衝 as the heart palm-to-pinky pair', () => {
+    expect(POINT_BY_CODE.get('HT8').name).toBe('少府')
+    expect(POINT_BY_CODE.get('HT9').name).toBe('少衝')
+    expect(isHtShaofuShaochongPair('HT8', 'HT9')).toBe(true)
+    expect(isHtShaofuShaochongPair('HT9', 'HT8')).toBe(true)
+    expect(isHtShaofuShaochongPair('HT7', 'HT8')).toBe(false)
+    expect(isHtShaofuShaochongPair('HT8', 'HT7')).toBe(false)
   })
 
   it('treats 扶突–禾髎 as the large-intestine neck-to-lip pair', () => {
