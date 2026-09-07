@@ -2598,7 +2598,7 @@ function sampleDigitSkinPath(a, b, tipPos, tipNormal, {
     const progress = digitAxisProgress(hit.position, a.position, b.position)
     if (progress < lastProgress - 0.002) return false
     const lifted = new THREE.Vector3(...hit.position)
-      .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
+      .addScaledVector(new THREE.Vector3(...hit.normal), 0.0004)
     if (previousRef.current && maxStep && lifted.distanceTo(previousRef.current) > maxStep) {
       return false
     }
