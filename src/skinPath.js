@@ -1011,6 +1011,28 @@ export function isOnDigitSkin(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0
   return distanceToSegment(point, from, tip) <= radius
 }
 
+/** How far a sample has travelled from 少府 toward 少衝 along the finger. */
+export function digitAxisProgress(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const distal = digitDistalDir(from, to)
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  return (p[0] - a[0]) * distal[0] + (p[1] - a[1]) * distal[1] + (p[2] - a[2]) * distal[2]
+}
+
+/** True when the polyline mostly advances toward the nail, not orbiting the tip. */
+export function digitPathIsMonotonic(points = [], from = [0, 0, 0], to = [0, 0, 0], slack = 0.004) {
+  if (!points || points.length < 2) return false
+  let previous = -Infinity
+  let reversals = 0
+  for (const point of points) {
+    const sample = point?.isVector3 ? [point.x, point.y, point.z] : point
+    const progress = digitAxisProgress(sample, from, to)
+    if (progress < previous - slack) reversals += 1
+    previous = Math.max(previous, progress)
+  }
+  return reversals <= 1
+}
+
 export function maxPolylineEdge(points = []) {
   let max = 0
   for (let index = 1; index < points.length; index += 1) {

@@ -39,9 +39,10 @@ import {
   digitDistalDir,
   digitPalmarDir,
   digitTipProbe,
-  digitUlnarDir,
   isDigitTipWrap,
   isOnDigitSkin,
+  digitAxisProgress,
+  digitPathIsMonotonic,
   isTeEarArcPair,
   isTeHeadPair,
   isTeTempleHandlePair,
@@ -2482,8 +2483,11 @@ function snapFacingChordToSkin(a, b) {
 }
 
 function isUsableDigitPath(points, from, to) {
-  if (!points || points.length < 5) return false
-  if (maxPolylineEdge(points) > 0.018) return false
+  if (!points || points.length < 4) return false
+  if (maxPolylineEdge(points) > 0.02) return false
+  const chord = dist3(from, to)
+  if (chord > 1e-4 && polylineArcLength(arraysFromSkin(points)) > chord * 1.85) return false
+  if (!digitPathIsMonotonic(points, from, to, 0.005)) return false
   for (const point of points) {
     const sample = point?.isVector3 ? toArray(point) : point
     if (!isOnDigitSkin(sample, from, to, 0.030)) return false
@@ -2499,10 +2503,14 @@ function densifyDigitSkin(points, sideX, from, to, depth = 0) {
     const a = points[index - 1]
     const b = points[index]
     const span = a.distanceTo(b)
-    if (span > 0.007 && span <= 0.028) {
+    if (span > 0.007 && span <= 0.02) {
       const mid = a.clone().lerp(b, 0.5)
-      const hit = closestSkinHit(toArray(mid), { maxDistance: 0.016, sideX })
-      if (hit && isOnDigitSkin(hit.position, from, to, 0.030)) {
+      const hit = closestSkinHit(toArray(mid), { maxDistance: 0.008, sideX })
+      if (
+        hit
+        && isOnDigitSkin(hit.position, from, to, 0.030)
+        && new THREE.Vector3(...hit.position).distanceTo(mid) <= 0.005
+      ) {
         const lifted = new THREE.Vector3(...hit.position)
           .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
         const left = densifyDigitSkin([a, lifted], sideX, from, to, depth + 1)
@@ -2582,55 +2590,57 @@ function marchOnSkinHits(a, b, { hint = null, stepScale = 0.5 } = {}) {
   return isUsableDigitPath(points, from, to) ? points : null
 }
 
-/** Palm → pinky pad samples, then a short outside cast around the fingertip onto the nail. */
+/** Palm → pinky pad, then a short ordered wrap onto the nail — never orbit the tip. */
 function sampleDigitSkinPath(a, b, tipPos, tipNormal, { distal, palmar, sideX, tipOnSkin = false }) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   const palmarVec = new THREE.Vector3(...palmar)
-  const distalVec = new THREE.Vector3(...distal)
-  const ulnarVec = new THREE.Vector3(...digitUlnarDir(a.position, b.position))
   const tipGuide = Array.isArray(tipNormal) ? tipNormal : toArray(tipNormal)
+  const span = Math.max(start.distanceTo(end), 1e-6)
+  const wrapNeeded = new THREE.Vector3(...a.normal).normalize()
+    .dot(new THREE.Vector3(...b.normal).normalize()) < 0.25
   const points = []
   const previousRef = { current: null }
+  let lastProgress = -Infinity
   const accept = (hit) => {
-    if (!hit || !isOnDigitSkin(hit.position, a.position, b.position, 0.030)) return
+    if (!hit || !isOnDigitSkin(hit.position, a.position, b.position, 0.030)) return false
+    const progress = digitAxisProgress(hit.position, a.position, b.position)
+    if (progress < lastProgress - 0.002) return false
     const lifted = new THREE.Vector3(...hit.position)
       .addScaledVector(new THREE.Vector3(...hit.normal), SKIN_LIFT)
     appendSkinPoint(points, lifted, previousRef)
+    lastProgress = Math.max(lastProgress, progress)
+    return true
   }
 
   accept({ position: a.position, normal: a.normal })
 
-  const palmarCount = 36
+  const palmarEnd = wrapNeeded
+    ? (tipOnSkin ? new THREE.Vector3(...toArray(tipPos)) : end.clone().addScaledVector(palmarVec, 0.008))
+    : end.clone()
+  const palmarCount = Math.min(24, Math.max(10, Math.ceil(span / 0.007) + 8))
   for (let index = 1; index < palmarCount; index += 1) {
     const t = index / palmarCount
-    const chord = start.clone().lerp(tipPos, t)
-    // The 3D chord sits inside the finger. Cast from the palmar/ulnar
-    // skin side so missed hits do not leave an air segment.
-    const outside = chord.clone()
-      .addScaledVector(palmarVec, 0.012)
-      .addScaledVector(ulnarVec, 0.004)
-    const guide = slerpUnitVectors(a.normal, palmar, t, distal)
-    const hit = projectFromOutside(outside, guide, 0.018)
-      || closestSkinHit(toArray(outside), { maxDistance: 0.016, sideX, guideNormal: guide })
+    const chord = start.clone().lerp(palmarEnd, t)
+    const outside = chord.clone().addScaledVector(palmarVec, 0.01)
+    const hit = projectFromOutside(outside, palmar, 0.016)
+      || closestSkinHit(toArray(outside), { maxDistance: 0.014, sideX, guideNormal: palmar })
     accept(hit)
   }
-
   if (tipOnSkin) accept({ position: toArray(tipPos), normal: tipGuide })
 
-  const wrapOrigin = end.clone()
-    .addScaledVector(palmarVec, 0.012)
-    .addScaledVector(distalVec, 0.006)
-  const wrapCount = 20
-  for (let index = 1; index < wrapCount; index += 1) {
-    const t = index / wrapCount
-    const guide = slerpUnitVectors(palmar, b.normal, t, distal)
-    const hit = projectFromOutside(wrapOrigin, guide, 0.02)
-      || closestSkinHit(
-        toArray(wrapOrigin.clone().addScaledVector(new THREE.Vector3(...guide), 0.008)),
-        { maxDistance: 0.016, sideX, guideNormal: guide },
-      )
-    accept(hit)
+  if (wrapNeeded) {
+    const wrapFrom = points.length ? points[points.length - 1].clone() : palmarEnd
+    const wrapCount = 6
+    for (let index = 1; index <= wrapCount; index += 1) {
+      const t = index / wrapCount
+      const sample = wrapFrom.clone().lerp(end, t)
+      const guide = slerpUnitVectors(palmar, b.normal, t, distal)
+      const outside = sample.clone().addScaledVector(new THREE.Vector3(...guide), 0.01)
+      const hit = projectFromOutside(outside, guide, 0.016)
+        || closestSkinHit(toArray(outside), { maxDistance: 0.014, sideX, guideNormal: guide })
+      accept(hit)
+    }
   }
 
   accept({ position: b.position, normal: b.normal })
@@ -2656,7 +2666,8 @@ function snapDigitTipWrap(a, b) {
 
   const finish = (points) => {
     if (!points || points.length < 3) return null
-    const dense = densifyDigitSkin(points, sideX, a.position, b.position)
+    const pruned = pruneBacktracking(arraysFromSkin(points), b.position)
+    const dense = densifyDigitSkin(vectorsFromArrays(pruned), sideX, a.position, b.position)
     return isUsableDigitPath(dense, a.position, b.position) ? dense : null
   }
 
@@ -2670,8 +2681,6 @@ function snapDigitTipWrap(a, b) {
 
   if (tipOnSkin) {
     const tip = { position: tipHit.position, normal: tipHit.normal }
-    const joined = finish(concatSkinPieces([geodesicOnSkin(a, tip), geodesicOnSkin(tip, b)]))
-    if (joined) return joined
     const marched = finish(concatSkinPieces([
       marchOnSkinHits(a, tip, { hint: distal, stepScale: 0.5 }),
       marchOnSkinHits(tip, b, { hint: distal, stepScale: 0.45 }),
@@ -3574,13 +3583,7 @@ function skinSegmentPoints(a, b, {
   if (digitTip) {
     const wrapped = snapDigitTipWrap(a, b)
     if (wrapped?.length >= 2) return wrapped
-    if (maleHtPinkyPair(fromCode, toCode)) {
-      const geodesic = geodesicOnSkin(a, b)
-      if (geodesic?.length >= 2) return geodesic
-      const facing = snapFacingChordToSkin(a, b)
-      if (facing?.length >= 2) return facing
-      return null
-    }
+    if (maleHtPinkyPair(fromCode, toCode)) return null
     return [
       start.clone().addScaledVector(normal, SKIN_LIFT),
       end.clone().addScaledVector(endNormal, SKIN_LIFT),
