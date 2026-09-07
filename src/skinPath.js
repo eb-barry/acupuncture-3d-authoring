@@ -368,7 +368,7 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
   const yMax = Math.max(neck[1], face[1]) + span * 0.22
   if (p[1] < yMin || p[1] > yMax) return false
   if (p[2] < Math.min(neck[2], face[2]) - span * 0.22) return false
-  if (p[2] > Math.max(neck[2], face[2]) + span * 0.9) return false
+  if (p[2] > Math.max(neck[2], face[2]) + span * 0.22) return false
   const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
   if (Math.abs(p[0]) > maxAbsX + span * 0.45) return false
   const yT = Math.abs(face[1] - neck[1]) > 1e-6

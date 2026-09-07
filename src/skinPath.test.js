@@ -437,6 +437,7 @@ describe('skin path wrapping', () => {
     expect(isLiFutuHeliaoHandleOk(cheek, li18, li19)).toBe(true)
     expect(isLiFutuHeliaoHandleOk([-0.06, 1.56, 0.08], li18, li19)).toBe(false)
     expect(isLiFutuHeliaoHandleOk(chordMid, li18, li19)).toBe(false)
+    expect(isLiFutuHeliaoHandleOk([jawFront[0], jawFront[1], jawFront[2] + 0.12], li18, li19)).toBe(false)
 
     const gb18 = [0.055, 1.70, -0.055]
     const gb19 = [0.062, 1.58, -0.102]
