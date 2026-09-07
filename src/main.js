@@ -3130,11 +3130,7 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
       continue
     }
     const xs = [sample[0]]
-    if (!onNeck) {
-      xs.push(sample[0] + side * span * 0.08)
-      xs.push(sample[0] * 0.78 + face[0] * 0.22)
-      xs.push(sample[0] * 0.55 + face[0] * 0.45)
-    }
+    if (!onNeck) xs.push(sample[0] + side * span * 0.06)
     let hit = null
     for (const x of xs) {
       const candidate = pickAtXY(x, y, t, !onNeck)
