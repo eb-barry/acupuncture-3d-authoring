@@ -2979,13 +2979,6 @@ function snapLiHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
   const guide = placed.normal || liFutuHeliaoGuide(from, to, t)
   const legal = (hit) => hit && isLiFutuHeliaoHandleOk(hit.position, from, to)
-  const near = Math.max(statureWorld(0.02), span * 0.12)
-  const nearHit = closestSkinHit(placed.position, {
-    maxDistance: near,
-    sideX,
-    guideNormal: guide,
-  })
-  if (legal(nearHit)) return { position: nearHit.position, normal: nearHit.normal }
   const extraReach = Math.max(statureWorld(0.12), span * 0.7)
   const maxZ = Math.max(from[2], to[2], placed.position[2]) + extraReach * 0.55
   const frontHits = raySkinHits(
@@ -3003,26 +2996,35 @@ function snapLiHandleToSkin(placed, fromResolved, toResolved, rest = []) {
     standoff,
   )
   if (legal(fromOutside)) return { position: fromOutside.position, normal: fromOutside.normal }
-  const lateral = [
-    placed.position[0] + side * span * 0.12,
-    placed.position[1],
-    placed.position[2],
-  ]
-  const lateralHit = closestSkinHit(lateral, {
-    maxDistance: Math.max(statureWorld(0.06), span * 0.35),
+  const near = Math.max(statureWorld(0.008), span * 0.04)
+  const nearHit = closestSkinHit(placed.position, {
+    maxDistance: near,
     sideX,
     guideNormal: guide,
   })
-  if (legal(lateralHit)) return { position: lateralHit.position, normal: lateralHit.normal }
+  if (legal(nearHit)) return { position: nearHit.position, normal: nearHit.normal }
+  const lateral = [
+    placed.position[0] + side * span * 0.1,
+    placed.position[1],
+    placed.position[2],
+  ]
+  const lateralFront = raySkinHits(
+    new THREE.Vector3(lateral[0], lateral[1], maxZ),
+    new THREE.Vector3(0, 0, -1),
+    extraReach * 1.7,
+    new THREE.Vector3(0, 0, 1),
+  ).filter(legal)
+  lateralFront.sort((left, right) => right.position[2] - left.position[2])
+  if (lateralFront[0]) return { position: lateralFront[0].position, normal: lateralFront[0].normal }
   const outer = liFutuHeliaoOuterPoint(from, to, t)
-  const fallback = closestSkinHit(outer, {
-    maxDistance: Math.max(statureWorld(0.08), span * 0.5),
-    sideX,
-    guideNormal: liFutuHeliaoGuide(from, to, t),
-  })
-    || projectFromOutside(new THREE.Vector3(...outer), liFutuHeliaoGuide(from, to, t), standoff)
-  if (legal(fallback)) return { position: fallback.position, normal: fallback.normal }
-  if (nearHit) return { position: nearHit.position, normal: nearHit.normal }
+  const outerFront = raySkinHits(
+    new THREE.Vector3(outer[0], outer[1], maxZ),
+    new THREE.Vector3(0, 0, -1),
+    extraReach * 1.7,
+    new THREE.Vector3(0, 0, 1),
+  ).filter(legal)
+  outerFront.sort((left, right) => right.position[2] - left.position[2])
+  if (outerFront[0]) return { position: outerFront[0].position, normal: outerFront[0].normal }
   return null
 }
 
@@ -3108,8 +3110,14 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
       // at that XY only — never rescue onto the default cheek corridor.
       let hit = pickAtXY(sample[0], y, t, false)
       if (!hit) {
+        const fromOutside = projectFromOutside(new THREE.Vector3(...sample), guide, standoff)
+        if (fromOutside && isLiFutuHeliaoHandleOk(fromOutside.position, a.position, b.position)) {
+          hit = fromOutside
+        }
+      }
+      if (!hit) {
         const nearest = closestSkinHit(sample, {
-          maxDistance: Math.max(statureWorld(0.04), span * 0.28),
+          maxDistance: Math.max(statureWorld(0.008), span * 0.045),
           sideX: neck[0],
           guideNormal: guide,
         })
@@ -3117,29 +3125,15 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
           hit = nearest
         }
       }
-      if (!hit) {
-        const fromOutside = projectFromOutside(new THREE.Vector3(...sample), guide, standoff)
-        if (fromOutside && isLiFutuHeliaoHandleOk(fromOutside.position, a.position, b.position)) {
-          hit = fromOutside
-        }
-      }
       if (hit && hit.position[2] < neck[2] - span * 0.03) hit = null
       if (hit) accept(hit)
-      else {
-        const rescue = closestSkinHit(sample, {
-          maxDistance: Math.max(statureWorld(0.08), span * 0.5),
-          sideX: neck[0],
-          guideNormal: guide,
-        })
-        if (rescue) accept(rescue)
-      }
       continue
     }
     const xs = [sample[0]]
     if (!onNeck) {
+      xs.push(sample[0] + side * span * 0.08)
       xs.push(sample[0] * 0.78 + face[0] * 0.22)
       xs.push(sample[0] * 0.55 + face[0] * 0.45)
-      xs.push(sample[0] * 0.35 + face[0] * 0.65)
     }
     let hit = null
     for (const x of xs) {
@@ -3162,16 +3156,6 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
       }
     }
     if (hit) accept(hit)
-    else {
-      const nearest = closestSkinHit(sample, {
-        maxDistance: Math.max(statureWorld(0.04), span * 0.28),
-        sideX: neck[0],
-        guideNormal: guide,
-      })
-      if (nearest && isLiFutuHeliaoHit(nearest.position, a.position, b.position, t)) {
-        accept(nearest)
-      }
-    }
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
@@ -3761,6 +3745,7 @@ function restPathArrays(fromNode, toNode) {
       return Boolean(mid) && isKiYinguChangqiangHit(mid, a.position, b.position, 0.5)
     }
     if (isLiFutuHeliaoPair(fromCode, toCode)) {
+      if (isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.7 })) return false
       const mid = cached[Math.floor(cached.length / 2)]
       return Boolean(mid) && isLiFutuHeliaoHit(mid, a.position, b.position, 0.5)
     }
