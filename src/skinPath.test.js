@@ -424,20 +424,25 @@ describe('skin path wrapping', () => {
     expect(liFutuHeliaoGuide(li18, li19, 0.5)[2]).toBeGreaterThan(0.5)
     const femaleLi18 = li18.map((value) => value * 232)
     const femaleLi19 = li19.map((value) => value * 232)
-    const femaleCheek = liFutuHeliaoOuterPoint(femaleLi18, femaleLi19, 0.68)
+    const femaleCheek = liFutuHeliaoOuterPoint(femaleLi18, femaleLi19, 0.68, 'female')
     expect(femaleCheek[2]).toBeGreaterThan((femaleLi18[2] + femaleLi19[2]) / 2)
-    expect(isLiFutuHeliaoHit(femaleCheek, femaleLi18, femaleLi19, 0.68)).toBe(true)
+    expect(isLiFutuHeliaoHit(femaleCheek, femaleLi18, femaleLi19, 0.68, 'female')).toBe(true)
     const femaleJaw = [
       (femaleLi18[0] + femaleLi19[0]) / 2,
       (femaleLi18[1] + femaleLi19[1]) / 2,
       (femaleLi18[2] + femaleLi19[2]) / 2,
     ]
-    expect(isLiFutuHeliaoHit(femaleJaw, femaleLi18, femaleLi19, 0.5)).toBe(false)
+    expect(isLiFutuHeliaoHit(femaleJaw, femaleLi18, femaleLi19, 0.5, 'female')).toBe(false)
+    const femaleJawFront = liFutuHeliaoOuterPoint(li18, li19, 0.40, 'female')
+    expect(Math.abs(femaleJawFront[0])).toBeGreaterThan(Math.abs(jawFront[0]))
     expect(isLiFutuHeliaoHandleOk(jawFront, li18, li19)).toBe(true)
     expect(isLiFutuHeliaoHandleOk(cheek, li18, li19)).toBe(true)
     expect(isLiFutuHeliaoHandleOk([-0.06, 1.56, 0.08], li18, li19)).toBe(false)
     expect(isLiFutuHeliaoHandleOk(chordMid, li18, li19)).toBe(false)
-    expect(isLiFutuHeliaoHandleOk([jawFront[0], jawFront[1], jawFront[2] + 0.12], li18, li19)).toBe(false)
+    const floatFront = [jawFront[0], jawFront[1], jawFront[2] + 0.12]
+    expect(isLiFutuHeliaoHandleOk(floatFront, li18, li19)).toBe(false)
+    expect(isLiFutuHeliaoHandleOk(floatFront, li18, li19, 'female')).toBe(true)
+    expect(isLiFutuHeliaoHandleOk(femaleJawFront, li18, li19, 'female')).toBe(true)
 
     const gb18 = [0.055, 1.70, -0.055]
     const gb19 = [0.062, 1.58, -0.102]

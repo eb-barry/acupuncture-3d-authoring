@@ -253,9 +253,13 @@ export function liFutuHeliaoCheekT(t = 0) {
   return (tt - LI_FUTU_HELIAO_JAW_T) / (1 - LI_FUTU_HELIAO_JAW_T)
 }
 
+function isFemaleLiBody(body) {
+  return body === 'female'
+}
+
 /** Outside-skin sample: anterolateral neck, then the cheek, then 禾髎. */
-export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
-  const points = liFutuHeliaoGuidePoints(from, to, 25)
+export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5, body = 'male') {
+  const points = liFutuHeliaoGuidePoints(from, to, 25, body)
   const tt = clamp01(t)
   const u = tt * (points.length - 1)
   const index = Math.min(Math.floor(u), points.length - 2)
@@ -264,9 +268,11 @@ export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5
 
 /**
  * Neck → hold the side → sit in front of the jaw hollow → cheek → lip.
- * The female chin starts much higher than 扶突; a 3D chord dives under it.
+ * Male and female meshes differ in scale and chin topology, so the
+ * corridor mix is per body. Female stays in front of the under-chin
+ * hollow; male sits on jaw / cheek skin.
  */
-export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count = 28) {
+export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count = 28, body = 'male') {
   const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
   const span = Math.max(length3(sub3(face, neck)), 1e-6)
   const side = Math.sign(neck[0]) || 1
@@ -280,13 +286,14 @@ export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count 
     yAt(0.16),
     neck[2] + (frontZ - neck[2]) * 0.70,
   ]
+  const female = isFemaleLiBody(body)
   const jawFront = [
-    neck[0] * 0.88 + face[0] * 0.12,
+    neck[0] * (female ? 0.90 : 0.88) + face[0] * (female ? 0.10 : 0.12),
     yAt(0.42),
     frontZ,
   ]
   const cheek = [
-    neck[0] * 0.45 + face[0] * 0.55,
+    neck[0] * (female ? 0.40 : 0.45) + face[0] * (female ? 0.60 : 0.55),
     yAt(0.74),
     Math.max(frontZ, face[2] + span * 0.04),
   ]
@@ -323,7 +330,7 @@ export function liFutuHeliaoCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
 }
 
 /** Keep samples on this neck–cheek; reject jaw interior and the far face. */
-export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5, body = 'male') {
   const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
   const p = asPathPoint(hit)
   const span = Math.max(length3(sub3(face, neck)), 1e-6)
@@ -347,18 +354,28 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
     return false
   }
   if (tt < 0.42 && Math.abs(p[0]) < Math.abs(neck[0]) * 0.68) return false
-  const outer = liFutuHeliaoOuterPoint(from, to, t)
-  // Male jaw/cheek skin sits behind this outer guide. Reject only a
+  const outer = liFutuHeliaoOuterPoint(from, to, t, body)
+  const female = isFemaleLiBody(body)
+  // Female: stay in front of the under-chin hollow (no mesh there).
+  // Male: jaw/cheek skin sits behind the outer guide; reject only a
   // through-mandible sample, not the face itself.
-  if (tt > 0.16 && tt < 0.84 && p[2] < chord[2] - span * 0.08) return false
-  return length3(sub3(p, outer)) <= Math.max(0.04, span * 0.85)
+  if (tt > 0.16 && tt < 0.84) {
+    if (female) {
+      if (p[2] < outer[2] - span * 0.16) return false
+    } else if (p[2] < chord[2] - span * 0.08) {
+      return false
+    }
+  }
+  return length3(sub3(p, outer)) <= Math.max(0.04, span * (female ? 0.62 : 0.85))
 }
 
 /**
  * Locator drag box for 扶突–禾髎: same-side neck / cheek / in front of the
  * jaw. Reject the opposite face, occiput, and a through-mandible dive.
+ * Female allows a far-front locator in the jaw hollow; male caps anterior
+ * so locators cannot float off the face.
  */
-export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], body = 'male') {
   const { neck, face } = liFutuHeliaoEnds(from, to)
   const p = asPathPoint(point)
   const span = Math.max(length3(sub3(face, neck)), 1e-6)
@@ -368,7 +385,8 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
   const yMax = Math.max(neck[1], face[1]) + span * 0.22
   if (p[1] < yMin || p[1] > yMax) return false
   if (p[2] < Math.min(neck[2], face[2]) - span * 0.22) return false
-  if (p[2] > Math.max(neck[2], face[2]) + span * 0.22) return false
+  const anteriorSlack = isFemaleLiBody(body) ? 0.9 : 0.22
+  if (p[2] > Math.max(neck[2], face[2]) + span * anteriorSlack) return false
   const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
   if (Math.abs(p[0]) > maxAbsX + span * 0.45) return false
   const yT = Math.abs(face[1] - neck[1]) > 1e-6
