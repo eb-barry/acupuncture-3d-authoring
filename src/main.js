@@ -2561,24 +2561,18 @@ function marchOnSkinHits(a, b, { hint = null, stepScale = 0.5 } = {}) {
   return isUsableDigitPath(points, from, to) ? points : null
 }
 
-/** Palm → pinky pad, then a short on-skin hop onto the nail — never orbit the tip. */
+/** Palm → pinky pad as one line; the last sample is 少衝 on the nail. */
 function sampleDigitSkinPath(a, b, tipPos, tipNormal, {
-  distal,
   palmar,
   sideX,
   tipOnSkin = false,
-  forcePalmar = false,
 } = {}) {
   const start = new THREE.Vector3(...a.position)
   const end = new THREE.Vector3(...b.position)
   const palmarVec = new THREE.Vector3(...palmar)
   const tipGuide = Array.isArray(tipNormal) ? tipNormal : toArray(tipNormal)
   const span = Math.max(start.distanceTo(end), 1e-6)
-  const wrapNeeded = !forcePalmar && new THREE.Vector3(...a.normal).normalize()
-    .dot(new THREE.Vector3(...b.normal).normalize()) < 0.25
-  const palmarEnd = wrapNeeded
-    ? (tipOnSkin ? new THREE.Vector3(...toArray(tipPos)) : end.clone().addScaledVector(palmarVec, 0.008))
-    : end.clone()
+  const palmarEnd = end.clone().addScaledVector(palmarVec, 0.006)
   const palmarFrom = toArray(start)
   const palmarTo = toArray(palmarEnd)
   const points = []
@@ -2631,7 +2625,7 @@ function sampleDigitSkinPath(a, b, tipPos, tipNormal, {
       corridorTo: palmarTo,
       maxOff: 0.008,
       maxStep: 0.012,
-      minPalmarDot: 0.2,
+      minPalmarDot: 0.05,
     })
   }
   if (tipOnSkin) {
@@ -2643,33 +2637,11 @@ function sampleDigitSkinPath(a, b, tipPos, tipNormal, {
     })
   }
 
-  if (wrapNeeded) {
-    const wrapToArr = toArray(end)
-    for (let step = 1; step <= 8; step += 1) {
-      const t = step / 8
-      const from = points.length ? points[points.length - 1].clone() : palmarEnd.clone()
-      if (from.distanceTo(end) < 0.003) break
-      const toward = end.clone().sub(from)
-      if (toward.lengthSq() < 1e-10) break
-      toward.normalize().multiplyScalar(0.0024)
-      const sample = from.add(toward)
-      const guide = slerpUnitVectors(palmar, b.normal, t, distal)
-      const outside = sample.clone().addScaledVector(new THREE.Vector3(...guide), 0.008)
-      const hit = projectFromOutside(outside, guide, 0.014)
-      accept(hit, {
-        corridorFrom: toArray(sample),
-        corridorTo: wrapToArr,
-        maxOff: 0.006,
-        maxStep: 0.004,
-      })
-    }
-  }
-
   accept({ position: b.position, normal: b.normal }, {
     corridorFrom: palmarFrom,
     corridorTo: toArray(end),
     maxOff: 0.012,
-    maxStep: 0.014,
+    maxStep: 0.02,
   })
   return points
 }
@@ -2702,21 +2674,11 @@ function snapDigitTipWrap(a, b) {
   }
 
   const sampled = finish(sampleDigitSkinPath(a, b, tipPos, tipNormal, {
-    distal,
     palmar,
     sideX,
     tipOnSkin,
   }))
   if (sampled) return sampled
-
-  const palmarOnly = finish(sampleDigitSkinPath(a, b, tipPos, tipNormal, {
-    distal,
-    palmar,
-    sideX,
-    tipOnSkin,
-    forcePalmar: true,
-  }))
-  if (palmarOnly) return palmarOnly
 
   if (tipOnSkin) {
     const tip = { position: tipHit.position, normal: tipHit.normal }
@@ -4393,13 +4355,13 @@ function conformRunToSkin(points) {
   const lockMidlineX = Math.abs(start[0]) <= statureWorld(0.02)
     && Math.abs(end[0]) <= statureWorld(0.02)
   const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point, null, snap), {
-    maxPull: pull,
+    maxPull: digitRun ? Math.min(pull, 0.003) : pull,
     minNormalDot: digitRun ? -1 : 0.2,
   })
   const guides = smoothPathNormals(estimate.normals, 2)
   const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide, snap), {
     guides,
-    maxPull: pull,
+    maxPull: digitRun ? Math.min(pull, 0.003) : pull,
     minNormalDot: digitRun ? -1 : 0.2,
   })
   const run = {
