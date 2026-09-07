@@ -3752,12 +3752,17 @@ function snapHandleToSkin(placed, fromNode, toNode) {
     return snapGbHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode)) || placed
   }
   if (isLiFutuHeliaoPair(routeNodeCode(fromNode), routeNodeCode(toNode))) {
-    return snapLiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode))
-      || snapLiHandleToSkin({
-        position: [from.position[0], placed.position[1], from.position[2]],
-        normal: placed.normal,
-      }, from, to, restPathArrays(fromNode, toNode))
-      || { position: [...from.position], normal: [...from.normal] }
+    const snapped = snapLiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode))
+    if (snapped) return snapped
+    if (isLiFutuHeliaoHandleOk(placed.position, from.position, to.position)) {
+      const near = closestSkinHit(placed.position, {
+        maxDistance: statureWorld(0.02),
+        sideX: from.position[0],
+        guideNormal: placed.normal,
+      })
+      if (near && isLiFutuHeliaoHandleOk(near.position, from.position, to.position)) return near
+    }
+    return placed
   }
   const sideX = pairSideX(fromNode, toNode)
   return closestSkinHit(placed.position, {

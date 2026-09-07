@@ -263,8 +263,8 @@ export function liFutuHeliaoOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5
 }
 
 /**
- * Neck → hold the side → sit in front of the jaw hollow → cheek → lip.
- * The female chin starts much higher than 扶突; a 3D chord dives under it.
+ * Neck → gradual cheek sweep → 禾髎. Stay lateral enough to skip the
+ * female under-chin hollow, but do not hold 扶突's X until the mouth.
  */
 export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count = 28) {
   const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
@@ -276,23 +276,28 @@ export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count 
     (neck[2] + face[2]) * 0.5 + span * 0.08,
   )
   const neckClimb = [
-    neck[0] + side * span * 0.015,
-    yAt(0.16),
-    neck[2] + (frontZ - neck[2]) * 0.70,
+    neck[0] + side * span * 0.012,
+    yAt(0.14),
+    neck[2] + (frontZ - neck[2]) * 0.55,
+  ]
+  const jawCorner = [
+    neck[0] * 0.78 + face[0] * 0.22,
+    yAt(0.34),
+    neck[2] + (frontZ - neck[2]) * 0.88,
   ]
   const jawFront = [
-    neck[0] * 0.90 + face[0] * 0.10,
-    yAt(0.42),
+    neck[0] * 0.58 + face[0] * 0.42,
+    yAt(0.52),
     frontZ,
   ]
   const cheek = [
-    neck[0] * 0.40 + face[0] * 0.60,
-    yAt(0.74),
-    Math.max(frontZ, face[2] + span * 0.04),
+    neck[0] * 0.36 + face[0] * 0.64,
+    yAt(0.76),
+    Math.max(frontZ, face[2] + span * 0.03),
   ]
   const anchors = flipped
-    ? [face, cheek, jawFront, neckClimb, neck]
-    : [neck, neckClimb, jawFront, cheek, face]
+    ? [face, cheek, jawFront, jawCorner, neckClimb, neck]
+    : [neck, neckClimb, jawCorner, jawFront, cheek, face]
   const samples = Math.max(8, Math.floor(Number(count) || 28))
   const points = []
   for (let index = 0; index < samples; index += 1) {
