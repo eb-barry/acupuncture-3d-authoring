@@ -2512,7 +2512,7 @@ function marchOnSkinHits(a, b, { hint = null, stepScale = 0.5 } = {}) {
   const stepLen = Math.max(0.0022, surfaceStepLength(totalDist, normal.dot(endNormal)) * stepScale)
   const hintVec = hint ? new THREE.Vector3(...hint) : end.clone().sub(pos)
   const hintN = hintVec.lengthSq() > 1e-8 ? hintVec.normalize() : new THREE.Vector3(0, 1, 0)
-  const points = [pos.clone().addScaledVector(normal, SKIN_LIFT)]
+  const points = [pos.clone().addScaledVector(normal, 0.0004)]
   const maxSteps = Math.max(72, Math.ceil(totalDist / stepLen) * 14 + 32)
 
   for (let step = 0; step < maxSteps; step += 1) {
@@ -2555,9 +2555,9 @@ function marchOnSkinHits(a, b, { hint = null, stepScale = 0.5 } = {}) {
     if (!isOnDigitSkin(hit.position, from, to, 0.030)) continue
     pos.copy(next)
     normal.set(...hit.normal).normalize()
-    points.push(pos.clone().addScaledVector(normal, SKIN_LIFT))
+    points.push(pos.clone().addScaledVector(normal, 0.0004))
   }
-  points.push(end.clone().addScaledVector(endNormal, SKIN_LIFT))
+  points.push(end.clone().addScaledVector(endNormal, 0.0004))
   return isUsableDigitPath(points, from, to) ? points : null
 }
 
