@@ -56,8 +56,10 @@ import {
   liFutuHeliaoGuide,
   isLiFutuHeliaoHit,
   isLiFutuHeliaoHandleOk,
-  isMaleJawRibbonSample,
-  isLiFutuHeliaoPair,
+    isMaleJawRibbonSample,
+    isMaleRamusZHop,
+    liMaleRamusWrapProbes,
+    isLiFutuHeliaoPair,
   isGbChenglingNaokongPair,
   gbChenglingNaokongOuterPoint,
   gbChenglingNaokongGuide,
@@ -427,11 +429,11 @@ describe('skin path wrapping', () => {
     expect(Math.abs(neckHold[0])).toBeGreaterThan(Math.abs(li18[0]) * 0.8)
     expect(neckHold[2]).toBeGreaterThan(li18[2] - 0.01)
     const jawFront = liFutuHeliaoOuterPoint(li18, li19, 0.40)
-    expect(Math.abs(jawFront[0])).toBeGreaterThan(Math.abs(li18[0]) * 0.7)
-    expect(jawFront[2]).toBeGreaterThan(chordMid[2] + 0.006)
+    expect(Math.abs(jawFront[0])).toBeGreaterThan(Math.abs(li18[0]))
+    expect(jawFront[2]).toBeGreaterThan(li18[2] - 0.01)
+    expect(jawFront[2]).toBeLessThan(chordMid[2] + 0.02)
     expect(isLiFutuHeliaoHit(jawFront, li18, li19, 0.40)).toBe(true)
-    const maleJawSkin = [jawFront[0], jawFront[1], chordMid[2] + 0.004]
-    expect(maleJawSkin[2]).toBeLessThan(jawFront[2])
+    const maleJawSkin = [li18[0] * 0.92, li18[1] + (li19[1] - li18[1]) * 0.4, chordMid[2] + 0.004]
     expect(isLiFutuHeliaoHit(maleJawSkin, li18, li19, 0.40)).toBe(true)
     expect(isLiFutuHeliaoHandleOk(maleJawSkin, li18, li19)).toBe(true)
     const cheek = liFutuHeliaoOuterPoint(li18, li19, 0.68)
@@ -454,7 +456,7 @@ describe('skin path wrapping', () => {
     ]
     expect(isLiFutuHeliaoHit(femaleJaw, femaleLi18, femaleLi19, 0.5, 'female')).toBe(false)
     const femaleJawFront = liFutuHeliaoOuterPoint(li18, li19, 0.40, 'female')
-    expect(Math.abs(femaleJawFront[0])).toBeGreaterThan(Math.abs(jawFront[0]))
+    expect(femaleJawFront[2]).toBeGreaterThan(jawFront[2])
     expect(isLiFutuHeliaoHandleOk(jawFront, li18, li19)).toBe(true)
     expect(isLiFutuHeliaoHandleOk(cheek, li18, li19)).toBe(true)
     expect(isLiFutuHeliaoHandleOk([-0.06, 1.56, 0.08], li18, li19)).toBe(false)
@@ -478,6 +480,16 @@ describe('skin path wrapping', () => {
     expect(isMaleJawRibbonSample([-0.53, 0.85, 0.03])).toBe(false)
     expect(isMaleJawRibbonSample(userLi18, 'female')).toBe(false)
     expect(isMaleJawRibbonSample(userLi18.map((value) => value * 232), 'female')).toBe(false)
+    const ramusHopFrom = [-0.047, 1.581, -0.003]
+    const ramusHopTo = [-0.047, 1.580, 0.029]
+    expect(isMaleRamusZHop(ramusHopFrom, ramusHopTo)).toBe(true)
+    expect(isMaleRamusZHop(userLi18, userLi19)).toBe(false)
+    const wrapProbes = liMaleRamusWrapProbes(ramusHopFrom, ramusHopTo, 10)
+    expect(wrapProbes.length).toBeGreaterThanOrEqual(6)
+    const wrapMid = wrapProbes[Math.floor(wrapProbes.length / 2)]
+    expect(Math.abs(wrapMid[0])).toBeGreaterThan(0.047)
+    expect(wrapMid[2]).toBeGreaterThan(ramusHopFrom[2] + 0.004)
+    expect(wrapMid[2]).toBeLessThan(ramusHopTo[2] - 0.004)
 
     const gb18 = [0.055, 1.70, -0.055]
     const gb19 = [0.062, 1.58, -0.102]
