@@ -106,8 +106,10 @@ import {
   isMaleRamusZHop,
   liMaleRamusWrapProbes,
   isGbChenglingNaokongHit,
+  isGbChenglingNaokongHandleOk,
   gbChenglingNaokongCastStandoff,
   gbChenglingNaokongGuide,
+  gbChenglingNaokongOuterPoint,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -1624,6 +1626,10 @@ function handleSkinHit(event, drag) {
     routeNodeCode(fromNode),
     routeNodeCode(toNode),
   ))
+  const gbScalp = Boolean(pair && from && to && isGbChenglingNaokongPair(
+    routeNodeCode(fromNode),
+    routeNodeCode(toNode),
+  ) && isMaleStudioBody())
   const scale = statureScale()
   const maxOffPath = statureWorld(HANDLE_STRETCH_MAX_OFF_PATH)
   const snapRadius = statureWorld(HANDLE_SKIN_SNAP_RADIUS)
@@ -1632,7 +1638,7 @@ function handleSkinHit(event, drag) {
       statureWorld(HANDLE_STRETCH_PROJECT_RADIUS * 1.6),
       gbPairSpan(from.position, to.position) * 0.45,
     )
-    : liFace
+    : liFace || gbScalp
       ? Math.max(
         statureWorld(HANDLE_STRETCH_PROJECT_RADIUS),
         new THREE.Vector3(...from.position).distanceTo(new THREE.Vector3(...to.position)) * 0.4,
@@ -1646,6 +1652,7 @@ function handleSkinHit(event, drag) {
     })) return false
     if (gbPair && !isGbJianjingYuanyeHandleOk(hit.position, from.position, to.position)) return false
     if (liFace && !liHandleOk(hit.position, from.position, to.position)) return false
+    if (gbScalp && !isGbChenglingNaokongHandleOk(hit.position, from.position, to.position)) return false
     return true
   }
   const pickAccepted = (hits, near = null) => {
@@ -1658,12 +1665,12 @@ function handleSkinHit(event, drag) {
   }
   const liMale = liFace && isMaleStudioBody()
   const liFemale = liFace && !isMaleStudioBody()
-  const alongRay = (gbPair || liFace) ? pickAccepted(surfaceHits(event)) : null
-  if (gbPair && alongRay) {
-    // First legal hit along the camera ray. Skip the T-pose arm.
+  const alongRay = (gbPair || liFace || gbScalp) ? pickAccepted(surfaceHits(event)) : null
+  if ((gbPair || gbScalp) && alongRay) {
+    // First legal hit along the camera ray. Skip the T-pose arm / far skull.
     return alongRay
   }
-  if (!gbPair && !liFace) {
+  if (!gbPair && !liFace && !gbScalp) {
     const direct = surfaceHit(event)
     if (accept(direct)) return direct
   }
@@ -1674,14 +1681,16 @@ function handleSkinHit(event, drag) {
       ? gbLateralChestGuide(planeArr, sideX)
       : liFace
         ? liFutuHeliaoGuide(from.position, to.position, 0.5)
-        : anchor.normal
+        : gbScalp
+          ? gbChenglingNaokongGuide(from.position, to.position, 0.5)
+          : anchor.normal
     const projected = projectHandleOnSkin(
       planePoint,
       guide,
       projectRadius,
       sideX,
     )
-    if (accept(projected) && !liFace) return projected
+    if (accept(projected) && !liFace && !gbScalp) return projected
     if (gbPair) {
       const standoff = gbLocatorCastStandoff(from.position, to.position)
       const probe = gbLocatorOutsideProbe(planeArr, from.position, to.position)
@@ -1693,6 +1702,20 @@ function handleSkinHit(event, drag) {
         ...projectFromOutsideHits(new THREE.Vector3(...probe), guide, standoff),
         ...raySkinHits(planePoint, inward, reach, new THREE.Vector3(side, 0, 0)),
       ], planeArr)
+      if (picked) return picked
+    }
+    if (gbScalp) {
+      const span = new THREE.Vector3(...from.position).distanceTo(new THREE.Vector3(...to.position))
+      const nearby = closestSkinHit(planeArr, {
+        maxDistance: Math.max(0.02, span * 0.16),
+        sideX,
+        guideNormal: guide,
+      })
+      if (accept(nearby)) return nearby
+      const picked = pickAccepted(
+        projectFromOutsideHits(planePoint, guide, Math.max(0.05, span * 0.4)),
+        planeArr,
+      )
       if (picked) return picked
     }
     if (liMale) {
@@ -3615,7 +3638,7 @@ function snapLiFutuHeliaoToSkin(a, b, records = [], rest = []) {
 }
 
 /** 承靈→腦空: stay on the parietal–occipital scalp, not the hair bun or air. */
-function snapGbChenglingNaokongToSkin(a, b) {
+function snapGbChenglingNaokongToSkinFemale(a, b) {
   const span = Math.max(
     new THREE.Vector3(...a.position).distanceTo(new THREE.Vector3(...b.position)),
     1e-6,
@@ -3635,6 +3658,7 @@ function snapGbChenglingNaokongToSkin(a, b) {
     a.position,
     b.position,
     t,
+    'female',
   )
   const pickClosest = (hits, t, chord) => {
     const legalHits = (hits || []).filter((hit) => legal(hit, t))
@@ -3718,7 +3742,7 @@ function snapGbChenglingNaokongToSkin(a, b) {
         })
         if (
           snapped
-          && isGbChenglingNaokongHit(snapped.position, a.position, b.position, tMid)
+          && isGbChenglingNaokongHit(snapped.position, a.position, b.position, tMid, 'female')
           && liftHit(snapped).distanceTo(prev) > statureWorld(0.002)
           && liftHit(snapped).distanceTo(next) > statureWorld(0.002)
         ) {
@@ -3743,6 +3767,164 @@ function snapGbChenglingNaokongToSkin(a, b) {
     statureWorld(0.0012),
   )
   return simplified.points.map((point) => new THREE.Vector3(...point))
+}
+
+/**
+ * Male 承靈→腦空: the chord is inside the cranium. Cast from outside onto
+ * the scalp. Do not nearest-hit from the interior (that jumps to the ear
+ * or leaves a gap where the ribbon dives through the skull).
+ */
+function snapGbChenglingNaokongToSkinMale(a, b, records = [], rest = []) {
+  const span = Math.max(
+    new THREE.Vector3(...a.position).distanceTo(new THREE.Vector3(...b.position)),
+    1e-6,
+  )
+  const count = Math.min(72, Math.max(28, Math.ceil(span / Math.max(0.004, span * 0.03)) + 16))
+  const standoff = Math.max(0.055, span * 0.42)
+  const lift = statureWorld(SKIN_LIFT)
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const path = rest.length >= 2 ? rest : [a.position, b.position]
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
+  ))
+  const usable = ordered.filter((record) => (
+    isGbChenglingNaokongHandleOk(record.position, a.position, b.position)
+  ))
+  const hasUserHandles = usable.length > 0
+  const samples = hasUserHandles
+    ? catmullRomThrough(
+      [a.position, ...usable.map((record) => record.position), b.position],
+      16,
+    )
+    : Array.from({ length: count }, (_, index) => {
+      const t = count === 1 ? 0 : index / (count - 1)
+      return gbChenglingNaokongOuterPoint(a.position, b.position, t)
+    })
+  const points = []
+  const previousRef = { current: null }
+  const liftHit = (hit) => new THREE.Vector3(...hit.position)
+    .addScaledVector(new THREE.Vector3(...hit.normal), lift)
+  const legal = (hit, t) => {
+    if (!hit) return false
+    return hasUserHandles
+      ? isGbChenglingNaokongHandleOk(hit.position, a.position, b.position)
+      : isGbChenglingNaokongHit(hit.position, a.position, b.position, t, 'male')
+  }
+  const skinAt = (sample, t) => {
+    const guide = gbChenglingNaokongGuide(a.position, b.position, t)
+    const probe = hasUserHandles
+      ? sample
+      : [
+        sample[0] + guide[0] * standoff * 0.35,
+        sample[1] + guide[1] * standoff * 0.35,
+        sample[2] + guide[2] * standoff * 0.35,
+      ]
+    const hits = projectFromOutsideHits(
+      new THREE.Vector3(...(hasUserHandles ? sample : probe)),
+      guide,
+      standoff,
+    ).filter((hit) => legal(hit, t))
+    hits.sort((left, right) => dist3(left.position, sample) - dist3(right.position, sample))
+    if (hits[0]) return hits[0]
+    const near = closestSkinHit(hasUserHandles ? sample : probe, {
+      maxDistance: hasUserHandles ? 0.028 : 0.022,
+      sideX,
+      guideNormal: guide,
+    })
+    if (legal(near, t)) return near
+    return null
+  }
+  const accept = (hit) => {
+    if (!hit) return false
+    appendSkinPoint(points, liftHit(hit), previousRef)
+    return true
+  }
+  accept({ position: a.position, normal: a.normal })
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    const t = index / Math.max(samples.length - 1, 1)
+    const hit = skinAt(samples[index], t)
+    if (hit) accept(hit)
+  }
+  accept({ position: b.position, normal: b.normal })
+  if (points.length < 3) return null
+  const maxGap = 0.01
+  for (let pass = 0; pass < 5; pass += 1) {
+    const denser = [points[0]]
+    let added = false
+    for (let index = 1; index < points.length; index += 1) {
+      const prev = points[index - 1]
+      const nextPt = points[index]
+      if (prev.distanceTo(nextPt) > maxGap) {
+        const mid = prev.clone().lerp(nextPt, 0.5)
+        const tMid = index / Math.max(points.length - 1, 1)
+        const guide = gbChenglingNaokongGuide(a.position, b.position, tMid)
+        const probe = [
+          mid.x + guide[0] * standoff * 0.4,
+          mid.y + guide[1] * standoff * 0.4,
+          mid.z + guide[2] * standoff * 0.4,
+        ]
+        const snapped = skinAt(probe, tMid)
+          || closestSkinHit(probe, {
+            maxDistance: 0.024,
+            sideX,
+            guideNormal: guide,
+          })
+        if (
+          snapped
+          && legal(snapped, tMid)
+          && liftHit(snapped).distanceTo(prev) > 0.002
+          && liftHit(snapped).distanceTo(nextPt) > 0.002
+        ) {
+          denser.push(liftHit(snapped))
+          added = true
+        }
+      }
+      denser.push(nextPt)
+    }
+    points.length = 0
+    points.push(...denser)
+    if (!added) break
+  }
+  const arrays = arraysFromSkin(points)
+  if (isDisorderedPolyline(arrays, [a.position, b.position], { maxLengthRatio: 1.7 })) {
+    return null
+  }
+  return points
+}
+
+function snapGbChenglingNaokongToSkin(a, b, records = [], rest = []) {
+  return isMaleStudioBody()
+    ? snapGbChenglingNaokongToSkinMale(a, b, records, rest)
+    : snapGbChenglingNaokongToSkinFemale(a, b)
+}
+
+function snapGbScalpHandleToSkin(placed, fromResolved, toResolved) {
+  if (!placed?.position) return null
+  const from = fromResolved.position
+  const to = toResolved.position
+  const span = Math.max(dist3(from, to), 1e-6)
+  const guide = gbChenglingNaokongGuide(from, to, 0.5)
+  const legal = (hit) => hit && isGbChenglingNaokongHandleOk(hit.position, from, to)
+  const near = closestSkinHit(placed.position, {
+    maxDistance: Math.max(0.02, span * 0.14),
+    sideX: (from[0] + to[0]) / 2,
+    guideNormal: guide,
+  })
+  if (legal(near)) return { position: near.position, normal: near.normal }
+  const hits = projectFromOutsideHits(
+    new THREE.Vector3(...placed.position),
+    guide,
+    Math.max(0.05, span * 0.4),
+  ).filter(legal)
+  hits.sort((left, right) => dist3(left.position, placed.position) - dist3(right.position, placed.position))
+  if (hits[0]) return { position: hits[0].position, normal: hits[0].normal }
+  if (legal(placed)) {
+    return {
+      position: [...placed.position],
+      normal: [...(placed.normal || guide)],
+    }
+  }
+  return null
 }
 
 function skinSegmentPoints(a, b, {
@@ -4006,13 +4188,14 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
   siArmShoulder = false,
   gbShoulderAxilla = false,
   liFace = false,
+  gbScalp = false,
   fromCode = '',
   toCode = '',
 } = {}) {
   const restGuide = rest?.length >= 2 ? rest : null
   const restArrays = restGuide ? arraysFromSkin(restGuide) : []
   const drawSpan = (fromNode, toNode) => skinSegmentPoints(fromNode, toNode, {
-    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap && !siArmShoulder && !gbShoulderAxilla && !liFace,
+    allowGeodesic: (!preview || teTemple || earArc) && !preferWrap && !siArmShoulder && !gbShoulderAxilla && !liFace && !gbScalp,
     preferWrap,
     earArc,
     teTemple,
@@ -4057,6 +4240,11 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
     const wrapped = snapLiFutuHeliaoToSkin(fromResolved, toResolved, usable, restArrays)
     if (wrapped?.length >= 3) return wrapped
   }
+  if (gbScalp) {
+    const usable = keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
+    const wrapped = snapGbChenglingNaokongToSkin(fromResolved, toResolved, usable, restArrays)
+    if (wrapped?.length >= 3) return wrapped
+  }
   // Default locators would split 少府→少衝 and re-wrap each span around the
   // nail, stacking into a knot at 少衝. Keep one palmar-to-nail polyline.
   if (maleHtPinkyPair(fromCode, toCode)) {
@@ -4069,7 +4257,7 @@ function pairDrawnSkinPoints(fromResolved, toResolved, records, rest = null, {
       ? vectorsFromArrays(restArrays)
       : drawSpan(fromResolved, toResolved)
   }
-  const usable = (siArmShoulder || gbShoulderAxilla || teHead || liFace
+  const usable = (siArmShoulder || gbShoulderAxilla || teHead || liFace || gbScalp
     ? keepLocatorsOnPairLimb(fromResolved, toResolved, records, [])
     : keepLocatorsOnPairLimb(fromResolved, toResolved, records, restArrays))
   const spans = locatorSpans(restArrays, fromResolved, toResolved, usable)
@@ -4116,7 +4304,7 @@ function drawPairSkinSegment(route, pair, override = null) {
   const toCode = routeNodeCode(pair.toNode)
   if (!meridianUsesLocators(route.meridianId)
     || isKiYinguChangqiangPair(fromCode, toCode)
-    || isGbChenglingNaokongPair(fromCode, toCode)
+    || (isGbChenglingNaokongPair(fromCode, toCode) && !isMaleStudioBody())
     || maleHtPinkyPair(fromCode, toCode)) {
     return vectorsFromArrays(rest)
   }
@@ -4133,14 +4321,16 @@ function drawPairSkinSegment(route, pair, override = null) {
   const siArmShoulder = isSiXiaohaiJianzhenPair(fromCode, toCode)
   const gbShoulderAxilla = isGbShoulderAxillaSpan(fromCode, toCode, a.position, b.position)
   const liFace = isLiFutuHeliaoPair(fromCode, toCode)
+  const gbScalp = isGbChenglingNaokongPair(fromCode, toCode) && isMaleStudioBody()
   return pairDrawnSkinPoints(a, b, records, rest, {
-    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder && !gbShoulderAxilla && !liFace,
+    preview: Boolean(isOverride && override.preview) && !teTemple && !earArc && !siArmShoulder && !gbShoulderAxilla && !liFace && !gbScalp,
     preferWrap: pairPrefersWrap(fromCode, toCode, a.position, b.position),
     earArc,
     teTemple,
     siArmShoulder,
     gbShoulderAxilla,
     liFace,
+    gbScalp,
     fromCode,
     toCode,
   })
@@ -4213,7 +4403,16 @@ function restPathArrays(fromNode, toNode) {
     }
     if (isGbChenglingNaokongPair(fromCode, toCode)) {
       const mid = cached[Math.floor(cached.length / 2)]
-      return Boolean(mid) && isGbChenglingNaokongHit(mid, a.position, b.position, 0.5)
+      if (isMaleStudioBody() && isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.7 })) {
+        return false
+      }
+      return Boolean(mid) && isGbChenglingNaokongHit(
+        mid,
+        a.position,
+        b.position,
+        0.5,
+        studioBodyId(),
+      )
     }
     if (maleHtPinkyPair(fromCode, toCode)) {
       const chord = dist3(a.position, b.position)
@@ -4291,6 +4490,9 @@ function snapHandleToSkin(placed, fromNode, toNode) {
     if (!isMaleStudioBody()) return snapped || placed
     if (snapped) return snapped
     return placed
+  }
+  if (isGbChenglingNaokongPair(routeNodeCode(fromNode), routeNodeCode(toNode)) && isMaleStudioBody()) {
+    return snapGbScalpHandleToSkin(placed, from, to) || placed
   }
   const sideX = pairSideX(fromNode, toNode)
   return closestSkinHit(placed.position, {
@@ -4952,7 +5154,10 @@ function addRouteEditHandles(route) {
   acupointPairs(route)
     .filter((pair) => isSegmentSelected(route, pair.fromPointId, pair.toPointId))
     .filter((pair) => !isKiYinguChangqiangPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
-    .filter((pair) => !isGbChenglingNaokongPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode)))
+    .filter((pair) => !(
+      isGbChenglingNaokongPair(routeNodeCode(pair.fromNode), routeNodeCode(pair.toNode))
+      && !isMaleStudioBody()
+    ))
     .forEach((pair) => {
       const rest = restPathArrays(pair.fromNode, pair.toNode)
       const count = visibleHandleCount(polylineArcLength(rest), referenceArc, pair.handles.length)
@@ -5653,7 +5858,9 @@ function setSegmentHandle(routeId, fromPointId, toPointId, hit, handleIndex = 0)
       ? snapGbHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
       : isLiFutuHeliaoPair(fromCode, toCode)
         ? snapLiHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode), rest) || hit
-        : hit
+        : isGbChenglingNaokongPair(fromCode, toCode) && isMaleStudioBody()
+          ? snapGbScalpHandleToSkin(hit, resolvedNode(pair.fromNode), resolvedNode(pair.toNode)) || hit
+          : hit
   if (!placed?.position) return state
   const placedTooClose = records.some((record, cursor) => {
     if (cursor === index) return false
