@@ -370,6 +370,20 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
 }
 
 /**
+ * Male 扶突–禾髎 corridor in the male GLB's metres: anterolateral jaw /
+ * cheek, not the hand, nape, or the back of the ramus. Female meshes are
+ * ~232× this scale, so the box never matches a female sample.
+ */
+export function isMaleJawRibbonSample(point = [0, 0, 0], body = 'male') {
+  if (body !== 'male') return false
+  const p = asPathPoint(point)
+  return Math.abs(p[0]) < 0.10
+    && p[1] > 1.545
+    && p[1] < 1.665
+    && p[2] > -0.02
+}
+
+/**
  * Locator drag box for 扶突–禾髎: same-side neck / cheek / in front of the
  * jaw. Reject the opposite face, occiput, and a through-mandible dive.
  * Female allows a far-front locator in the jaw hollow; male caps anterior

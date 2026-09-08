@@ -78,6 +78,23 @@ describe('skin ribbon sampling', () => {
     expect(dense.length).toBeLessThanOrEqual(502)
   })
 
+  it('leaves skipped edges as a single chord', () => {
+    const hand = [-0.53, 0.85, 0.03]
+    const li18 = [-0.0508, 1.5513, -0.0124]
+    const li19 = [-0.0079, 1.6135, 0.0838]
+    const skipJaw = (a, b) => (
+      Math.abs(a[0]) < 0.10 && a[1] > 1.545 && a[1] < 1.665 && a[2] > -0.02
+      && Math.abs(b[0]) < 0.10 && b[1] > 1.545 && b[1] < 1.665 && b[2] > -0.02
+    )
+    const dense = densifyPath([hand, li18, li19], 0.002, { skipEdge: skipJaw })
+    const full = densifyPath([hand, li18, li19], 0.002)
+    expect(dense[dense.length - 1]).toEqual(li19)
+    expect(dense[dense.length - 2][0]).toBeCloseTo(li18[0], 5)
+    expect(dense[dense.length - 2][1]).toBeCloseTo(li18[1], 5)
+    expect(dense[dense.length - 2][2]).toBeCloseTo(li18[2], 5)
+    expect(full.length - dense.length).toBeGreaterThan(20)
+  })
+
   it('pulls every sample onto the surface and reads back its normal', () => {
     const project = sphereProjector()
     // A chord across the sphere: midpoints start well inside the surface.

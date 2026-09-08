@@ -56,6 +56,7 @@ import {
   liFutuHeliaoGuide,
   isLiFutuHeliaoHit,
   isLiFutuHeliaoHandleOk,
+  isMaleJawRibbonSample,
   isLiFutuHeliaoPair,
   isGbChenglingNaokongPair,
   gbChenglingNaokongOuterPoint,
@@ -467,6 +468,12 @@ describe('skin path wrapping', () => {
     const behindRamus = [-0.0593, 1.6017, -0.03]
     expect(isLiFutuHeliaoHandleOk(behindRamus, userLi18, userLi19)).toBe(false)
     expect(isLiFutuHeliaoHandleOk(behindRamus, userLi18, userLi19, 'female')).toBe(true)
+    expect(isMaleJawRibbonSample(userLi18)).toBe(true)
+    expect(isMaleJawRibbonSample(userLi19)).toBe(true)
+    expect(isMaleJawRibbonSample(behindRamus)).toBe(false)
+    expect(isMaleJawRibbonSample([-0.53, 0.85, 0.03])).toBe(false)
+    expect(isMaleJawRibbonSample(userLi18, 'female')).toBe(false)
+    expect(isMaleJawRibbonSample(userLi18.map((value) => value * 232), 'female')).toBe(false)
 
     const gb18 = [0.055, 1.70, -0.055]
     const gb19 = [0.062, 1.58, -0.102]

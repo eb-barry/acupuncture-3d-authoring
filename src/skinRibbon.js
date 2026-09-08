@@ -90,6 +90,7 @@ export function sampleStepForQuality(quality = 'fine') {
 /** Interpolate so no segment is longer than `maxStep`, without mutating input. */
 export function densifyPath(points = [], maxStep = FINE_SAMPLE_STEP, {
   maxSamples = MAX_RIBBON_SAMPLES,
+  skipEdge = null,
 } = {}) {
   const path = points.map(asPoint)
   if (path.length < 2) return path
@@ -102,6 +103,10 @@ export function densifyPath(points = [], maxStep = FINE_SAMPLE_STEP, {
   for (let index = 1; index < path.length; index += 1) {
     const a = path[index - 1]
     const b = path[index]
+    if (typeof skipEdge === 'function' && skipEdge(a, b)) {
+      out.push(b)
+      continue
+    }
     const span = distance3(a, b)
     const steps = Math.max(1, Math.ceil(span / effective))
     for (let step2 = 1; step2 <= steps; step2 += 1) {
