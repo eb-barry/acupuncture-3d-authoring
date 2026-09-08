@@ -60,10 +60,11 @@ import {
     isMaleRamusZHop,
     liMaleRamusWrapProbes,
     isLiFutuHeliaoPair,
-  isGbChenglingNaokongPair,
-  gbChenglingNaokongOuterPoint,
-  gbChenglingNaokongGuide,
-  isGbChenglingNaokongHit,
+    isGbChenglingNaokongPair,
+    gbChenglingNaokongOuterPoint,
+    gbChenglingNaokongGuide,
+    isGbChenglingNaokongHit,
+    isGbChenglingNaokongHandleOk,
   pathFollowsFacingChord,
   pickPairAlongPolyline,
   isDuBackWrapPair,
@@ -506,9 +507,18 @@ describe('skin path wrapping', () => {
     const femaleGb18 = gb18.map((value) => value * 232)
     const femaleGb19 = gb19.map((value) => value * 232)
     const femaleScalp = gbChenglingNaokongOuterPoint(femaleGb18, femaleGb19, 0.5)
-    expect(isGbChenglingNaokongHit(femaleScalp, femaleGb18, femaleGb19, 0.5)).toBe(true)
+    expect(isGbChenglingNaokongHit(femaleScalp, femaleGb18, femaleGb19, 0.5, 'female')).toBe(true)
     const femaleBun = [femaleGb18[0], (femaleGb18[1] + femaleGb19[1]) / 2, Math.min(femaleGb18[2], femaleGb19[2]) - 232 * 0.12]
-    expect(isGbChenglingNaokongHit(femaleBun, femaleGb18, femaleGb19, 0.5)).toBe(false)
+    expect(isGbChenglingNaokongHit(femaleBun, femaleGb18, femaleGb19, 0.5, 'female')).toBe(false)
+    const userGb18 = [0.0339, 1.782, -0.0056]
+    const userGb19 = [0.0235, 1.695, -0.130]
+    const userScalp = [0.0334, 1.773, -0.091]
+    const userEar = [0.082, 1.73, -0.02]
+    expect(isGbChenglingNaokongHit(userScalp, userGb18, userGb19, 0.45)).toBe(true)
+    expect(isGbChenglingNaokongHandleOk(userScalp, userGb18, userGb19)).toBe(true)
+    expect(isGbChenglingNaokongHit(userEar, userGb18, userGb19, 0.45)).toBe(false)
+    expect(isGbChenglingNaokongHandleOk(userEar, userGb18, userGb19)).toBe(false)
+    expect(pairKeepsOffPathLocators('GB18', 'GB19')).toBe(true)
 
     const midChord = [
       (jianjing[0] + yuanye[0]) / 2,

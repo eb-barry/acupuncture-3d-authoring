@@ -512,7 +512,7 @@ export function gbChenglingNaokongOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t
 }
 
 /** Keep samples on this side of the scalp; reject hair-bun / opposite-side hits. */
-export function isGbChenglingNaokongHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+export function isGbChenglingNaokongHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5, body = 'male') {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const p = asPathPoint(hit)
@@ -527,12 +527,41 @@ export function isGbChenglingNaokongHit(hit = [0, 0, 0], from = [0, 0, 0], to = 
   // The bun is more medial; stay on the parietal–occipital strip.
   if (Math.abs(xLerp) > span * 0.05 && Math.abs(p[0]) < Math.abs(xLerp) * 0.50) return false
   if (Math.abs(p[0] - xLerp) > Math.max(0.018, span * 0.22)) return false
+  const maxAbsX = Math.max(Math.abs(a[0]), Math.abs(b[0]))
+  const female = body === 'female'
+  // Male ear is far more lateral than 承靈/腦空; do not hop onto it.
+  if (!female && Math.abs(p[0]) > maxAbsX + Math.max(0.022, span * 0.18)) return false
   // Hair bun sits more posterior than both acupoints.
   if (p[2] < Math.min(a[2], b[2]) - span * 0.08) return false
   if (p[2] > Math.max(a[2], b[2]) + span * 0.28) return false
   const chord = lerp3(a, b, tt)
-  if (p[2] < chord[2] - span * 0.26) return false
-  return length3(sub3(p, chord)) <= Math.max(0.025, span * 0.32)
+  // Female bun can sit behind the chord at the same Y. Male occiput skin
+  // also sits behind the through-skull chord — that is the real path.
+  if (female && p[2] < chord[2] - span * 0.26) return false
+  const reach = Math.max(0.025, span * (female ? 0.32 : 0.62))
+  return length3(sub3(p, chord)) <= reach
+}
+
+/**
+ * Locator drag box for 承靈–腦空: same-side parietal / occiput scalp.
+ * Looser than the ribbon hit so a handle can pull the line, but still
+ * rejects the opposite hemisphere and the ear.
+ */
+export function isGbChenglingNaokongHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const p = asPathPoint(point)
+  const span = Math.max(length3(sub3(b, a)), 1e-6)
+  const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
+  if (side * p[0] < -span * 0.08) return false
+  const yMin = Math.min(a[1], b[1]) - span * 0.28
+  const yMax = Math.max(a[1], b[1]) + span * 0.28
+  if (p[1] < yMin || p[1] > yMax) return false
+  const maxAbsX = Math.max(Math.abs(a[0]), Math.abs(b[0]))
+  if (Math.abs(p[0]) > maxAbsX + Math.max(0.03, span * 0.28)) return false
+  if (p[2] < Math.min(a[2], b[2]) - span * 0.22) return false
+  if (p[2] > Math.max(a[2], b[2]) + span * 0.45) return false
+  return true
 }
 
 /** Push a through-spine chord out onto the back skin (−Z). */
@@ -1366,6 +1395,7 @@ export function pairKeepsOffPathLocators(fromCode = '', toCode = '') {
     || isTeHeadPair(fromCode, toCode)
     || isJianjingYuanyePair(fromCode, toCode)
     || isLiFutuHeliaoPair(fromCode, toCode)
+    || isGbChenglingNaokongPair(fromCode, toCode)
 }
 
 /** Stay on the back of the arm/shoulder — not into the axilla or chest. */

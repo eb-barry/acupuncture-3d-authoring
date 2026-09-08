@@ -234,11 +234,11 @@ describe('承靈–腦空 scalp corridor on the female mesh', () => {
     const snapRadius = Math.max(height * 0.04, span * 0.5)
     for (const t of [1 / 3, 0.5, 2 / 3]) {
       const outer = gbChenglingNaokongOuterPoint(from, to, t)
-      expect(isGbChenglingNaokongHit(outer, from, to, t)).toBe(true)
+      expect(isGbChenglingNaokongHit(outer, from, to, t, 'female')).toBe(true)
       const outerHit = closestHit(meshes, outer, snapRadius)
       expect(outerHit).toBeTruthy()
       expect(outerHit.distance).toBeLessThan(span * 0.35)
-      expect(isGbChenglingNaokongHit(outerHit.position, from, to, t)).toBe(true)
+      expect(isGbChenglingNaokongHit(outerHit.position, from, to, t, 'female')).toBe(true)
       const chord = [
         from[0] + (to[0] - from[0]) * t,
         from[1] + (to[1] - from[1]) * t,
@@ -246,7 +246,7 @@ describe('承靈–腦空 scalp corridor on the female mesh', () => {
       ]
       const chordHit = closestHit(meshes, chord, snapRadius)
       expect(chordHit).toBeTruthy()
-      expect(isGbChenglingNaokongHit(chordHit.position, from, to, t)).toBe(true)
+      expect(isGbChenglingNaokongHit(chordHit.position, from, to, t, 'female')).toBe(true)
       expect(chordHit.position[2]).toBeGreaterThan(Math.min(from[2], to[2]) - span * 0.08)
     }
     const bun = [
@@ -254,6 +254,6 @@ describe('承靈–腦空 scalp corridor on the female mesh', () => {
       (from[1] + to[1]) / 2,
       Math.min(from[2], to[2]) - span * 0.35,
     ]
-    expect(isGbChenglingNaokongHit(bun, from, to, 0.5)).toBe(false)
+    expect(isGbChenglingNaokongHit(bun, from, to, 0.5, 'female')).toBe(false)
   }, 180000)
 })
