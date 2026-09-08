@@ -303,6 +303,7 @@ describe('meridian authoring workflow', () => {
     expect(visibleHandleCount(0.178, 0.033, 3)).toBe(3)
     expect(meridianUsesLocators('LU')).toBe(true)
     expect(meridianUsesLocators('GB')).toBe(true)
+    expect(meridianUsesLocators('HT')).toBe(true)
     expect(meridianUsesLocators('CV')).toBe(false)
     expect(meridianUsesLocators('GV')).toBe(false)
   })

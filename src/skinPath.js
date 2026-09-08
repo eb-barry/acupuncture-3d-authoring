@@ -1011,6 +1011,52 @@ export function isOnDigitSkin(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0
   return distanceToSegment(point, from, tip) <= radius
 }
 
+/** How far a sample has travelled from 少府 toward 少衝 along the finger. */
+export function digitAxisProgress(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+  const distal = digitDistalDir(from, to)
+  const p = asPathPoint(point)
+  const a = asPathPoint(from)
+  return (p[0] - a[0]) * distal[0] + (p[1] - a[1]) * distal[1] + (p[2] - a[2]) * distal[2]
+}
+
+/** True when the polyline mostly advances toward the nail, not orbiting the tip. */
+export function digitPathIsMonotonic(points = [], from = [0, 0, 0], to = [0, 0, 0], slack = 0.004) {
+  if (!points || points.length < 2) return false
+  let previous = -Infinity
+  let reversals = 0
+  for (const point of points) {
+    const sample = point?.isVector3 ? [point.x, point.y, point.z] : point
+    const progress = digitAxisProgress(sample, from, to)
+    if (progress < previous - slack) reversals += 1
+    previous = Math.max(previous, progress)
+  }
+  return reversals <= 1
+}
+
+/** Drop vertices that reverse the running tangent (ribbon-scribble spikes). */
+export function pruneSharpPolylineTurns(points = [], minDot = 0.15) {
+  if (!points || points.length < 4) return points
+  const asVec = (point) => (point?.isVector3 ? [point.x, point.y, point.z] : asPathPoint(point))
+  const keep = [points[0]]
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const prev = asVec(keep[keep.length - 1])
+    const curr = asVec(points[index])
+    const next = asVec(points[index + 1])
+    const toCurr = sub3(curr, prev)
+    const toNext = sub3(next, curr)
+    const len1 = length3(toCurr)
+    if (len1 < 1e-6) continue
+    const len2 = length3(toNext)
+    if (len2 < 1e-6) continue
+    const dot = (toCurr[0] * toNext[0] + toCurr[1] * toNext[1] + toCurr[2] * toNext[2])
+      / (len1 * len2)
+    if (dot < minDot) continue
+    keep.push(points[index])
+  }
+  keep.push(points[points.length - 1])
+  return keep.length >= 2 ? keep : points
+}
+
 export function maxPolylineEdge(points = []) {
   let max = 0
   for (let index = 1; index < points.length; index += 1) {
