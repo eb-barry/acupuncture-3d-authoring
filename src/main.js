@@ -2493,6 +2493,9 @@ function isUsableDigitPath(points, from, to) {
     const sample = point?.isVector3 ? toArray(point) : point
     if (!isOnDigitSkin(sample, from, to, 0.030)) return false
   }
+  const first = toArray(points[0])
+  const last = toArray(points[points.length - 1])
+  if (dist3(first, from) > 0.01 || dist3(last, to) > 0.01) return false
   return true
 }
 
@@ -2640,8 +2643,7 @@ function sampleDigitSkinPath(a, b, tipPos, tipNormal, {
   accept({ position: b.position, normal: b.normal }, {
     corridorFrom: palmarFrom,
     corridorTo: toArray(end),
-    maxOff: 0.012,
-    maxStep: 0.02,
+    maxOff: 0.016,
   })
   return points
 }
@@ -3128,21 +3130,11 @@ function snapLiHandleToSkinMale(placed, fromResolved, toResolved, rest = []) {
     new THREE.Vector3(...from).distanceTo(new THREE.Vector3(...to)),
     1e-6,
   )
-  const sideX = Math.abs(from[0]) >= Math.abs(to[0]) ? from[0] : to[0]
   const legal = (hit) => hit && liHandleOk(hit.position, from, to)
   const hit = liFaceSkinAtXY(placed.position[0], placed.position[1], from, to, legal)
-  if (hit) return { position: hit.position, normal: hit.normal }
-  const near = Math.max(statureWorld(0.008), span * 0.045)
-  const nearHit = closestSkinHit(placed.position, {
-    maxDistance: near,
-    sideX,
-    guideNormal: placed.normal || liFutuHeliaoGuide(
-      from,
-      to,
-      rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5,
-    ),
-  })
-  if (legal(nearHit)) return { position: nearHit.position, normal: nearHit.normal }
+  if (hit && hit.position[2] >= Math.min(from[2], to[2]) - span * 0.03) {
+    return { position: hit.position, normal: hit.normal }
+  }
   return null
 }
 
@@ -3216,7 +3208,11 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
   ))
   const sanitized = ordered
     .map((record) => snapLiHandleToSkinMale(record, a, b, path))
-    .filter(Boolean)
+    .filter((record) => (
+      record
+      && record.position[2] >= neck[2] - span * 0.03
+      && liHandleOk(record.position, a.position, b.position)
+    ))
   const hasUserHandles = sanitized.length > 0
   const count = Math.min(80, Math.max(32, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.028)) + 18))
   const lift = statureWorld(SKIN_LIFT)
@@ -3259,7 +3255,10 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
-  const arrays = points.map((point) => [point.x, point.y, point.z])
+  const arrays = pruneSharpPolylineTurns(
+    points.map((point) => [point.x, point.y, point.z]),
+    0.12,
+  )
   const simplified = simplifyPolylineWithNormals(
     arrays,
     arrays.map((_, index) => liFutuHeliaoGuide(
@@ -4075,14 +4074,6 @@ function snapHandleToSkin(placed, fromNode, toNode) {
     const snapped = snapLiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode))
     if (!isMaleStudioBody()) return snapped || placed
     if (snapped) return snapped
-    if (liHandleOk(placed.position, from.position, to.position)) {
-      const near = closestSkinHit(placed.position, {
-        maxDistance: statureWorld(0.02),
-        sideX: from.position[0],
-        guideNormal: placed.normal,
-      })
-      if (near && liHandleOk(near.position, from.position, to.position)) return near
-    }
     return placed
   }
   const sideX = pairSideX(fromNode, toNode)

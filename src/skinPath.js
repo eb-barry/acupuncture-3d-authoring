@@ -384,8 +384,10 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
   const yMin = Math.min(neck[1], face[1]) - span * 0.22
   const yMax = Math.max(neck[1], face[1]) + span * 0.22
   if (p[1] < yMin || p[1] > yMax) return false
-  if (p[2] < Math.min(neck[2], face[2]) - span * 0.22) return false
-  const anteriorSlack = isFemaleLiBody(body) ? 0.9 : 0.22
+  const female = isFemaleLiBody(body)
+  const posteriorSlack = female ? 0.22 : 0.05
+  if (p[2] < Math.min(neck[2], face[2]) - span * posteriorSlack) return false
+  const anteriorSlack = female ? 0.9 : 0.22
   if (p[2] > Math.max(neck[2], face[2]) + span * anteriorSlack) return false
   const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
   if (Math.abs(p[0]) > maxAbsX + span * 0.45) return false
@@ -393,13 +395,12 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
     ? clamp01((p[1] - neck[1]) / (face[1] - neck[1]))
     : 0.5
   const chordZ = neck[2] + (face[2] - neck[2]) * yT
-  if (
-    yT > 0.18
-    && yT < 0.82
-    && p[2] < chordZ + span * 0.02
-    && Math.abs(p[0]) < Math.abs(neck[0]) * 0.72
-  ) {
-    return false
+  if (yT > 0.18 && yT < 0.82 && p[2] < chordZ + span * 0.02) {
+    if (female) {
+      if (Math.abs(p[0]) < Math.abs(neck[0]) * 0.72) return false
+    } else {
+      return false
+    }
   }
   return true
 }

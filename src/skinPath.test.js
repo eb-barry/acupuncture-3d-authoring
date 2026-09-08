@@ -462,6 +462,11 @@ describe('skin path wrapping', () => {
     expect(isLiFutuHeliaoHandleOk(floatFront, li18, li19)).toBe(false)
     expect(isLiFutuHeliaoHandleOk(floatFront, li18, li19, 'female')).toBe(true)
     expect(isLiFutuHeliaoHandleOk(femaleJawFront, li18, li19, 'female')).toBe(true)
+    const userLi18 = [-0.0508, 1.5513, -0.0124]
+    const userLi19 = [-0.0079, 1.6135, 0.0838]
+    const behindRamus = [-0.0593, 1.6017, -0.03]
+    expect(isLiFutuHeliaoHandleOk(behindRamus, userLi18, userLi19)).toBe(false)
+    expect(isLiFutuHeliaoHandleOk(behindRamus, userLi18, userLi19, 'female')).toBe(true)
 
     const gb18 = [0.055, 1.70, -0.055]
     const gb19 = [0.062, 1.58, -0.102]
