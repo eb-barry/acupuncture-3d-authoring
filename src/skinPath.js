@@ -281,17 +281,28 @@ export function liFutuHeliaoGuidePoints(from = [0, 0, 0], to = [0, 0, 0], count 
     neck[2] + (face[2] - neck[2]) * 0.70,
     (neck[2] + face[2]) * 0.5 + span * 0.08,
   )
-  const neckClimb = [
-    neck[0] + side * span * 0.015,
-    yAt(0.16),
-    neck[2] + (frontZ - neck[2]) * 0.70,
-  ]
   const female = isFemaleLiBody(body)
-  const jawFront = [
-    neck[0] * (female ? 0.90 : 0.88) + face[0] * (female ? 0.10 : 0.12),
-    yAt(0.42),
-    frontZ,
+  // Female stays in front of the under-chin hollow (no mesh there).
+  // Male sits beside the ramus so the ribbon can wrap the jaw, not chord
+  // through the empty space in front of it.
+  const neckClimb = [
+    neck[0] + side * span * (female ? 0.015 : 0.05),
+    yAt(female ? 0.16 : 0.18),
+    female
+      ? neck[2] + (frontZ - neck[2]) * 0.70
+      : neck[2] + (face[2] - neck[2]) * 0.18,
   ]
+  const jawFront = female
+    ? [
+      neck[0] * 0.90 + face[0] * 0.10,
+      yAt(0.42),
+      frontZ,
+    ]
+    : [
+      neck[0] + side * span * 0.10,
+      yAt(0.40),
+      neck[2] + (face[2] - neck[2]) * 0.32,
+    ]
   const cheek = [
     neck[0] * (female ? 0.40 : 0.45) + face[0] * (female ? 0.60 : 0.55),
     yAt(0.74),
@@ -329,6 +340,50 @@ export function liFutuHeliaoCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
   return Math.max(0.02, span * 0.12)
 }
 
+/** Same-XY (or nearly) hop whose length is almost pure +Z — a ramus shortcut. */
+export function isMaleRamusZHop(prev = [0, 0, 0], curr = [0, 0, 0]) {
+  const a = asPathPoint(prev)
+  const b = asPathPoint(curr)
+  const dz = Math.abs(b[2] - a[2])
+  const dxy = Math.hypot(b[0] - a[0], b[1] - a[1])
+  return dz > 0.008 && dxy < 0.01 && dz > dxy
+}
+
+/**
+ * Outer probes around the lateral ramus for a male +Z hop.
+ * θ = 0 at +Z, θ = π/2 at the side, so lerp stays on the jaw, not through it.
+ */
+export function liMaleRamusWrapProbes(prev = [0, 0, 0], curr = [0, 0, 0], steps = 10) {
+  const a = asPathPoint(prev)
+  const b = asPathPoint(curr)
+  if (!isMaleRamusZHop(a, b)) return []
+  const side = Math.sign(a[0] || b[0] || -1) || -1
+  const midX = (a[0] + b[0]) * 0.5
+  const midZ = (a[2] + b[2]) * 0.5
+  const half = Math.max(Math.abs(b[2] - a[2]) * 0.5, Math.hypot(b[0] - a[0], b[2] - a[2]) * 0.5)
+  const centerX = midX - side * Math.max(0.006, half * 0.35)
+  const centerZ = midZ
+  const radius = Math.max(
+    Math.hypot(a[0] - centerX, a[2] - centerZ),
+    Math.hypot(b[0] - centerX, b[2] - centerZ),
+  ) + Math.max(0.008, Math.abs(b[2] - a[2]) * 0.15)
+  const angOf = (point) => Math.atan2(side * (point[0] - centerX), point[2] - centerZ)
+  const angA = angOf(a)
+  const angB = angOf(b)
+  const count = Math.max(6, Math.floor(Number(steps) || 10))
+  const probes = []
+  for (let index = 1; index < count; index += 1) {
+    const u = index / count
+    const ang = angA + (angB - angA) * u
+    probes.push([
+      centerX + side * radius * Math.sin(ang),
+      a[1] + (b[1] - a[1]) * u,
+      centerZ + radius * Math.cos(ang),
+    ])
+  }
+  return probes
+}
+
 /** Keep samples on this neck–cheek; reject jaw interior and the far face. */
 export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5, body = 'male') {
   const { neck, face, flipped } = liFutuHeliaoEnds(from, to)
@@ -340,8 +395,9 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   if (p[1] < yMin || p[1] > yMax) return false
   const side = Math.sign(neck[0]) || 1
   if (side * p[0] < -span * 0.06) return false
+  const female = isFemaleLiBody(body)
   const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
-  if (Math.abs(p[0]) > maxAbsX + span * 0.18) return false
+  if (Math.abs(p[0]) > maxAbsX + span * (female ? 0.18 : 0.36)) return false
   if (p[2] < Math.min(neck[2], face[2]) - span * 0.08) return false
   if (p[2] > Math.max(neck[2], face[2]) + span * 0.5) return false
   const chord = [
@@ -355,7 +411,6 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   }
   if (tt < 0.42 && Math.abs(p[0]) < Math.abs(neck[0]) * 0.68) return false
   const outer = liFutuHeliaoOuterPoint(from, to, t, body)
-  const female = isFemaleLiBody(body)
   // Female: stay in front of the under-chin hollow (no mesh there).
   // Male: jaw/cheek skin sits behind the outer guide; reject only a
   // through-mandible sample, not the face itself.
