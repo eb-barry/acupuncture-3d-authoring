@@ -102,6 +102,7 @@ import {
   liFutuHeliaoGuidePoints,
   liFutuHeliaoOuterPoint,
   liFutuHeliaoGuide,
+  liFutuHeliaoCastStandoff,
   isGbChenglingNaokongHit,
   gbChenglingNaokongCastStandoff,
   gbChenglingNaokongGuide,
@@ -3220,12 +3221,22 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     return liHit(hit.position, a.position, b.position, t)
   }
   const skinAt = (x, y, t) => liFaceSkinAtXY(x, y, a.position, b.position, legalAt(t))
+  const skinFromOutside = (t) => {
+    const outer = liOuterPoint(a.position, b.position, t)
+    const guide = liFutuHeliaoGuide(a.position, b.position, t)
+    const standoff = Math.max(liFutuHeliaoCastStandoff(a.position, b.position), span * 0.18)
+    const legal = legalAt(t)
+    const hits = projectFromOutsideHits(new THREE.Vector3(...outer), guide, standoff).filter(legal)
+    hits.sort((left, right) => dist3(left.position, outer) - dist3(right.position, outer))
+    if (hits[0]) return hits[0]
+    return skinAt(outer[0], outer[1], t)
+  }
   accept({ position: a.position, normal: a.normal })
   const guides = liGuidePoints(a.position, b.position, count)
   for (let index = 1; index < guides.length - 1; index += 1) {
     const t = index / (guides.length - 1)
     const sample = guides[index]
-    const hit = skinAt(sample[0], sample[1], t)
+    const hit = skinFromOutside(t) || skinAt(sample[0], sample[1], t)
     if (hit) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
