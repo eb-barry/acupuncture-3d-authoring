@@ -362,7 +362,7 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   if (tt > 0.16 && tt < 0.84) {
     if (female) {
       if (p[2] < outer[2] - span * 0.16) return false
-    } else if (p[2] < chord[2] - span * 0.22) {
+    } else if (p[2] < chord[2] - span * 0.08) {
       return false
     }
   }
