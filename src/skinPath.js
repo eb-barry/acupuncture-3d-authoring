@@ -386,8 +386,9 @@ export function isMaleJawRibbonSample(point = [0, 0, 0], body = 'male') {
 /**
  * Locator drag box for 扶突–禾髎: same-side neck / cheek / in front of the
  * jaw. Reject the opposite face, occiput, and a through-mandible dive.
- * Female allows a far-front locator in the jaw hollow; male caps anterior
- * so locators cannot float off the face.
+ * Female allows a far-front locator in the jaw hollow; male allows more
+ * anterior slack than a tight face cap so locators can be dragged around
+ * the jaw, but still rejects a float off the mesh.
  */
 export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], body = 'male') {
   const { neck, face } = liFutuHeliaoEnds(from, to)
@@ -399,9 +400,9 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
   const yMax = Math.max(neck[1], face[1]) + span * 0.22
   if (p[1] < yMin || p[1] > yMax) return false
   const female = isFemaleLiBody(body)
-  const posteriorSlack = female ? 0.22 : 0.05
+  const posteriorSlack = female ? 0.22 : 0.12
   if (p[2] < Math.min(neck[2], face[2]) - span * posteriorSlack) return false
-  const anteriorSlack = female ? 0.9 : 0.22
+  const anteriorSlack = female ? 0.9 : 0.45
   if (p[2] > Math.max(neck[2], face[2]) + span * anteriorSlack) return false
   const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
   if (Math.abs(p[0]) > maxAbsX + span * 0.45) return false
@@ -410,11 +411,8 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
     : 0.5
   const chordZ = neck[2] + (face[2] - neck[2]) * yT
   if (yT > 0.18 && yT < 0.82 && p[2] < chordZ + span * 0.02) {
-    if (female) {
-      if (Math.abs(p[0]) < Math.abs(neck[0]) * 0.72) return false
-    } else {
-      return false
-    }
+    // Through-mandible: medial of the ramus. Lateral jaw / cheek skin is ok.
+    if (Math.abs(p[0]) < Math.abs(neck[0]) * (female ? 0.72 : 0.78)) return false
   }
   return true
 }

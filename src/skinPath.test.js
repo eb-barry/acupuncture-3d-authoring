@@ -470,6 +470,7 @@ describe('skin path wrapping', () => {
     expect(isLiFutuHeliaoHandleOk(behindRamus, userLi18, userLi19, 'female')).toBe(true)
     const ramusSkin = [-0.045, 1.577, 0.01]
     expect(isLiFutuHeliaoHit(ramusSkin, userLi18, userLi19, 0.4)).toBe(true)
+    expect(isLiFutuHeliaoHandleOk(ramusSkin, userLi18, userLi19)).toBe(true)
     expect(isLiFutuHeliaoHit(behindRamus, userLi18, userLi19, 0.4)).toBe(false)
     expect(isMaleJawRibbonSample(userLi18)).toBe(true)
     expect(isMaleJawRibbonSample(userLi19)).toBe(true)
