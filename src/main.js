@@ -3203,6 +3203,8 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     1e-6,
   )
   const neck = Math.abs(a.position[0]) >= Math.abs(b.position[0]) ? a.position : b.position
+  const face = neck === a.position ? b.position : a.position
+  const side = Math.sign(neck[0]) || 1
   const count = Math.min(80, Math.max(32, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.028)) + 18))
   const lift = statureWorld(SKIN_LIFT)
   const points = []
@@ -3220,42 +3222,33 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     return liHit(hit.position, a.position, b.position, t)
   }
   const skinAt = (x, y, t) => liFaceSkinAtXY(x, y, a.position, b.position, legalAt(t))
+  const pickAnteriorAtY = (y, t, preferX) => {
+    const xs = [preferX]
+    for (const fraction of [0, 0.12, 0.24, 0.36, 0.5, 0.64, 0.78]) {
+      xs.push(neck[0] * (1 - fraction) + face[0] * fraction)
+      xs.push(neck[0] + side * span * 0.05 * (1 - fraction))
+    }
+    let best = null
+    for (const x of xs) {
+      const candidate = skinAt(x, y, t)
+      if (!candidate) continue
+      if (candidate.position[2] < neck[2] - span * 0.03) continue
+      if (!best || candidate.position[2] > best.position[2]) best = candidate
+    }
+    return best
+  }
   accept({ position: a.position, normal: a.normal })
   const guides = liGuidePoints(a.position, b.position, count)
   for (let index = 1; index < guides.length - 1; index += 1) {
     const t = index / (guides.length - 1)
     const sample = guides[index]
-    const hit = skinAt(sample[0], sample[1], t)
+    const hit = pickAnteriorAtY(sample[1], t, sample[0])
     if (hit) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
-  const raw = points.map((point) => [point.x, point.y, point.z])
-  const filled = []
-  const fillRef = { current: null }
-  for (let index = 0; index < raw.length; index += 1) {
-    if (index > 0) {
-      const prev = raw[index - 1]
-      const curr = raw[index]
-      const gap = Math.hypot(curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2])
-      const extra = Math.min(12, Math.floor(gap / 0.008))
-      for (let k = 1; k <= extra; k += 1) {
-        const u = k / (extra + 1)
-        const pathT = (index - 1 + u) / Math.max(raw.length - 1, 1)
-        const hit = skinAt(
-          prev[0] + (curr[0] - prev[0]) * u,
-          prev[1] + (curr[1] - prev[1]) * u,
-          pathT,
-        )
-        if (!hit) continue
-        if (hit.position[2] < Math.min(prev[2], curr[2]) - span * 0.04) continue
-        appendSkinPoint(filled, liftHit(hit), fillRef)
-      }
-    }
-    appendSkinPoint(filled, new THREE.Vector3(...raw[index]), fillRef)
-  }
   const arrays = pruneSharpPolylineTurns(
-    (filled.length >= 3 ? filled : points).map((point) => [point.x, point.y, point.z]),
+    points.map((point) => [point.x, point.y, point.z]),
     -0.5,
   )
   const simplified = simplifyPolylineWithNormals(
