@@ -56,6 +56,7 @@ import {
   isGbAxillaHollow,
   isGbJianjingYuanyeHandleOk,
   isGbJianjingYuanyeHit,
+  gbJianjingYuanyeGuide,
   gbJianjingYuanyeGuidePoints,
   gbJianjingYuanyeOuterPoint,
   gbLateralChestGuide,
@@ -543,6 +544,30 @@ function liGuidePoints(from, to, count = 28) {
 
 function liOuterPoint(from, to, t) {
   return liFutuHeliaoOuterPoint(from, to, t, studioBodyId())
+}
+
+function gbChestBody() {
+  return studioBodyId()
+}
+
+function gbChestGuide(point, sideX, yT = 0.5) {
+  return gbLateralChestGuide(point, sideX, gbChestBody(), yT)
+}
+
+function gbChestOuter(from, to, t) {
+  return gbJianjingYuanyeOuterPoint(from, to, t, gbChestBody())
+}
+
+function gbChestHit(point, from, to, t) {
+  return isGbJianjingYuanyeHit(point, from, to, t, gbChestBody())
+}
+
+function gbChestHandleOk(point, from, to) {
+  return isGbJianjingYuanyeHandleOk(point, from, to, gbChestBody())
+}
+
+function gbChestOutsideProbe(sample, from, to) {
+  return gbLocatorOutsideProbe(sample, from, to, gbChestBody())
 }
 const skinDecalMaterials = new Set()
 const conformCache = new Map()
@@ -1650,7 +1675,7 @@ function handleSkinHit(event, drag) {
       skipLimbGap,
       worldScale: scale,
     })) return false
-    if (gbPair && !isGbJianjingYuanyeHandleOk(hit.position, from.position, to.position)) return false
+    if (gbPair && !gbChestHandleOk(hit.position, from.position, to.position)) return false
     if (liFace && !liHandleOk(hit.position, from.position, to.position)) return false
     if (gbScalp && !isGbChenglingNaokongHandleOk(hit.position, from.position, to.position)) return false
     return true
@@ -1678,7 +1703,7 @@ function handleSkinHit(event, drag) {
   if (planePoint) {
     const planeArr = toArray(planePoint)
     const guide = gbPair
-      ? gbLateralChestGuide(planeArr, sideX)
+      ? gbChestGuide(planeArr, sideX)
       : liFace
         ? liFutuHeliaoGuide(from.position, to.position, 0.5)
         : gbScalp
@@ -1693,7 +1718,7 @@ function handleSkinHit(event, drag) {
     if (accept(projected) && !liFace && !gbScalp) return projected
     if (gbPair) {
       const standoff = gbLocatorCastStandoff(from.position, to.position)
-      const probe = gbLocatorOutsideProbe(planeArr, from.position, to.position)
+      const probe = gbChestOutsideProbe(planeArr, from.position, to.position)
       const side = Math.sign(sideX) || Math.sign(from.position[0]) || 1
       const inward = new THREE.Vector3(-side, 0, 0)
       const reach = Math.max(projectRadius * 2, standoff * 3)
@@ -2992,11 +3017,14 @@ function snapGbHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   const sideX = (from[0] + to[0]) / 2
   const span = gbPairSpan(from, to)
   const t = rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5
-  const guide = placed.normal || gbLateralChestGuide(placed.position, sideX)
+  const y0 = Math.min(from[1], to[1])
+  const y1 = Math.max(from[1], to[1])
+  const yT = y1 - y0 > 1e-8 ? Math.min(1, Math.max(0, (placed.position[1] - y0) / (y1 - y0))) : 0.5
+  const guide = placed.normal || gbChestGuide(placed.position, sideX, yT)
   const near = Math.max(0.02, span * 0.05)
   const standoff = gbLocatorCastStandoff(from, to)
-  const probe = gbLocatorOutsideProbe(placed.position, from, to)
-  const legalHit = (hit) => hit && isGbJianjingYuanyeHandleOk(hit.position, from, to)
+  const probe = gbChestOutsideProbe(placed.position, from, to)
+  const legalHit = (hit) => hit && gbChestHandleOk(hit.position, from, to)
   const nearHit = closestSkinHit(placed.position, {
     maxDistance: near,
     sideX,
@@ -3012,27 +3040,29 @@ function snapGbHandleToSkin(placed, fromResolved, toResolved, rest = []) {
   }
   // Keep a legal 側胸 drag. Never rescue onto the default corridor — that
   // pinned the black dots while the user pulled them to the right.
-  if (isGbJianjingYuanyeHandleOk(placed.position, from, to)) {
+  if (gbChestHandleOk(placed.position, from, to)) {
     return { position: [...placed.position], normal: [...(placed.normal || guide)] }
   }
-  const outer = gbJianjingYuanyeOuterPoint(from, to, t)
-  const fallbackGuide = gbLateralChestGuide(outer, sideX)
+  const outer = gbChestOuter(from, to, t)
+  const fallbackGuide = gbChestGuide(outer, sideX, yT)
   const fallback = closestSkinHit(outer, {
     maxDistance: Math.max(0.08, span * 0.18),
     sideX,
     guideNormal: fallbackGuide,
   })
     || projectFromOutside(new THREE.Vector3(...outer), fallbackGuide, standoff)
-  if (fallback && isGbJianjingYuanyeHandleOk(fallback.position, from, to)) {
+  if (fallback && gbChestHandleOk(fallback.position, from, to)) {
     return { position: fallback.position, normal: fallback.normal }
   }
   return null
 }
 
-function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
+/** Female 肩井→淵腋: mid-axillary 側胸. Unchanged corridor / locator follow. */
+function snapGbJianjingYuanyeToSkinFemale(a, b, records = [], rest = []) {
+  const body = 'female'
   const sideX = (a.position[0] + b.position[0]) / 2
   const span = gbPairSpan(a.position, b.position)
-  const path = rest.length >= 2 ? rest : gbJianjingYuanyeGuidePoints(a.position, b.position)
+  const path = rest.length >= 2 ? rest : gbJianjingYuanyeGuidePoints(a.position, b.position, 12, body)
   const ordered = [...records].sort((left, right) => (
     closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
   ))
@@ -3046,7 +3076,7 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
       [a.position, ...sanitized.map((record) => record.position), b.position],
       16,
     )
-    : gbJianjingYuanyeGuidePoints(a.position, b.position, sampleCount)
+    : gbJianjingYuanyeGuidePoints(a.position, b.position, sampleCount, body)
   const points = []
   const previousRef = { current: null }
   const probeRadius = Math.max(0.028, span * 0.12)
@@ -3063,24 +3093,21 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
   const hitOk = (hit, t) => {
     if (!hit) return false
     return hasUserHandles
-      ? isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position)
-      : isGbJianjingYuanyeHit(hit.position, a.position, b.position, t)
+      ? isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position, body)
+      : isGbJianjingYuanyeHit(hit.position, a.position, b.position, t, body)
   }
   accept({ position: a.position, normal: a.normal })
   for (let index = 1; index < samples.length - 1; index += 1) {
     const t = index / Math.max(1, samples.length - 1)
-    const outer = gbJianjingYuanyeOuterPoint(a.position, b.position, t)
+    const outer = gbJianjingYuanyeOuterPoint(a.position, b.position, t, body)
     const sample = samples[index]
     const side = Math.sign(sideX) || 1
     if (hasUserHandles) {
-      const guide = gbLateralChestGuide(sample, side)
-      const probe = gbLocatorOutsideProbe(sample, a.position, b.position)
+      const guide = gbLateralChestGuide(sample, side, body)
+      const probe = gbLocatorOutsideProbe(sample, a.position, b.position, body)
       const hit = projectFromOutside(new THREE.Vector3(...probe), guide, locatorStandoff)
         || projectFromOutside(new THREE.Vector3(...sample), guide, locatorStandoff)
         || closestSkinHit(sample, { maxDistance: locatorNear, sideX: side, guideNormal: guide })
-      // Locators are the path. Always emit a point under the curve; never
-      // rescue onto the default mid-axillary corridor, and never drop the
-      // sample (that left a jagged ribbon while the black dots moved).
       if (hit) accept(hit)
       else accept({ position: [...sample], normal: [...guide] })
       continue
@@ -3091,11 +3118,11 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
     const tooLateral = Math.abs(sample[0]) > Math.abs(outer[0]) + span * 0.12
     const tooPosterior = sample[2] < outer[2] - span * 0.10
     if (tooMedial || tooAnterior || tooLateral || tooPosterior) probe = outer
-    const guide = gbLateralChestGuide(probe, side)
-    const rescueGuide = gbLateralChestGuide(outer, side)
+    const guide = gbLateralChestGuide(probe, side, body)
+    const rescueGuide = gbLateralChestGuide(outer, side, body)
     let hit = projectFromOutside(new THREE.Vector3(...probe), guide, probeRadius)
       || closestSkinHit(probe, { maxDistance: snapRadius, sideX: side, guideNormal: guide })
-    if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position))) {
+    if (!hitOk(hit, t) || (hit && isGbAxillaHollow(hit.position, a.position, b.position, body))) {
       hit = projectFromOutside(new THREE.Vector3(...outer), rescueGuide, probeRadius)
         || closestSkinHit(outer, { maxDistance: Math.max(0.22, span), sideX: side, guideNormal: rescueGuide })
         || projectFromOutside(new THREE.Vector3(...outer), rescueGuide, Math.max(0.08, span * 0.4))
@@ -3107,6 +3134,136 @@ function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
   }
   accept({ position: b.position, normal: b.normal })
   return points.length >= 3 ? points : null
+}
+
+/**
+ * Male 肩井→淵腋: the chord goes through the shoulder / thorax. Cast from
+ * outside along 胸前側邊 into the axilla. Do not nearest-hit from the
+ * interior (that punches the pecs or leaves a gap in the pit).
+ */
+function snapGbJianjingYuanyeToSkinMale(a, b, records = [], rest = []) {
+  const body = 'male'
+  const sideX = (a.position[0] + b.position[0]) / 2
+  const span = gbPairSpan(a.position, b.position)
+  const path = rest.length >= 2 ? rest : gbJianjingYuanyeGuidePoints(a.position, b.position, 12, body)
+  const ordered = [...records].sort((left, right) => (
+    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
+  ))
+  const sanitized = ordered
+    .map((record) => snapGbHandleToSkin(record, a, b, path))
+    .filter(Boolean)
+    .filter((record) => isGbJianjingYuanyeHandleOk(record.position, a.position, b.position, body))
+  let hasUserHandles = false
+  let samples = null
+  if (sanitized.length > 0) {
+    const curve = catmullRomThrough(
+      [a.position, ...sanitized.map((record) => record.position), b.position],
+      16,
+    )
+    if (!isDisorderedPolyline(curve, [a.position, b.position], { maxLengthRatio: 1.85 })) {
+      samples = curve
+      hasUserHandles = true
+    }
+  }
+  if (!samples) {
+    samples = gbJianjingYuanyeGuidePoints(a.position, b.position, 36, body)
+  }
+  const standoff = Math.max(0.055, span * 0.32)
+  const lift = statureWorld(SKIN_LIFT)
+  const points = []
+  const previousRef = { current: null }
+  const liftHit = (hit) => new THREE.Vector3(...hit.position)
+    .addScaledVector(new THREE.Vector3(...hit.normal), lift)
+  const legal = (hit, t) => {
+    if (!hit) return false
+    return hasUserHandles
+      ? isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position, body)
+      : isGbJianjingYuanyeHit(hit.position, a.position, b.position, t, body)
+  }
+  const skinAt = (sample, t) => {
+    const guide = gbJianjingYuanyeGuide(a.position, b.position, t, body)
+    const probe = [
+      sample[0] + guide[0] * standoff * 0.45,
+      sample[1] + guide[1] * standoff * 0.45,
+      sample[2] + guide[2] * standoff * 0.45,
+    ]
+    const hits = projectFromOutsideHits(
+      new THREE.Vector3(...probe),
+      guide,
+      standoff,
+    ).filter((hit) => legal(hit, t))
+    hits.sort((left, right) => dist3(left.position, sample) - dist3(right.position, sample))
+    if (hits[0]) return hits[0]
+    const near = closestSkinHit(probe, {
+      maxDistance: hasUserHandles ? 0.022 : 0.018,
+      sideX,
+      guideNormal: guide,
+    })
+    if (legal(near, t)) return near
+    return null
+  }
+  const accept = (hit) => {
+    if (!hit) return false
+    appendSkinPoint(points, liftHit(hit), previousRef)
+    return true
+  }
+  accept({ position: a.position, normal: a.normal })
+  for (let index = 1; index < samples.length - 1; index += 1) {
+    const t = index / Math.max(samples.length - 1, 1)
+    const hit = skinAt(samples[index], t)
+    if (hit) accept(hit)
+  }
+  accept({ position: b.position, normal: b.normal })
+  if (points.length < 3) return null
+  const maxGap = 0.008
+  for (let pass = 0; pass < 5; pass += 1) {
+    const denser = [points[0]]
+    let added = false
+    for (let index = 1; index < points.length; index += 1) {
+      const prev = points[index - 1]
+      const nextPt = points[index]
+      if (prev.distanceTo(nextPt) > maxGap) {
+        const mid = prev.clone().lerp(nextPt, 0.5)
+        const tMid = index / Math.max(points.length - 1, 1)
+        const guide = gbJianjingYuanyeGuide(a.position, b.position, tMid, body)
+        const probe = [
+          mid.x + guide[0] * standoff * 0.4,
+          mid.y + guide[1] * standoff * 0.4,
+          mid.z + guide[2] * standoff * 0.4,
+        ]
+        const snapped = skinAt(probe, tMid)
+          || closestSkinHit(probe, {
+            maxDistance: 0.02,
+            sideX,
+            guideNormal: guide,
+          })
+        if (
+          snapped
+          && legal(snapped, tMid)
+          && liftHit(snapped).distanceTo(prev) > 0.002
+          && liftHit(snapped).distanceTo(nextPt) > 0.002
+        ) {
+          denser.push(liftHit(snapped))
+          added = true
+        }
+      }
+      denser.push(nextPt)
+    }
+    points.length = 0
+    points.push(...denser)
+    if (!added) break
+  }
+  const arrays = arraysFromSkin(points)
+  if (isDisorderedPolyline(arrays, [a.position, b.position], { maxLengthRatio: 1.85 })) {
+    return null
+  }
+  return points
+}
+
+function snapGbJianjingYuanyeToSkin(a, b, records = [], rest = []) {
+  return isMaleStudioBody()
+    ? snapGbJianjingYuanyeToSkinMale(a, b, records, rest)
+    : snapGbJianjingYuanyeToSkinFemale(a, b, records, rest)
 }
 
 /** 陰谷→長強: posterior thigh, then a straight diagonal into the natal cleft. */
@@ -4380,7 +4537,7 @@ function restPathArrays(fromNode, toNode) {
     if (gbShoulderAxilla) {
       if (isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.7 })) return false
       const mid = cached[Math.floor(cached.length / 2)]
-      return Boolean(mid) && isGbJianjingYuanyeHit(mid, a.position, b.position)
+      return Boolean(mid) && gbChestHit(mid, a.position, b.position, 0.5)
     }
     if (isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)) {
       const mid = cached[Math.floor(cached.length / 2)]

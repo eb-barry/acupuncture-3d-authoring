@@ -94,7 +94,7 @@ function closestHit(meshes, position, maxDistance) {
   return best
 }
 
-function assertLateralChestCorridor(meshes, height, scale) {
+function assertLateralChestCorridor(meshes, height, scale, body = 'male') {
   const jianjing = nearestVertex(
     meshes,
     (point) => (
@@ -117,7 +117,7 @@ function assertLateralChestCorridor(meshes, height, scale) {
   expect(yuanye).toBeTruthy()
   const from = jianjing.point
   const to = yuanye.point
-  const path = gbJianjingYuanyeGuidePoints(from, to, 12)
+  const path = gbJianjingYuanyeGuidePoints(from, to, 12, body)
   const span = Math.hypot(from[0] - to[0], from[1] - to[1], from[2] - to[2])
   const midChord = [
     (from[0] + to[0]) / 2,
@@ -127,8 +127,14 @@ function assertLateralChestCorridor(meshes, height, scale) {
   const mid = path[Math.floor(path.length / 2)]
   expect(Math.abs(mid[0])).toBeGreaterThan(Math.abs(midChord[0]))
   expect(mid[2]).toBeGreaterThan(midChord[2])
-  expect(isGbAxillaHollow(midChord, from, to)).toBe(true)
-  expect(isGbAxillaHollow(mid, from, to)).toBe(false)
+  expect(isGbAxillaHollow(midChord, from, to, body)).toBe(true)
+  expect(isGbAxillaHollow(mid, from, to, body)).toBe(false)
+  if (body === 'male') {
+    expect(mid[2]).toBeGreaterThan(midChord[2] + span * 0.12)
+    const towardAxilla = path[Math.floor(path.length * 0.92)]
+    expect(Math.abs(towardAxilla[0])).toBeGreaterThan(Math.abs(from[0]))
+    expect(towardAxilla[2]).toBeLessThan(mid[2])
+  }
 
   const snapRadius = Math.max(0.16 * scale, span * 0.6)
   let behind = 0
@@ -136,21 +142,21 @@ function assertLateralChestCorridor(meshes, height, scale) {
     const point = path[index]
     const hit = closestHit(meshes, point, snapRadius)
     expect(hit).toBeTruthy()
-    expect(hit.distance).toBeLessThan(span * 0.28)
+    expect(hit.distance).toBeLessThan(span * (body === 'male' ? 0.42 : 0.28))
     if (isPointBehindSurface(point, hit.position, hit.normal, 0.008 * scale)) behind += 1
   }
   expect(behind).toBe(0)
 }
 
 describe('肩井–淵腋 corridor on the built-in body meshes', () => {
-  it('stays outside the male mesh and on the lateral chest, not through the shoulder', async () => {
+  it('stays outside the male mesh and on the anterolateral chest into the axilla', async () => {
     const { height, meshes } = await loadFramedBody('models/male_character.glb')
-    assertLateralChestCorridor(meshes, height, height / 1.79)
+    assertLateralChestCorridor(meshes, height, height / 1.79, 'male')
   }, 120000)
 
   it('stays outside the female mesh and on the lateral chest, not through the shoulder', async () => {
     const { height, meshes } = await loadFramedBody('models/female-character.glb')
-    assertLateralChestCorridor(meshes, height, height / 1.79)
+    assertLateralChestCorridor(meshes, height, height / 1.79, 'female')
   }, 180000)
 })
 

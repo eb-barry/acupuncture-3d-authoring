@@ -38,8 +38,9 @@ import {
   gbLateralChestGuide,
   gbLocatorCastStandoff,
   gbLocatorOutsideProbe,
-  gbJianjingYuanyeOuterPoint,
-  gbJianjingYuanyeGuidePoints,
+    gbJianjingYuanyeOuterPoint,
+    gbJianjingYuanyeGuidePoints,
+    gbJianjingYuanyeGuide,
   isGbAxillaHollow,
   isGbJianjingYuanyeHandleOk,
   isGbJianjingYuanyeHit,
@@ -525,69 +526,70 @@ describe('skin path wrapping', () => {
       (jianjing[1] + yuanye[1]) / 2,
       (jianjing[2] + yuanye[2]) / 2,
     ]
-    const outer = gbJianjingYuanyeOuterPoint(jianjing, yuanye, 0.5)
-    expect(Math.abs(outer[0])).toBeGreaterThan(Math.abs(midChord[0]) + 0.02)
-    expect(outer[2]).toBeGreaterThan(Math.max(jianjing[2], yuanye[2]))
-    expect(outer[2]).toBeLessThan(0.04)
-    expect(isGbAxillaHollow(midChord, jianjing, yuanye)).toBe(true)
-    expect(isGbAxillaHollow(outer, jianjing, yuanye)).toBe(false)
-    expect(isGbAxillaHollow([0.10, 1.40, 0.08], jianjing, yuanye)).toBe(true)
-    expect(isGbJianjingYuanyeHit(outer, jianjing, yuanye, 0.5)).toBe(true)
-    expect(isGbJianjingYuanyeHit(midChord, jianjing, yuanye, 0.5)).toBe(false)
-    expect(isGbJianjingYuanyeHandleOk(outer, jianjing, yuanye)).toBe(true)
-    expect(isGbJianjingYuanyeHandleOk([0.10, 1.40, 0.10], jianjing, yuanye)).toBe(false)
-    const pulledMedial = [outer[0] - 0.035, outer[1], outer[2] + 0.01]
-    const pulledLateral = [outer[0] + 0.02, outer[1], outer[2] + 0.012]
-    expect(isGbJianjingYuanyeHandleOk(pulledMedial, jianjing, yuanye)).toBe(true)
-    expect(isGbJianjingYuanyeHandleOk(pulledLateral, jianjing, yuanye)).toBe(true)
-    expect(isGbJianjingYuanyeHit(pulledMedial, jianjing, yuanye, 0.5)).toBe(false)
+    const femaleOuter = gbJianjingYuanyeOuterPoint(jianjing, yuanye, 0.5, 'female')
+    expect(Math.abs(femaleOuter[0])).toBeGreaterThan(Math.abs(midChord[0]) + 0.02)
+    expect(femaleOuter[2]).toBeGreaterThan(Math.max(jianjing[2], yuanye[2]))
+    expect(femaleOuter[2]).toBeLessThan(0.04)
+    expect(isGbAxillaHollow(midChord, jianjing, yuanye, 'female')).toBe(true)
+    expect(isGbAxillaHollow(femaleOuter, jianjing, yuanye, 'female')).toBe(false)
+    expect(isGbAxillaHollow([0.10, 1.40, 0.08], jianjing, yuanye, 'female')).toBe(true)
+    expect(isGbJianjingYuanyeHit(femaleOuter, jianjing, yuanye, 0.5, 'female')).toBe(true)
+    expect(isGbJianjingYuanyeHit(midChord, jianjing, yuanye, 0.5, 'female')).toBe(false)
+    expect(isGbJianjingYuanyeHandleOk(femaleOuter, jianjing, yuanye, 'female')).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk([0.10, 1.40, 0.10], jianjing, yuanye, 'female')).toBe(false)
+    const pulledMedial = [femaleOuter[0] - 0.035, femaleOuter[1], femaleOuter[2] + 0.01]
+    const pulledLateral = [femaleOuter[0] + 0.02, femaleOuter[1], femaleOuter[2] + 0.012]
+    expect(isGbJianjingYuanyeHandleOk(pulledMedial, jianjing, yuanye, 'female')).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk(pulledLateral, jianjing, yuanye, 'female')).toBe(true)
+    expect(isGbJianjingYuanyeHit(pulledMedial, jianjing, yuanye, 0.5, 'female')).toBe(false)
     const gbSpan = Math.hypot(
       jianjing[0] - yuanye[0],
       jianjing[1] - yuanye[1],
       jianjing[2] - yuanye[2],
     )
     const pulledRight = [
-      outer[0] + gbSpan * 0.14,
-      outer[1],
-      outer[2] - gbSpan * 0.20,
+      femaleOuter[0] + gbSpan * 0.14,
+      femaleOuter[1],
+      femaleOuter[2] - gbSpan * 0.20,
     ]
-    expect(isGbJianjingYuanyeHandleOk(pulledRight, jianjing, yuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk(pulledRight, jianjing, yuanye, 'female')).toBe(true)
     expect(isGbJianjingYuanyeHandleOk(
-      [Math.max(Math.abs(jianjing[0]), Math.abs(yuanye[0])) + gbSpan * 0.75, outer[1], outer[2]],
+      [Math.max(Math.abs(jianjing[0]), Math.abs(yuanye[0])) + gbSpan * 0.75, femaleOuter[1], femaleOuter[2]],
       jianjing,
       yuanye,
+      'female',
     )).toBe(false)
-    expect(isGbJianjingYuanyeHandleOk(tianfu, jianjing, yuanye)).toBe(false)
+    expect(isGbJianjingYuanyeHandleOk(tianfu, jianjing, yuanye, 'female')).toBe(false)
     const femaleJianjing = jianjing.map((value) => value * 232)
     const femaleYuanye = yuanye.map((value) => value * 232)
-    const femaleOuter = gbJianjingYuanyeOuterPoint(femaleJianjing, femaleYuanye, 0.5)
+    const femaleScaledOuter = gbJianjingYuanyeOuterPoint(femaleJianjing, femaleYuanye, 0.5, 'female')
     const femaleSpan = Math.hypot(
       femaleJianjing[0] - femaleYuanye[0],
       femaleJianjing[1] - femaleYuanye[1],
       femaleJianjing[2] - femaleYuanye[2],
     )
     const femalePulled = [
-      femaleOuter[0] - femaleSpan * 0.12,
-      femaleOuter[1],
-      femaleOuter[2] + femaleSpan * 0.05,
+      femaleScaledOuter[0] - femaleSpan * 0.12,
+      femaleScaledOuter[1],
+      femaleScaledOuter[2] + femaleSpan * 0.05,
     ]
-    expect(isGbJianjingYuanyeHandleOk(femaleOuter, femaleJianjing, femaleYuanye)).toBe(true)
-    expect(isGbJianjingYuanyeHandleOk(femalePulled, femaleJianjing, femaleYuanye)).toBe(true)
-    expect(isGbJianjingYuanyeHandleOk([0.10 * 232, 1.40 * 232, 0.10 * 232], femaleJianjing, femaleYuanye)).toBe(false)
+    expect(isGbJianjingYuanyeHandleOk(femaleScaledOuter, femaleJianjing, femaleYuanye, 'female')).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk(femalePulled, femaleJianjing, femaleYuanye, 'female')).toBe(true)
+    expect(isGbJianjingYuanyeHandleOk([0.10 * 232, 1.40 * 232, 0.10 * 232], femaleJianjing, femaleYuanye, 'female')).toBe(false)
 
-    const guide = gbLateralChestGuide(midChord, 0.15)
-    expect(Math.abs(guide[0])).toBeGreaterThan(0.6)
-    expect(guide[2]).toBeGreaterThan(0.25)
-    expect(guide[2]).toBeLessThan(0.7)
+    const femaleGuide = gbLateralChestGuide(midChord, 0.15, 'female')
+    expect(Math.abs(femaleGuide[0])).toBeGreaterThan(0.6)
+    expect(femaleGuide[2]).toBeGreaterThan(0.25)
+    expect(femaleGuide[2]).toBeLessThan(0.7)
 
-    const path = gbJianjingYuanyeGuidePoints(jianjing, yuanye, 10)
-    expect(path[0]).toEqual(jianjing)
-    expect(path.at(-1)).toEqual(yuanye)
-    const mid = path[Math.floor(path.length / 2)]
-    expect(Math.abs(mid[0])).toBeGreaterThan(Math.abs(midChord[0]))
-    expect(mid[2]).toBeGreaterThan(midChord[2] + 0.03)
-    expect(path.every((point) => !isGbAxillaHollow(point, jianjing, yuanye)
-      || point === path[0] || point === path.at(-1))).toBe(true)
+    const femalePath = gbJianjingYuanyeGuidePoints(jianjing, yuanye, 10, 'female')
+    expect(femalePath[0]).toEqual(jianjing)
+    expect(femalePath.at(-1)).toEqual(yuanye)
+    const femaleMid = femalePath[Math.floor(femalePath.length / 2)]
+    expect(Math.abs(femaleMid[0])).toBeGreaterThan(Math.abs(midChord[0]))
+    expect(femaleMid[2]).toBeGreaterThan(midChord[2] + 0.03)
+    expect(femalePath.every((point) => !isGbAxillaHollow(point, jianjing, yuanye, 'female')
+      || point === femalePath[0] || point === femalePath.at(-1))).toBe(true)
 
     const dist = (left, right) => Math.hypot(
       left[0] - right[0],
@@ -599,22 +601,50 @@ describe('skin path wrapping', () => {
     )
     const locatorCurve = catmullRomThrough([jianjing, pulledMedial, yuanye], 16)
     expect(nearest(locatorCurve, pulledMedial)).toBeLessThan(0.0001)
-    expect(nearest(locatorCurve, pulledMedial)).toBeLessThan(nearest(path, pulledMedial) * 0.35)
+    expect(nearest(locatorCurve, pulledMedial)).toBeLessThan(nearest(femalePath, pulledMedial) * 0.35)
 
     const interior = [
       (jianjing[0] + yuanye[0]) / 2,
       (jianjing[1] + yuanye[1]) / 2,
       (jianjing[2] + yuanye[2]) / 2,
     ]
-    const probe = gbLocatorOutsideProbe(interior, jianjing, yuanye)
-    expect(Math.abs(probe[0])).toBeGreaterThan(Math.abs(interior[0]) + 0.02)
+    const femaleProbe = gbLocatorOutsideProbe(interior, jianjing, yuanye, 'female')
+    expect(Math.abs(femaleProbe[0])).toBeGreaterThan(Math.abs(interior[0]) + 0.02)
     expect(gbLocatorCastStandoff(jianjing, yuanye)).toBeGreaterThan(0.05)
-    const femaleProbe = gbLocatorOutsideProbe(
+    const femaleScaledProbe = gbLocatorOutsideProbe(
       interior.map((value) => value * 232),
       femaleJianjing,
       femaleYuanye,
+      'female',
     )
-    expect(Math.abs(femaleProbe[0])).toBeGreaterThan(Math.abs(interior[0] * 232) + femaleSpan * 0.1)
+    expect(Math.abs(femaleScaledProbe[0])).toBeGreaterThan(Math.abs(interior[0] * 232) + femaleSpan * 0.1)
+
+    const maleOuter = gbJianjingYuanyeOuterPoint(jianjing, yuanye, 0.5)
+    expect(maleOuter[2]).toBeGreaterThan(femaleOuter[2])
+    expect(maleOuter[2]).toBeGreaterThan(midChord[2] + 0.04)
+    expect(isGbAxillaHollow(midChord, jianjing, yuanye)).toBe(true)
+    expect(isGbAxillaHollow(maleOuter, jianjing, yuanye)).toBe(false)
+    expect(isGbAxillaHollow([0.10, 1.40, 0.08], jianjing, yuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHit(maleOuter, jianjing, yuanye, 0.5)).toBe(true)
+    expect(isGbJianjingYuanyeHit(midChord, jianjing, yuanye, 0.5)).toBe(false)
+    const malePath = gbJianjingYuanyeGuidePoints(jianjing, yuanye, 12)
+    const maleMid = malePath[Math.floor(malePath.length / 2)]
+    expect(maleMid[2]).toBeGreaterThan(midChord[2] + 0.04)
+    const towardAxilla = malePath[Math.floor(malePath.length * 0.92)]
+    expect(Math.abs(towardAxilla[0])).toBeGreaterThan(Math.abs(jianjing[0]) + 0.02)
+    expect(towardAxilla[2]).toBeLessThan(maleMid[2])
+    const nearShoulder = malePath[Math.floor(malePath.length * 0.18)]
+    expect(nearShoulder[2]).toBeGreaterThan(jianjing[2] + 0.04)
+    const maleGuide = gbJianjingYuanyeGuide(jianjing, yuanye, 0.5)
+    expect(maleGuide[2]).toBeGreaterThan(0.55)
+    const userJianjing = [0.1136, 1.5040, -0.0976]
+    const userYuanye = [0.1886, 1.3039, -0.0628]
+    const userChest = [0.1643, 1.3913, 0.0207]
+    expect(isGbJianjingYuanyeHandleOk(userChest, userJianjing, userYuanye)).toBe(true)
+    expect(isGbJianjingYuanyeHit(userChest, userJianjing, userYuanye, 0.45)).toBe(true)
+    expect(isGbAxillaHollow(userChest, userJianjing, userYuanye)).toBe(false)
+    const userPec = [0.08, 1.40, 0.09]
+    expect(isGbAxillaHollow(userPec, userJianjing, userYuanye)).toBe(true)
   })
 
   it('picks the tightest polyline span that contains the click', () => {
