@@ -3202,18 +3202,6 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     1e-6,
   )
   const neck = Math.abs(a.position[0]) >= Math.abs(b.position[0]) ? a.position : b.position
-  const path = rest.length >= 2 ? rest : liGuidePoints(a.position, b.position)
-  const ordered = [...records].sort((left, right) => (
-    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
-  ))
-  const sanitized = ordered
-    .map((record) => snapLiHandleToSkinMale(record, a, b, path))
-    .filter((record) => (
-      record
-      && record.position[2] >= neck[2] - span * 0.03
-      && liHandleOk(record.position, a.position, b.position)
-    ))
-  const hasUserHandles = sanitized.length > 0
   const count = Math.min(80, Math.max(32, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.028)) + 18))
   const lift = statureWorld(SKIN_LIFT)
   const points = []
@@ -3232,33 +3220,10 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
   }
   const skinAt = (x, y, t) => liFaceSkinAtXY(x, y, a.position, b.position, legalAt(t))
   accept({ position: a.position, normal: a.normal })
-  let guides = liGuidePoints(a.position, b.position, count)
-  let useHandles = false
-  if (hasUserHandles) {
-    const curved = catmullRomThrough(
-      [a.position, ...sanitized.map((record) => record.position), b.position],
-      24,
-    )
-    if (
-      curved.length >= 4
-      && !isDisorderedPolyline(curved, [a.position, b.position], { maxLengthRatio: 1.4 })
-    ) {
-      guides = curved
-      useHandles = true
-    }
-  }
+  const guides = liGuidePoints(a.position, b.position, count)
   for (let index = 1; index < guides.length - 1; index += 1) {
     const t = index / (guides.length - 1)
     const sample = guides[index]
-    if (useHandles) {
-      const control = sanitized.find((record) => (
-        Math.hypot(record.position[0] - sample[0], record.position[1] - sample[1]) < span * 0.012
-      ))
-      if (control) {
-        accept(control)
-        continue
-      }
-    }
     const hit = skinAt(sample[0], sample[1], t)
     if (hit) accept(hit)
   }
@@ -3268,12 +3233,6 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     points.map((point) => [point.x, point.y, point.z]),
     0.12,
   )
-  if (
-    records.length
-    && isDisorderedPolyline(arrays, [a.position, b.position], { maxLengthRatio: 1.4 })
-  ) {
-    return snapLiFutuHeliaoToSkinMale(a, b, [], rest)
-  }
   const simplified = simplifyPolylineWithNormals(
     arrays,
     arrays.map((_, index) => liFutuHeliaoGuide(
