@@ -92,6 +92,10 @@ import {
   isGvFacePair,
   isGvOcciputPair,
   isCvAnteriorPair,
+  isCvHuiyinQuguPair,
+  isCvHuiyinQuguHit,
+  cvHuiyinQuguArcPoint,
+  cvHuiyinQuguGuide,
   KI_YINGU_CHANGQIANG_FOLD_T,
   isKiYinguChangqiangHit,
   kiYinguChangqiangCastStandoff,
@@ -2524,6 +2528,58 @@ function snapMidlineChordToSkin(a, b, {
   return points.length >= 3 ? points : null
 }
 
+/** 女性會陰→曲骨：沿恥骨下方四分之一弧貼膚，避免陰阜前方的空氣 V. */
+function snapCvHuiyinQuguToSkinFemale(a, b) {
+  if (isMaleStudioBody()) return null
+  const start = new THREE.Vector3(...a.position)
+  const end = new THREE.Vector3(...b.position)
+  const from = a.position
+  const to = b.position
+  const span = Math.max(start.distanceTo(end), 1e-6)
+  const count = Math.min(72, Math.max(24, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.03)) + 12))
+  const standoffs = [statureWorld(0.04), statureWorld(0.08), statureWorld(0.14)]
+  const extraReach = Math.max(statureWorld(0.08), span * 0.55)
+  const lift = statureWorld(SKIN_LIFT)
+  const points = []
+  const previousRef = { current: null }
+  const liftHit = (hit) => new THREE.Vector3(...hit.position)
+    .addScaledVector(new THREE.Vector3(...hit.normal), lift)
+  const legal = (hit, t) => hit && isCvHuiyinQuguHit(hit.position, from, to, t)
+  const pickHit = (t) => {
+    const arc = cvHuiyinQuguArcPoint(from, to, t)
+    const guide = cvHuiyinQuguGuide(from, to, t)
+    const guideVec = new THREE.Vector3(...guide)
+    for (const standoff of standoffs) {
+      const origin = new THREE.Vector3(...arc).addScaledVector(guideVec, standoff)
+      const hits = raySkinHits(origin, guideVec.clone().negate(), standoff * 2.4, guideVec)
+      const hit = hits.find((item) => legal(item, t))
+      if (hit) return hit
+    }
+    const nearby = closestSkinHit(arc, {
+      maxDistance: extraReach,
+      sideX: null,
+      guideNormal: guide,
+    })
+    return legal(nearby, t) ? nearby : null
+  }
+  appendSkinPoint(points, start.clone().addScaledVector(new THREE.Vector3(...a.normal), lift), previousRef)
+  for (let index = 1; index < count - 1; index += 1) {
+    const t = index / (count - 1)
+    const hit = pickHit(t)
+    if (!hit) continue
+    appendSkinPoint(points, liftHit(hit), previousRef)
+  }
+  appendSkinPoint(points, end.clone().addScaledVector(new THREE.Vector3(...b.normal), lift), previousRef)
+  if (points.length < 3) return null
+  const arrays = points.map((point) => [point.x, point.y, point.z])
+  const simplified = simplifyPolylineWithNormals(
+    arrays,
+    arrays.map(() => [0, 0, 1]),
+    statureWorld(0.0012),
+  )
+  return simplified.points.map((point) => new THREE.Vector3(...point))
+}
+
 /** Project a same-face limb chord onto the facing skin (inner arm, not through it). */
 function snapFacingChordToSkin(a, b) {
   const start = new THREE.Vector3(...a.position)
@@ -4132,6 +4188,7 @@ function skinSegmentPoints(a, b, {
   const gbScalp = isGbChenglingNaokongPair(fromCode, toCode)
   const duBack = isDuBackWrapPair(fromCode, toCode) && shouldPosteriorWrap(a.position, b.position)
   const teHead = isTeHeadPair(fromCode, toCode)
+  const cvHuiyinQugu = isCvHuiyinQuguPair(fromCode, toCode) && !isMaleStudioBody()
   if (siArmShoulder) {
     const wrapped = snapSiArmShoulderToSkin(a, b)
     if (wrapped?.length >= 3) return wrapped
@@ -4156,6 +4213,10 @@ function skinSegmentPoints(a, b, {
     const arced = snapTeHeadArcToSkin(a, b, fromCode, toCode)
     if (arced?.length >= 3) return arced
   }
+  if (cvHuiyinQugu) {
+    const wrapped = snapCvHuiyinQuguToSkinFemale(a, b)
+    if (wrapped?.length >= 3) return wrapped
+  }
   const digitTip = wantsDigitTipWrap(fromCode, toCode, a.position, b.position, normalDot)
   if (digitTip) {
     const wrapped = snapDigitTipWrap(a, b)
@@ -4166,7 +4227,7 @@ function skinSegmentPoints(a, b, {
       end.clone().addScaledVector(endNormal, SKIN_LIFT),
     ]
   }
-  const facingLimb = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && isFacingLimbSpan(a.position, b.position, normalDot)
+  const facingLimb = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && !cvHuiyinQugu && isFacingLimbSpan(a.position, b.position, normalDot)
   if (facingLimb) {
     const facing = snapFacingChordToSkin(a, b)
     if (facing?.length >= 2) return facing
@@ -4182,7 +4243,7 @@ function skinSegmentPoints(a, b, {
     })
     if (wrapped?.length >= 2) return wrapped
   }
-  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && (
+  const mustWrap = !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && !cvHuiyinQugu && (
     preferWrap
     || pairPrefersWrap(fromCode, toCode, a.position, b.position)
   )
@@ -4190,7 +4251,7 @@ function skinSegmentPoints(a, b, {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
-  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior) {
+  if (allowGeodesic && !mustWrap && !duBack && !siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && !cvHuiyinQugu) {
     const geodesic = geodesicOnSkin(a, b)
     const stable = earArc
       ? (geodesicIsStable(geodesic, TE_EAR_GEODESIC_STABLE) || geodesic?.length >= 6)
@@ -4206,7 +4267,7 @@ function skinSegmentPoints(a, b, {
   let pos = start.clone()
   // Convex wrap: the 3D chord is inside the head or shoulder. Snap samples
   // onto the outer skin so the line does not vanish into the mesh.
-  if (!siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
+  if (!siArmShoulder && !gbShoulderAxilla && !kiYingu && !liFace && !gbScalp && !duBack && !teHead && !facingLimb && !digitTip && !gvFace && !gvOcciput && !cvAnterior && !cvHuiyinQugu && useConvexChordWrap(normalDot) && chordDivesThroughSkin(a, b)) {
     const wrapped = snapChordSamplesToSkin(a, b)
     if (wrapped?.length >= 2) return wrapped
   }
@@ -4596,6 +4657,10 @@ function restPathArrays(fromNode, toNode) {
         0.5,
         studioBodyId(),
       )
+    }
+    if (isCvHuiyinQuguPair(fromCode, toCode) && !isMaleStudioBody()) {
+      const mid = cached[Math.floor(cached.length / 2)]
+      return Boolean(mid) && isCvHuiyinQuguHit(mid, a.position, b.position, 0.5)
     }
     if (maleHtPinkyPair(fromCode, toCode)) {
       const chord = dist3(a.position, b.position)

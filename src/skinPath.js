@@ -640,6 +640,86 @@ export function isCvAnteriorPair(fromCode = '', toCode = '') {
   return a >= 8 && a <= 24 && b >= 8 && b <= 24
 }
 
+/** 會陰 CV1 ↔ 曲骨 CV2 only. The pubic wrap is not the CV8–CV24 anterior chord. */
+export function isCvHuiyinQuguPair(fromCode = '', toCode = '') {
+  const codes = new Set([String(fromCode || ''), String(toCode || '')])
+  return codes.has('CV1') && codes.has('CV2')
+}
+
+/** Lower / more posterior end is 會陰. */
+function cvHuiyinQuguEnds(from = [0, 0, 0], to = [0, 0, 0]) {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const aLower = a[1] < b[1] - 1e-9 || (Math.abs(a[1] - b[1]) <= 1e-9 && a[2] <= b[2])
+  return aLower ? { start: a, end: b, flipped: false } : { start: b, end: a, flipped: true }
+}
+
+function cvHuiyinQuguParam(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { flipped } = cvHuiyinQuguEnds(from, to)
+  return flipped ? 1 - clamp01(t) : clamp01(t)
+}
+
+/**
+ * Sagittal quarter-ellipse under the pubic overhang: 會陰 (down) → 曲骨 (forward).
+ * A Y-sliced −Z silhouette hits the mons first and floats a V in the air.
+ */
+export function cvHuiyinQuguArcPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { start, end } = cvHuiyinQuguEnds(from, to)
+  const u = cvHuiyinQuguParam(from, to, t)
+  const theta = u * Math.PI / 2
+  return [
+    start[0] + (end[0] - start[0]) * u,
+    end[1] + (start[1] - end[1]) * Math.cos(theta),
+    start[2] + (end[2] - start[2]) * Math.sin(theta),
+  ]
+}
+
+/** Outward skin normal along the pubic arc: −Y at 會陰, +Z at 曲骨. */
+export function cvHuiyinQuguGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { start, end } = cvHuiyinQuguEnds(from, to)
+  const u = cvHuiyinQuguParam(from, to, t)
+  const theta = u * Math.PI / 2
+  const gy = (start[1] - end[1]) * Math.cos(theta)
+  const gz = (end[2] - start[2]) * Math.sin(theta)
+  const length = Math.hypot(gy, gz) || 1
+  return [0, gy / length, gz / length]
+}
+
+export function cvHuiyinQuguCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
+  const span = Math.max(length3(sub3(asPathPoint(to), asPathPoint(from))), 1e-6)
+  return Math.max(0.04, span * 0.32)
+}
+
+export function cvHuiyinQuguOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5, standoff = 0) {
+  const arc = cvHuiyinQuguArcPoint(from, to, t)
+  const guide = cvHuiyinQuguGuide(from, to, t)
+  const stand = Number(standoff)
+  const offset = Number.isFinite(stand) && stand > 0 ? stand : cvHuiyinQuguCastStandoff(from, to)
+  return add3(arc, scale3(guide, offset))
+}
+
+/** Keep 會陰→曲骨 on the perineum–pubis wrap, not the floating anterior V or a thigh. */
+export function isCvHuiyinQuguHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+  const { start, end } = cvHuiyinQuguEnds(from, to)
+  const span = Math.max(length3(sub3(end, start)), 1e-6)
+  const arc = cvHuiyinQuguArcPoint(from, to, t)
+  const point = asPathPoint(hit)
+  const ySlack = Math.max(0.008, span * 0.08)
+  const zSlack = Math.max(0.01, span * 0.12)
+  const xCap = Math.max(
+    Math.abs(start[0]),
+    Math.abs(end[0]),
+    span * 0.06,
+    0.008,
+  ) + Math.max(0.012, span * 0.05)
+  if (Math.abs(point[0]) > xCap) return false
+  if (point[1] < Math.min(start[1], end[1]) - ySlack) return false
+  if (point[1] > Math.max(start[1], end[1]) + ySlack) return false
+  if (point[2] < Math.min(start[2], end[2]) - zSlack) return false
+  if (point[2] > Math.max(start[2], end[2]) + zSlack) return false
+  return length3(sub3(point, arc)) <= Math.max(0.02, span * 0.18)
+}
+
 /** Front midline hits may not sit in the air in front of the nose / chest. */
 export function hitStaysOnFrontMidline(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
   if (!isSagittalMidlineSpan(from, to)) return true
@@ -748,6 +828,7 @@ export function pairPrefersWrap(fromCode = '', toCode = '', from = [0, 0, 0], to
     || isKiYinguChangqiangPair(fromCode, toCode)
     || isLiFutuHeliaoPair(fromCode, toCode)
     || isGbChenglingNaokongPair(fromCode, toCode)
+    || isCvHuiyinQuguPair(fromCode, toCode)
   ) {
     return false
   }

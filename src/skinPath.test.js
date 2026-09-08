@@ -83,6 +83,11 @@ import {
   isGvFacePair,
   isGvOcciputPair,
   isCvAnteriorPair,
+  isCvHuiyinQuguPair,
+  cvHuiyinQuguArcPoint,
+  cvHuiyinQuguGuide,
+  cvHuiyinQuguOuterPoint,
+  isCvHuiyinQuguHit,
   slerpUnitVectors,
   surfaceStepLength,
   useConvexChordWrap,
@@ -249,6 +254,33 @@ describe('skin path wrapping', () => {
     expect(isCvAnteriorPair('CV15', 'CV14')).toBe(true)
     expect(isCvAnteriorPair('CV12', 'CV11')).toBe(true)
     expect(isCvAnteriorPair('CV1', 'CV2')).toBe(false)
+    expect(isCvHuiyinQuguPair('CV1', 'CV2')).toBe(true)
+    expect(isCvHuiyinQuguPair('CV2', 'CV1')).toBe(true)
+    expect(isCvHuiyinQuguPair('CV2', 'CV3')).toBe(false)
+    expect(pairPrefersWrap('CV1', 'CV2', [0, 0.870, 0.028], [0, 0.976, 0.093])).toBe(false)
+    const huiyin = [0, 0.870, 0.028]
+    const qugu = [0, 0.976, 0.093]
+    const femaleHuiyin = [0, 205.07, 5.87]
+    const femaleQugu = [0, 226.55, 23.99]
+    const startGuide = cvHuiyinQuguGuide(huiyin, qugu, 0)
+    const endGuide = cvHuiyinQuguGuide(huiyin, qugu, 1)
+    expect(startGuide[1]).toBeLessThan(-0.9)
+    expect(endGuide[2]).toBeGreaterThan(0.9)
+    expect(cvHuiyinQuguArcPoint(huiyin, qugu, 0)[1]).toBeCloseTo(huiyin[1], 5)
+    expect(cvHuiyinQuguArcPoint(huiyin, qugu, 1)[2]).toBeCloseTo(qugu[2], 5)
+    expect(cvHuiyinQuguArcPoint(qugu, huiyin, 0)[2]).toBeCloseTo(qugu[2], 5)
+    const maleArc = cvHuiyinQuguArcPoint(huiyin, qugu, 0.4)
+    expect(isCvHuiyinQuguHit(maleArc, huiyin, qugu, 0.4)).toBe(true)
+    expect(isCvHuiyinQuguHit([0, 0.90, 0.22], huiyin, qugu, 0.4)).toBe(false)
+    expect(isCvHuiyinQuguHit([0.08, 0.92, 0.06], huiyin, qugu, 0.4)).toBe(false)
+    const femaleArc = cvHuiyinQuguArcPoint(femaleHuiyin, femaleQugu, 0.5)
+    expect(isCvHuiyinQuguHit(femaleArc, femaleHuiyin, femaleQugu, 0.5)).toBe(true)
+    expect(isCvHuiyinQuguHit([0, 210, 40], femaleHuiyin, femaleQugu, 0.5)).toBe(false)
+    expect(isCvHuiyinQuguHit([12, 210, 12], femaleHuiyin, femaleQugu, 0.45)).toBe(false)
+    const femaleAirV = [0, 207, 20]
+    expect(isCvHuiyinQuguHit(femaleAirV, femaleHuiyin, femaleQugu, 0.15)).toBe(false)
+    expect(cvHuiyinQuguOuterPoint(femaleHuiyin, femaleQugu, 0.2)[1])
+      .toBeLessThan(cvHuiyinQuguArcPoint(femaleHuiyin, femaleQugu, 0.2)[1])
     expect(hitStaysOnFrontMidline(faceMid, shenting, suliao)).toBe(true)
     expect(hitStaysOnFrontMidline(skyFront, shenting, suliao)).toBe(false)
     expect(hitStaysOnFrontMidline([0.002, 1.565, -0.12], shenting, suliao)).toBe(false)
