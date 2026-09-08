@@ -3232,16 +3232,25 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
   }
   const skinAt = (x, y, t) => liFaceSkinAtXY(x, y, a.position, b.position, legalAt(t))
   accept({ position: a.position, normal: a.normal })
-  const guides = hasUserHandles
-    ? catmullRomThrough(
+  let guides = liGuidePoints(a.position, b.position, count)
+  let useHandles = false
+  if (hasUserHandles) {
+    const curved = catmullRomThrough(
       [a.position, ...sanitized.map((record) => record.position), b.position],
       24,
     )
-    : liGuidePoints(a.position, b.position, count)
+    if (
+      curved.length >= 4
+      && !isDisorderedPolyline(curved, [a.position, b.position], { maxLengthRatio: 1.4 })
+    ) {
+      guides = curved
+      useHandles = true
+    }
+  }
   for (let index = 1; index < guides.length - 1; index += 1) {
     const t = index / (guides.length - 1)
     const sample = guides[index]
-    if (hasUserHandles) {
+    if (useHandles) {
       const control = sanitized.find((record) => (
         Math.hypot(record.position[0] - sample[0], record.position[1] - sample[1]) < span * 0.012
       ))
@@ -3990,8 +3999,10 @@ function restPathArrays(fromNode, toNode) {
     if (isLiFutuHeliaoPair(fromCode, toCode)) {
       const pathLen = polylineArcLength(cached)
       const chord = dist3(a.position, b.position)
-      if (isMaleStudioBody() && chord > 1e-4 && pathLen > chord * 2.4) return false
-      if (isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.7 })) return false
+      if (isMaleStudioBody() && chord > 1e-4 && pathLen > chord * 1.45) return false
+      if (isDisorderedPolyline(cached, [a.position, b.position], {
+        maxLengthRatio: isMaleStudioBody() ? 1.4 : 1.7,
+      })) return false
       const mid = cached[Math.floor(cached.length / 2)]
       return Boolean(mid) && liHit(mid, a.position, b.position, 0.5)
     }
