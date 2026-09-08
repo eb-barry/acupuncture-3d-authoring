@@ -1,6 +1,8 @@
 # 經絡製圖室 Meridian Studio
 
-以 Three.js、Vite 與 Vanilla JavaScript 製作的瀏覽器 3D 經脈編輯器。所有模型與標註只在本機瀏覽器處理。
+**Version 1.0**
+
+以 Three.js、Vite 與 Vanilla JavaScript 製作的瀏覽器 3D 經脈編輯器。內建成人男女體表模型已定稿。所有模型與標註只在本機瀏覽器處理。
 
 ## 功能
 
@@ -52,3 +54,20 @@ GLB 本身不會嵌入匯出的標註 JSON；再次編輯時應先載入相同�
 預設人體模型及穴位資料的授權、來源、修改方式與檔案雜湊記錄於
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。模型可作為體表視覺與標註基礎，
 但不應視為經臨床驗證的醫療診斷模型。
+
+## 3D 模型來源 Credits
+
+內建體表模型來自 Sketchfab，均為 [CC Attribution](https://creativecommons.org/licenses/by/4.0/) 授權。本專案對網格的整理與匯出方式見第三方授權檔，不代表原作者背書。
+
+### Female
+
+- Creator: [yuzutarou](https://sketchfab.com/yuzuponponpon) (`@yuzuponponpon`), Japan
+- Profile: [sketchfab.com/yuzuponponpon](https://sketchfab.com/yuzuponponpon)
+- Model: [`Female`](https://sketchfab.com/3d-models/female-15ee49542e3d4cc3aa9dec99ea3f46be) (muscle study)
+- Local file: `models/female-character.glb`
+
+### Male
+
+- Creator: [MaceLogice](https://sketchfab.com/MaceLogice)
+- Model: [`Male Character`](https://sketchfab.com/3d-models/male-character-29372cc7dfcc4c88b34ecf1f40cdc35a)
+- Local file: `models/male_character.glb`
