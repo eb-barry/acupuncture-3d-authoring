@@ -12,6 +12,9 @@ import {
   isPointBehindSurface,
   liFutuHeliaoOuterPoint,
   isLiFutuHeliaoHit,
+  cvHuiyinQuguArcPoint,
+  cvHuiyinQuguOuterPoint,
+  isCvHuiyinQuguHit,
 } from './skinPath.js'
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
@@ -262,4 +265,98 @@ describe('承靈–腦空 scalp corridor on the female mesh', () => {
     ]
     expect(isGbChenglingNaokongHit(bun, from, to, 0.5, 'female')).toBe(false)
   }, 180000)
+})
+
+describe('會陰–曲骨 pubic wrap on the built-in body meshes', () => {
+  it('keeps female 會陰→曲骨 on the perineum–pubis skin, not the anterior air V', async () => {
+    const { height, meshes } = await loadFramedBody('models/female-character.glb')
+    const scale = height / 1.79
+    const cv1 = nearestVertex(
+      meshes,
+      (point) => (
+        Math.abs(point[0]) < 0.03 * scale
+        && point[1] > height * 0.45 && point[1] < height * 0.55
+        && point[2] > -0.02 * scale && point[2] < 0.06 * scale
+      ),
+      [0, 0.870 * scale, 0.028 * scale],
+    )
+    const cv2 = nearestVertex(
+      meshes,
+      (point) => (
+        Math.abs(point[0]) < 0.03 * scale
+        && point[1] > height * 0.52 && point[1] < height * 0.60
+        && point[2] > 0.04 * scale && point[2] < 0.12 * scale
+      ),
+      [0, 0.976 * scale, 0.093 * scale],
+    )
+    expect(cv1).toBeTruthy()
+    expect(cv2).toBeTruthy()
+    const from = cv1.point
+    const to = cv2.point
+    const span = Math.hypot(from[0] - to[0], from[1] - to[1], from[2] - to[2])
+    const snapRadius = Math.max(height * 0.04, span * 0.5)
+    const chord = [
+      (from[0] + to[0]) / 2,
+      (from[1] + to[1]) / 2,
+      (from[2] + to[2]) / 2,
+    ]
+    const chordHit = closestHit(meshes, chord, snapRadius)
+    expect(chordHit).toBeTruthy()
+    expect(isPointBehindSurface(chord, chordHit.position, chordHit.normal, span * 0.02)).toBe(true)
+    expect(isCvHuiyinQuguHit(chord, from, to, 0.5)).toBe(false)
+    const airV = [
+      (from[0] + to[0]) / 2,
+      from[1] + (to[1] - from[1]) * 0.15,
+      to[2] + span * 0.35,
+    ]
+    expect(isCvHuiyinQuguHit(airV, from, to, 0.15)).toBe(false)
+    for (const t of [0.2, 0.45, 0.75]) {
+      const arc = cvHuiyinQuguArcPoint(from, to, t)
+      expect(isCvHuiyinQuguHit(arc, from, to, t)).toBe(true)
+      const arcHit = closestHit(meshes, arc, snapRadius)
+      expect(arcHit).toBeTruthy()
+      expect(arcHit.distance).toBeLessThan(span * 0.12)
+      expect(isCvHuiyinQuguHit(arcHit.position, from, to, t)).toBe(true)
+      const outer = cvHuiyinQuguOuterPoint(from, to, t)
+      const outerHit = closestHit(meshes, outer, snapRadius)
+      expect(outerHit).toBeTruthy()
+      expect(outerHit.distance).toBeGreaterThan(arcHit.distance)
+      expect(Math.abs(arcHit.position[0])).toBeLessThan(span * 0.12)
+      expect(arcHit.position[2]).toBeLessThan(Math.max(from[2], to[2]) + span * 0.12)
+      expect(arcHit.position[2]).toBeGreaterThan(Math.min(from[2], to[2]) - span * 0.12)
+    }
+  }, 180000)
+
+  it('still treats the male pubic arc as on-skin and rejects a floating anterior sample', async () => {
+    const { height, meshes } = await loadFramedBody('models/male_character.glb')
+    const cv1 = nearestVertex(
+      meshes,
+      (point) => (
+        Math.abs(point[0]) < 0.03
+        && point[1] > 0.85 && point[1] < 0.90
+        && point[2] > 0.01 && point[2] < 0.05
+      ),
+      [0, 0.870, 0.028],
+    )
+    const cv2 = nearestVertex(
+      meshes,
+      (point) => (
+        Math.abs(point[0]) < 0.03
+        && point[1] > 0.96 && point[1] < 0.99
+        && point[2] > 0.07 && point[2] < 0.12
+      ),
+      [0, 0.976, 0.093],
+    )
+    expect(cv1).toBeTruthy()
+    expect(cv2).toBeTruthy()
+    const from = cv1.point
+    const to = cv2.point
+    const span = Math.hypot(from[0] - to[0], from[1] - to[1], from[2] - to[2])
+    const midArc = cvHuiyinQuguArcPoint(from, to, 0.5)
+    const midHit = closestHit(meshes, midArc, Math.max(0.04, span * 0.5))
+    expect(midHit).toBeTruthy()
+    expect(midHit.distance).toBeLessThan(span * 0.12)
+    expect(isCvHuiyinQuguHit(midArc, from, to, 0.5)).toBe(true)
+    expect(isCvHuiyinQuguHit([0, 0.90, 0.22], from, to, 0.4)).toBe(false)
+  }, 120000)
 })
