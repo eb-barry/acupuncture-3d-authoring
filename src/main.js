@@ -4300,6 +4300,11 @@ function conformRunToSkin(points) {
   const start = toArray(points[0])
   const end = toArray(points[points.length - 1])
   const digitRun = isDigitTipWrap(start, end, -1)
+  const maleFaceRun = isMaleStudioBody()
+    && Math.max(Math.abs(start[0]), Math.abs(end[0])) < 0.09
+    && Math.min(start[1], end[1]) > 1.48
+    && Math.max(start[1], end[1]) < 1.66
+  const skipDense = digitRun || maleFaceRun
   const step = sampleStepForQuality(dragging ? 'coarse' : 'fine') * scale
   const snap = 0.02 * scale
   const pull = MAX_CONFORM_PULL * scale
@@ -4307,29 +4312,29 @@ function conformRunToSkin(points) {
   const key = [
     points.length,
     step,
-    digitRun ? 'digit' : 'body',
+    skipDense ? 'sparse' : 'body',
     quantizeKey(points[0]),
     quantizeKey(mid),
     quantizeKey(points[points.length - 1]),
   ].join('|')
   const cached = conformCache.get(key)
   if (cached) return cached
-  // Fingers are ~8 mm radius: 2 mm chords between palmar and nail samples cut
-  // through the digit, and nearest-surface hops to the opposite wall.
-  const dense = digitRun
+  // Fingers and the male jaw are thin: 2 mm chords cut through and
+  // nearest-surface hops to the opposite wall, stacking the ribbon.
+  const dense = skipDense
     ? points.map((point) => toArray(point))
     : densifyPath(points.map((point) => toArray(point)), step)
   const lockMidlineX = Math.abs(start[0]) <= statureWorld(0.02)
     && Math.abs(end[0]) <= statureWorld(0.02)
   const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point, null, snap), {
-    maxPull: digitRun ? Math.min(pull, 0.003) : pull,
-    minNormalDot: digitRun ? -1 : 0.2,
+    maxPull: skipDense ? Math.min(pull, 0.003) : pull,
+    minNormalDot: skipDense ? -1 : 0.2,
   })
   const guides = smoothPathNormals(estimate.normals, 2)
   const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide, snap), {
     guides,
-    maxPull: digitRun ? Math.min(pull, 0.003) : pull,
-    minNormalDot: digitRun ? -1 : 0.2,
+    maxPull: skipDense ? Math.min(pull, 0.003) : pull,
+    minNormalDot: skipDense ? -1 : 0.2,
   })
   const run = {
     points: conformed.points.map((point, index) => {
