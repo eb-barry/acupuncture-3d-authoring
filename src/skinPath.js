@@ -762,14 +762,28 @@ export function gbPairSpan(from = [0, 0, 0], to = [0, 0, 0]) {
   return Math.max(length3(sub3(b, a)), 1e-6)
 }
 
+function isFemaleGbChestBody(body) {
+  return body === 'female'
+}
+
 /**
- * Cast onto the lateral chest wall: mostly ±X, slightly up.
- * Only a hint of anterior so the line leaves the axilla hollow without
- * wrapping onto the pecs or jumping onto the T-pose arm.
+ * Cast onto the chest wall.
+ * Female: mostly ±X, slightly up — mid-axillary 側胸, not the pecs or arm.
+ * Male: more anterior so the inward ray hits 胸前側邊, then more lateral
+ * near 淵腋 so the last samples enter the axilla.
  */
-export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0) {
+export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0, body = 'male', yT = 0.5) {
   const side = Math.sign(Number(sideX) || Number(chordPoint[0]) || 1) || 1
-  return normalize([side * 0.90, 0.16, 0.38])
+  if (isFemaleGbChestBody(body)) {
+    return normalize([side * 0.90, 0.16, 0.38])
+  }
+  const yt = clamp01(yT)
+  const bulge = Math.sin(Math.PI * yt)
+  return normalize([
+    side * (0.88 - 0.16 * bulge),
+    0.12,
+    0.42 + 0.28 * bulge,
+  ])
 }
 
 /** Stand-off that clears the female torso before the inward skin ray. */
@@ -782,12 +796,15 @@ export function gbLocatorCastStandoff(from = [0, 0, 0], to = [0, 0, 0]) {
  * chords dive into the thorax; casting from there hits pecs/pit or keeps the
  * sample interior, so the red line ignores the black dots.
  */
-export function gbLocatorOutsideProbe(sample = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+export function gbLocatorOutsideProbe(sample = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], body = 'male') {
   const p = asPathPoint(sample)
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const side = Math.sign((a[0] + b[0]) / 2) || Math.sign(p[0]) || 1
-  const guide = gbLateralChestGuide(p, side)
+  const y0 = Math.min(a[1], b[1])
+  const y1 = Math.max(a[1], b[1])
+  const yT = y1 - y0 > 1e-8 ? clamp01((p[1] - y0) / (y1 - y0)) : 0.5
+  const guide = gbLateralChestGuide(p, side, body, yT)
   const standoff = gbLocatorCastStandoff(a, b)
   return [
     p[0] + guide[0] * standoff,
@@ -802,14 +819,14 @@ function smoothstep01(value) {
 }
 
 /**
- * Mid-axillary 側胸 target at climb `yT` (0 = 淵腋, 1 = 肩井).
- * 淵腋 sits in the axillary crease, more posterior and slightly more
- * lateral than the chest wall. The corridor leaves that pit onto the
- * side of the thorax, holds laterality until near the shoulder cap,
- * then eases onto 肩井. Z goes posterior earlier so the last third
- * rides the shoulder onto 肩頸 instead of punching through it.
+ * Mid-axillary / anterolateral chest target at climb `yT` (0 = 淵腋, 1 = 肩井).
+ * Female: leave the pit onto 側胸, hold laterality, then ease onto 肩井
+ * with Z going posterior earlier so the last third rides the shoulder.
+ * Male: stay in the axilla longer, ride 胸前側邊, and only drop back to
+ * 肩井's posterior Z at the very end so the chord does not punch the
+ * deltoid.
  */
-function gbJianjingYuanyeCorridorAtYT(from = [0, 0, 0], to = [0, 0, 0], yT = 0.5) {
+function gbJianjingYuanyeCorridorAtYT(from = [0, 0, 0], to = [0, 0, 0], yT = 0.5, body = 'male') {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const lower = a[1] <= b[1] ? a : b
@@ -817,26 +834,59 @@ function gbJianjingYuanyeCorridorAtYT(from = [0, 0, 0], to = [0, 0, 0], yT = 0.5
   const side = Math.sign((a[0] + b[0]) / 2) || 1
   const span = gbPairSpan(a, b)
   const yt = clamp01(yT)
-  const leave = smoothstep01(yt / 0.16)
-  const shoulderX = smoothstep01((yt - 0.78) / 0.22)
-  const shoulderZ = smoothstep01((yt - 0.50) / 0.50)
-  const onSideX = Math.max(0, leave - shoulderX)
-  const onSideZ = Math.max(0, leave - shoulderZ)
-  const cap = Math.sin(Math.PI * Math.min(1, Math.max(0, (yt - 0.55) / 0.45)))
-  const wallAbsX = Math.max(span * 0.18, Math.abs(lower[0]) - span * 0.05)
-  const wallZ = lower[2] + span * 0.30
+  if (isFemaleGbChestBody(body)) {
+    const leave = smoothstep01(yt / 0.16)
+    const shoulderX = smoothstep01((yt - 0.78) / 0.22)
+    const shoulderZ = smoothstep01((yt - 0.50) / 0.50)
+    const onSideX = Math.max(0, leave - shoulderX)
+    const onSideZ = Math.max(0, leave - shoulderZ)
+    const cap = Math.sin(Math.PI * Math.min(1, Math.max(0, (yt - 0.55) / 0.45)))
+    const wallAbsX = Math.max(span * 0.18, Math.abs(lower[0]) - span * 0.05)
+    const wallZ = lower[2] + span * 0.30
+    const x = side * (
+      Math.abs(lower[0]) * (1 - leave)
+      + wallAbsX * onSideX
+      + Math.abs(upper[0]) * shoulderX
+    )
+    const y = lower[1] * (1 - yt) + upper[1] * yt + span * 0.12 * cap
+    const z = lower[2] * (1 - leave) + wallZ * onSideZ + upper[2] * shoulderZ
+    return {
+      point: [x, y, z],
+      yT: yt,
+      onSide: Math.max(onSideX, onSideZ),
+      cap,
+      wallAbsX,
+      wallZ,
+      span,
+      side,
+      lower,
+      upper,
+    }
+  }
+  const leavePit = smoothstep01(yt / 0.14)
+  const ontoChest = smoothstep01((yt - 0.06) / 0.32)
+  const ontoShoulderX = smoothstep01((yt - 0.76) / 0.24)
+  const ontoShoulderZ = smoothstep01((yt - 0.90) / 0.10)
+  const frontBlend = Math.max(0, ontoChest - ontoShoulderZ)
+  const sideHold = Math.max(0, leavePit - ontoChest)
+  const wallAbsX = Math.abs(lower[0]) * 0.86 + Math.abs(upper[0]) * 0.14
+  const wallZ = Math.max(lower[2], upper[2]) + span * 0.38
   const x = side * (
-    Math.abs(lower[0]) * (1 - leave)
-    + wallAbsX * onSideX
-    + Math.abs(upper[0]) * shoulderX
+    Math.abs(lower[0]) * (1 - leavePit)
+    + wallAbsX * Math.max(0, ontoChest - ontoShoulderX)
+    + Math.abs(upper[0]) * ontoShoulderX
+    + Math.max(wallAbsX, Math.abs(lower[0]) * 0.96) * sideHold
   )
-  const y = lower[1] * (1 - yt) + upper[1] * yt + span * 0.12 * cap
-  const z = lower[2] * (1 - leave) + wallZ * onSideZ + upper[2] * shoulderZ
+  const y = lower[1] * (1 - yt) + upper[1] * yt
+  const z = lower[2] * (1 - leavePit)
+    + wallZ * frontBlend
+    + upper[2] * ontoShoulderZ
+    + (lower[2] + span * 0.32) * sideHold
   return {
     point: [x, y, z],
     yT: yt,
-    onSide: Math.max(onSideX, onSideZ),
-    cap,
+    onSide: Math.max(frontBlend, sideHold),
+    cap: 0,
     wallAbsX,
     wallZ,
     span,
@@ -847,16 +897,19 @@ function gbJianjingYuanyeCorridorAtYT(from = [0, 0, 0], to = [0, 0, 0], yT = 0.5
 }
 
 /**
- * Corridor on the mid-axillary wall. Leave 淵腋 onto 側胸, then climb to 肩頸.
+ * Corridor on the chest wall. Female: 側胸 then 肩頸.
+ * Male: 胸前側邊 then into the axilla.
  */
-export function gbJianjingYuanyeOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5) {
+export function gbJianjingYuanyeOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t = 0.5, body = 'male') {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const tt = clamp01(t)
   const yT = a[1] <= b[1] ? tt : 1 - tt
-  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
-  const guide = gbLateralChestGuide(corridor.point, corridor.side)
-  const standoff = corridor.span * (0.035 * corridor.onSide + 0.04 * corridor.cap)
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT, body)
+  const guide = gbLateralChestGuide(corridor.point, corridor.side, body, yT)
+  const standoff = isFemaleGbChestBody(body)
+    ? corridor.span * (0.035 * corridor.onSide + 0.04 * corridor.cap)
+    : corridor.span * (0.022 * corridor.onSide)
   return [
     corridor.point[0] + guide[0] * standoff,
     corridor.point[1] + guide[1] * standoff,
@@ -864,11 +917,24 @@ export function gbJianjingYuanyeOuterPoint(from = [0, 0, 0], to = [0, 0, 0], t =
   ]
 }
 
+/** Inward-ray direction for a 肩井–淵腋 sample. */
+export function gbJianjingYuanyeGuide(from = [0, 0, 0], to = [0, 0, 0], t = 0.5, body = 'male') {
+  const a = asPathPoint(from)
+  const b = asPathPoint(to)
+  const tt = clamp01(t)
+  const yT = a[1] <= b[1] ? tt : 1 - tt
+  const side = Math.sign((a[0] + b[0]) / 2) || 1
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT, body)
+  return gbLateralChestGuide(corridor.point, side, body, yT)
+}
+
 /**
  * Axilla pit, T-pose inner arm, through-shoulder chord, or anterior pec —
- * not the mid-axillary wall the span should ride.
+ * not the wall the span should ride.
+ * Female: mid-axillary 側胸; reject the pit and the pecs.
+ * Male: 胸前側邊 into the axilla; reject the pec belly, the arm, and the back.
  */
-export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], body = 'male') {
   const p = asPathPoint(point)
   const a = asPathPoint(from)
   const b = asPathPoint(to)
@@ -877,14 +943,24 @@ export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0
   const y1 = Math.max(a[1], b[1])
   const midSpan = p[1] > y0 + span * 0.10 && p[1] < y1 - span * 0.10
   const yT = y1 - y0 > 1e-8 ? clamp01((p[1] - y0) / (y1 - y0)) : 0.5
-  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
-  const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.14
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT, body)
   const expectedAbsX = Math.abs(corridor.point[0])
-  const tooMedial = midSpan && Math.abs(p[0]) < expectedAbsX - span * 0.10
-  const tooLateral = midSpan && Math.abs(p[0]) > Math.max(corridor.wallAbsX, expectedAbsX) + span * 0.18
-  const throughPit = midSpan && yT > 0.12 && yT < 0.82
-    && p[2] < corridor.point[2] - span * 0.10
-  return onChest || tooMedial || tooLateral || throughPit
+  if (isFemaleGbChestBody(body)) {
+    const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.14
+    const tooMedial = midSpan && Math.abs(p[0]) < expectedAbsX - span * 0.10
+    const tooLateral = midSpan && Math.abs(p[0]) > Math.max(corridor.wallAbsX, expectedAbsX) + span * 0.18
+    const throughPit = midSpan && yT > 0.12 && yT < 0.82
+      && p[2] < corridor.point[2] - span * 0.10
+    return onChest || tooMedial || tooLateral || throughPit
+  }
+  const onPec = midSpan
+    && Math.abs(p[0]) < expectedAbsX - span * 0.12
+    && p[2] > corridor.point[2] + span * 0.10
+  const tooMedial = midSpan && Math.abs(p[0]) < expectedAbsX - span * 0.16
+  const maxAbsX = Math.max(corridor.wallAbsX, expectedAbsX, Math.abs(a[0]), Math.abs(b[0]))
+  const tooLateral = Math.abs(p[0]) > maxAbsX + span * 0.055
+  const throughBack = midSpan && p[2] < corridor.point[2] - span * 0.22
+  return onPec || tooMedial || tooLateral || throughBack
 }
 
 /**
@@ -893,7 +969,7 @@ export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0
  * deep axillary crease is rejected. Posterior-lateral wraps along the ribs
  * (the usual “drag the black dots to the right” on this span) stay legal.
  */
-export function isGbJianjingYuanyeHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0]) {
+export function isGbJianjingYuanyeHandleOk(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], body = 'male') {
   const p = asPathPoint(point)
   const a = asPathPoint(from)
   const b = asPathPoint(to)
@@ -907,19 +983,27 @@ export function isGbJianjingYuanyeHandleOk(point = [0, 0, 0], from = [0, 0, 0], 
   const y1 = Math.max(a[1], b[1])
   const midSpan = p[1] > y0 + span * 0.08 && p[1] < y1 - span * 0.08
   const yT = y1 - y0 > 1e-8 ? clamp01((p[1] - y0) / (y1 - y0)) : 0.5
-  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT)
+  const corridor = gbJianjingYuanyeCorridorAtYT(a, b, yT, body)
   const wallAbs = Math.max(corridor.wallAbsX, Math.abs(a[0]), Math.abs(b[0]))
-  const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.40
-  // T-pose inner arm is often near 淵腋 height, so do not require midSpan.
   const tooLateral = Math.abs(p[0]) > wallAbs + span * 0.38
-  const throughPit = midSpan
-    && p[2] < Math.min(a[2], b[2], corridor.point[2]) - span * 0.22
+  if (isFemaleGbChestBody(body)) {
+    const onChest = p[2] > Math.max(corridor.wallZ, corridor.point[2]) + span * 0.40
+    const throughPit = midSpan
+      && p[2] < Math.min(a[2], b[2], corridor.point[2]) - span * 0.22
+      && Math.abs(p[0]) < wallAbs - span * 0.06
+    return !onChest && !tooLateral && !throughPit
+  }
+  const onPec = midSpan
+    && Math.abs(p[0]) < wallAbs - span * 0.22
+    && p[2] > corridor.point[2] + span * 0.28
+  const throughBack = midSpan
+    && p[2] < Math.min(a[2], b[2], corridor.point[2]) - span * 0.28
     && Math.abs(p[0]) < wallAbs - span * 0.06
-  return !onChest && !tooLateral && !throughPit
+  return !onPec && !tooLateral && !throughBack
 }
 
-/** Reject samples that fell into the axilla crease or jumped onto the chest. */
-export function isGbJianjingYuanyeHit(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = null) {
+/** Reject samples that fell into the wrong hollow or jumped onto the chest. */
+export function isGbJianjingYuanyeHit(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0, 0], t = null, body = 'male') {
   const p = asPathPoint(point)
   const a = asPathPoint(from)
   const b = asPathPoint(to)
@@ -929,7 +1013,7 @@ export function isGbJianjingYuanyeHit(point = [0, 0, 0], from = [0, 0, 0], to = 
   const yMin = Math.min(a[1], b[1]) - span * 0.14
   const yMax = Math.max(a[1], b[1]) + span * 0.14
   if (p[1] < yMin || p[1] > yMax) return false
-  if (isGbAxillaHollow(p, a, b)) return false
+  if (isGbAxillaHollow(p, a, b, body)) return false
   const progress = Number.isFinite(Number(t))
     ? clamp01(t)
     : clamp01((
@@ -939,7 +1023,7 @@ export function isGbJianjingYuanyeHit(point = [0, 0, 0], from = [0, 0, 0], to = 
     ) / (span * span))
   if (progress > 0.14 && progress < 0.86) {
     const chord = lerp3(a, b, progress)
-    const outer = gbJianjingYuanyeOuterPoint(a, b, progress)
+    const outer = gbJianjingYuanyeOuterPoint(a, b, progress, body)
     const toChord = length3(sub3(p, chord))
     const toOuter = length3(sub3(p, outer))
     if (toChord + span * 0.045 < toOuter && toChord < span * 0.14) return false
@@ -947,7 +1031,7 @@ export function isGbJianjingYuanyeHit(point = [0, 0, 0], from = [0, 0, 0], to = 
   return true
 }
 
-export function gbJianjingYuanyeGuidePoints(from = [0, 0, 0], to = [0, 0, 0], samplesPerSpan = 12) {
+export function gbJianjingYuanyeGuidePoints(from = [0, 0, 0], to = [0, 0, 0], samplesPerSpan = 12, body = 'male') {
   const a = asPathPoint(from)
   const b = asPathPoint(to)
   const count = Math.max(8, Math.floor(Number(samplesPerSpan) || 12))
@@ -955,7 +1039,7 @@ export function gbJianjingYuanyeGuidePoints(from = [0, 0, 0], to = [0, 0, 0], sa
   for (let index = 0; index <= count; index += 1) {
     if (index === 0) out.push([...a])
     else if (index === count) out.push([...b])
-    else out.push(gbJianjingYuanyeOuterPoint(a, b, index / count))
+    else out.push(gbJianjingYuanyeOuterPoint(a, b, index / count, body))
   }
   return out
 }
