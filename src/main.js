@@ -3266,14 +3266,18 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
         const curr = raw[index]
         const gap = Math.hypot(curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2])
         const extra = Math.min(36, Math.max(0, Math.ceil(gap / step) - 1))
+        const dxy = Math.hypot(curr[0] - prev[0], curr[1] - prev[1])
+        const dz = Math.abs(curr[2] - prev[2])
+        const wrapCorner = dz > 0.01 && dz > dxy * 1.15
         for (let k = 1; k <= extra; k += 1) {
           const u = k / (extra + 1)
           const pathT = (index - 1 + u) / Math.max(raw.length - 1, 1)
-          const hit = skinAlong(
-            prev[0] + (curr[0] - prev[0]) * u,
-            prev[1] + (curr[1] - prev[1]) * u,
-            pathT,
-          )
+          const xLerp = prev[0] + (curr[0] - prev[0]) * u
+          const yLerp = prev[1] + (curr[1] - prev[1]) * u
+          const x = wrapCorner
+            ? xLerp + side * Math.sin(Math.PI * u) * Math.max(span * 0.08, dz * 0.55)
+            : xLerp
+          const hit = skinAlong(x, yLerp, pathT)
           if (!hit) continue
           if (hit.position[2] < Math.min(prev[2], curr[2], neck[2]) - span * 0.04) continue
           const lifted = liftHit(hit)
