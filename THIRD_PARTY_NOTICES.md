@@ -2,17 +2,20 @@
 
 ## Default body model (`male_character.glb`)
 
+- Title: [`Male Character`](https://sketchfab.com/3d-models/male-character-29372cc7dfcc4c88b34ecf1f40cdc35a)
+- Creator: [MaceLogice](https://sketchfab.com/MaceLogice)
+- License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/male_character.glb`
 - SHA-256: `1d52c883c830ff9bc53d146fe8fd199569735a8021569a401b0e05ded4825018`
-- Source: provided by the project owner for acupuncture authoring
 - Notes: used as the default viewer model. Normals are full-precision float32
   (no Meshopt quantization), which avoids spiral shading artifacts under
-  studio lighting.
+  studio lighting. These changes are not endorsed by the original creator.
 
 ## Female body model (`female-character.glb`)
 
 - Title: [`Female`](https://sketchfab.com/3d-models/female-15ee49542e3d4cc3aa9dec99ea3f46be)
-- Creator: [yuzutarou](https://sketchfab.com/yuzuponponpon)
+- Creator: [yuzutarou](https://sketchfab.com/yuzuponponpon) (`@yuzuponponpon`), Japan
+- Profile: [sketchfab.com/yuzuponponpon](https://sketchfab.com/yuzuponponpon)
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 - Local file: `models/female-character.glb`
 - SHA-256: `07a207b8310e99d3a366c669fdeccc5d00f49af9a3f1137048f9fcffa8d869e9`
