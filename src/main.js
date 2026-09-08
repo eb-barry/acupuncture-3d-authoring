@@ -3335,18 +3335,88 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
       }
       appendSkinPoint(filled, new THREE.Vector3(...raw[index]), fillRef)
     }
-    const arrays = (filled.length >= 3 ? filled : seed).map((point) => [point.x, point.y, point.z])
+    let arrays = (filled.length >= 3 ? filled : seed).map((point) => [point.x, point.y, point.z])
     if (arrays.length < 3) return null
-    const simplified = simplifyPolylineWithNormals(
-      arrays,
-      arrays.map((_, index) => liFutuHeliaoGuide(
-        a.position,
-        b.position,
-        arrays.length > 1 ? index / (arrays.length - 1) : 0.5,
-      )),
-      statureWorld(0.00035),
-    )
-    return simplified.points.map((point) => new THREE.Vector3(...point))
+    const dropShortReversals = (points) => {
+      if (points.length < 4) return points
+      const kept = [points[0]]
+      for (let index = 1; index < points.length - 1; index += 1) {
+        const prev = kept[kept.length - 1]
+        const curr = points[index]
+        const next = points[index + 1]
+        const incoming = [curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2]]
+        const outgoing = [next[0] - curr[0], next[1] - curr[1], next[2] - curr[2]]
+        const inLen = Math.hypot(...incoming)
+        const outLen = Math.hypot(...outgoing)
+        if (inLen > 1e-8 && outLen > 1e-8) {
+          const dot = (incoming[0] * outgoing[0] + incoming[1] * outgoing[1] + incoming[2] * outgoing[2])
+            / (inLen * outLen)
+          if (dot < 0.2 && inLen < 0.006) continue
+        }
+        kept.push(curr)
+      }
+      kept.push(points[points.length - 1])
+      return kept
+    }
+    arrays = dropShortReversals(arrays)
+    const farEnough = (point, other) => dist3(point, other) > 0.0018
+    const splitLong = (points) => {
+      const next = [points[0]]
+      let added = false
+      const pushHit = (hit, curr) => {
+        if (!hit || !wrapLegal(hit)) return false
+        const last = next[next.length - 1]
+        if (!farEnough(hit.position, last) || !farEnough(hit.position, curr)) return false
+        next.push(hit.position)
+        added = true
+        return true
+      }
+      for (let index = 1; index < points.length; index += 1) {
+        const prev = next[next.length - 1]
+        const curr = points[index]
+        const gap = Math.hypot(curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2])
+        if (gap > 0.007) {
+          const t = index / Math.max(points.length - 1, 1)
+          const mid = [
+            (prev[0] + curr[0]) * 0.5,
+            (prev[1] + curr[1]) * 0.5,
+            (prev[2] + curr[2]) * 0.5,
+          ]
+          const guide = liFutuHeliaoGuide(a.position, b.position, t)
+          if (isMaleRamusZHop(prev, curr)) {
+            for (const probe of liMaleRamusWrapProbes(prev, curr, Math.max(8, Math.ceil(gap / 0.004)))) {
+              pushHit(skinFromProbe(probe, t), curr)
+            }
+          }
+          const stillLong = dist3(next[next.length - 1], curr) > 0.007
+          if (stillLong) {
+            const standoff = Math.max(0.016, gap * 0.45)
+            pushHit(
+              projectFromOutside(new THREE.Vector3(...mid), guide, standoff)
+              || closestSkinHit([
+                mid[0] + guide[0] * standoff,
+                mid[1] + guide[1] * standoff,
+                mid[2] + guide[2] * standoff,
+              ], {
+                maxDistance: 0.024,
+                sideX: neck[0],
+                guideNormal: guide,
+              })
+              || skinAlong(mid[0], mid[1], t),
+              curr,
+            )
+          }
+        }
+        next.push(curr)
+      }
+      return { points: next, added }
+    }
+    for (let pass = 0; pass < 6; pass += 1) {
+      const split = splitLong(arrays)
+      arrays = split.points
+      if (!split.added) break
+    }
+    return arrays.map((point) => new THREE.Vector3(...point))
   }
   const corridor = () => {
     const points = []
