@@ -3268,6 +3268,12 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     points.map((point) => [point.x, point.y, point.z]),
     0.12,
   )
+  if (
+    records.length
+    && isDisorderedPolyline(arrays, [a.position, b.position], { maxLengthRatio: 1.4 })
+  ) {
+    return snapLiFutuHeliaoToSkinMale(a, b, [], rest)
+  }
   const simplified = simplifyPolylineWithNormals(
     arrays,
     arrays.map((_, index) => liFutuHeliaoGuide(
