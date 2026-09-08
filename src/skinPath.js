@@ -780,9 +780,9 @@ export function gbLateralChestGuide(chordPoint = [0, 0, 0], sideX = 0, body = 'm
   const yt = clamp01(yT)
   const bulge = Math.sin(Math.PI * yt)
   return normalize([
-    side * (0.82 - 0.22 * bulge),
-    0.10,
-    0.55 + 0.32 * bulge,
+    side * (0.88 - 0.16 * bulge),
+    0.12,
+    0.42 + 0.28 * bulge,
   ])
 }
 
@@ -863,13 +863,13 @@ function gbJianjingYuanyeCorridorAtYT(from = [0, 0, 0], to = [0, 0, 0], yT = 0.5
       upper,
     }
   }
-  const leavePit = smoothstep01(yt / 0.10)
+  const leavePit = smoothstep01(yt / 0.14)
   const ontoChest = smoothstep01((yt - 0.06) / 0.32)
   const ontoShoulderX = smoothstep01((yt - 0.76) / 0.24)
   const ontoShoulderZ = smoothstep01((yt - 0.90) / 0.10)
   const frontBlend = Math.max(0, ontoChest - ontoShoulderZ)
   const sideHold = Math.max(0, leavePit - ontoChest)
-  const wallAbsX = Math.abs(lower[0]) * 0.82 + Math.abs(upper[0]) * 0.18
+  const wallAbsX = Math.abs(lower[0]) * 0.86 + Math.abs(upper[0]) * 0.14
   const wallZ = Math.max(lower[2], upper[2]) + span * 0.38
   const x = side * (
     Math.abs(lower[0]) * (1 - leavePit)
@@ -957,7 +957,8 @@ export function isGbAxillaHollow(point = [0, 0, 0], from = [0, 0, 0], to = [0, 0
     && Math.abs(p[0]) < expectedAbsX - span * 0.12
     && p[2] > corridor.point[2] + span * 0.10
   const tooMedial = midSpan && Math.abs(p[0]) < expectedAbsX - span * 0.16
-  const tooLateral = midSpan && Math.abs(p[0]) > Math.max(corridor.wallAbsX, expectedAbsX) + span * 0.18
+  const maxAbsX = Math.max(corridor.wallAbsX, expectedAbsX, Math.abs(a[0]), Math.abs(b[0]))
+  const tooLateral = Math.abs(p[0]) > maxAbsX + span * 0.055
   const throughBack = midSpan && p[2] < corridor.point[2] - span * 0.22
   return onPec || tooMedial || tooLateral || throughBack
 }

@@ -3149,10 +3149,12 @@ function snapGbJianjingYuanyeToSkinMale(a, b, records = [], rest = []) {
   const ordered = [...records].sort((left, right) => (
     closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
   ))
+  const armCap = Math.max(Math.abs(a.position[0]), Math.abs(b.position[0])) + span * 0.045
   const sanitized = ordered
     .map((record) => snapGbHandleToSkin(record, a, b, path))
     .filter(Boolean)
     .filter((record) => isGbJianjingYuanyeHandleOk(record.position, a.position, b.position, body))
+    .filter((record) => Math.abs(record.position[0]) <= armCap)
   let hasUserHandles = false
   let samples = null
   if (sanitized.length > 0) {
@@ -3176,9 +3178,10 @@ function snapGbJianjingYuanyeToSkinMale(a, b, records = [], rest = []) {
     .addScaledVector(new THREE.Vector3(...hit.normal), lift)
   const legal = (hit, t) => {
     if (!hit) return false
+    if (!isGbJianjingYuanyeHit(hit.position, a.position, b.position, t, body)) return false
     return hasUserHandles
       ? isGbJianjingYuanyeHandleOk(hit.position, a.position, b.position, body)
-      : isGbJianjingYuanyeHit(hit.position, a.position, b.position, t, body)
+      : true
   }
   const skinAt = (sample, t) => {
     const guide = gbJianjingYuanyeGuide(a.position, b.position, t, body)
@@ -3200,6 +3203,22 @@ function snapGbJianjingYuanyeToSkinMale(a, b, records = [], rest = []) {
       guideNormal: guide,
     })
     if (legal(near, t)) return near
+    if (hasUserHandles) {
+      const outer = gbJianjingYuanyeOuterPoint(a.position, b.position, t, body)
+      const rescueGuide = gbJianjingYuanyeGuide(a.position, b.position, t, body)
+      const rescueProbe = [
+        outer[0] + rescueGuide[0] * standoff * 0.45,
+        outer[1] + rescueGuide[1] * standoff * 0.45,
+        outer[2] + rescueGuide[2] * standoff * 0.45,
+      ]
+      const rescued = projectFromOutsideHits(
+        new THREE.Vector3(...rescueProbe),
+        rescueGuide,
+        standoff,
+      ).filter((hit) => legal(hit, t))
+      rescued.sort((left, right) => dist3(left.position, outer) - dist3(right.position, outer))
+      if (rescued[0]) return rescued[0]
+    }
     return null
   }
   const accept = (hit) => {
@@ -3215,7 +3234,14 @@ function snapGbJianjingYuanyeToSkinMale(a, b, records = [], rest = []) {
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
-  const maxGap = 0.008
+  if (hasUserHandles) {
+    const arrays = arraysFromSkin(points)
+    if (isDisorderedPolyline(arrays, [a.position, b.position], { maxLengthRatio: 2.4 })) {
+      return null
+    }
+    return points
+  }
+  const maxGap = 0.012
   for (let pass = 0; pass < 5; pass += 1) {
     const denser = [points[0]]
     let added = false
