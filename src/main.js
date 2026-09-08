@@ -3245,6 +3245,13 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     return liHit(hit.position, a.position, b.position, t)
   }
   const skinAt = (x, y, t) => liFaceSkinAtXY(x, y, a.position, b.position, legalAt(t))
+  const side = Math.sign(neck[0]) || 1
+  const skinAlong = (x, y, t) => (
+    skinAt(x, y, t)
+    || skinAt(x + side * span * 0.05, y, t)
+    || skinAt(x + side * span * 0.1, y, t)
+    || skinAt(x - side * span * 0.04, y, t)
+  )
   const liftHit = (hit) => new THREE.Vector3(...hit.position)
     .addScaledVector(new THREE.Vector3(...hit.normal), lift)
   const finish = (seed) => {
@@ -3252,22 +3259,23 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     const raw = seed.map((point) => [point.x, point.y, point.z])
     const filled = []
     const fillRef = { current: null }
+    const step = 0.004
     for (let index = 0; index < raw.length; index += 1) {
       if (index > 0) {
         const prev = raw[index - 1]
         const curr = raw[index]
         const gap = Math.hypot(curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2])
-        const extra = Math.min(12, Math.floor(gap / 0.008))
+        const extra = Math.min(36, Math.max(0, Math.ceil(gap / step) - 1))
         for (let k = 1; k <= extra; k += 1) {
           const u = k / (extra + 1)
           const pathT = (index - 1 + u) / Math.max(raw.length - 1, 1)
-          const hit = skinAt(
+          const hit = skinAlong(
             prev[0] + (curr[0] - prev[0]) * u,
             prev[1] + (curr[1] - prev[1]) * u,
             pathT,
           )
           if (!hit) continue
-          if (hit.position[2] < Math.min(prev[2], curr[2]) - span * 0.04) continue
+          if (hit.position[2] < Math.min(prev[2], curr[2], neck[2]) - span * 0.04) continue
           const lifted = liftHit(hit)
           const last = fillRef.current
           if (last) {
@@ -3293,7 +3301,7 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
         b.position,
         arrays.length > 1 ? index / (arrays.length - 1) : 0.5,
       )),
-      statureWorld(0.0012),
+      statureWorld(0.0008),
     )
     return simplified.points.map((point) => new THREE.Vector3(...point))
   }
@@ -3310,7 +3318,7 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     for (let index = 1; index < guides.length - 1; index += 1) {
       const t = index / (guides.length - 1)
       const sample = guides[index]
-      const hit = skinAt(sample[0], sample[1], t)
+      const hit = skinAlong(sample[0], sample[1], t)
       if (hit) accept(hit)
     }
     accept({ position: b.position, normal: b.normal })
@@ -3340,25 +3348,14 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     for (let index = 1; index < spline.length - 1; index += 1) {
       const t = index / (spline.length - 1)
       const sample = spline[index]
-      const hit = skinAt(sample[0], sample[1], t)
+      const hit = skinAlong(sample[0], sample[1], t)
       if (hit) accept(hit)
-      else if (
-        liHandleOk(sample, a.position, b.position)
-        && sample[2] >= neck[2] - span * 0.03
-      ) {
-        accept({
-          position: sample,
-          normal: liFutuHeliaoGuide(a.position, b.position, t),
-        })
-      }
     }
     accept({ position: b.position, normal: b.normal })
     const drawn = finish(points)
     if (!drawn) return null
     const arrays = arraysFromSkin(drawn)
-    const chord = dist3(a.position, b.position)
-    if (chord > 1e-4 && polylineArcLength(arrays) > chord * 1.45) return null
-    if (isDisorderedPolyline(arrays, [a.position, b.position], { maxLengthRatio: 1.4 })) {
+    if (isDisorderedPolyline(arrays, [a.position, b.position], { maxLengthRatio: 1.7 })) {
       return null
     }
     return drawn
