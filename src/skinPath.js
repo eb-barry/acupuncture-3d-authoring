@@ -362,11 +362,25 @@ export function isLiFutuHeliaoHit(hit = [0, 0, 0], from = [0, 0, 0], to = [0, 0,
   if (tt > 0.16 && tt < 0.84) {
     if (female) {
       if (p[2] < outer[2] - span * 0.16) return false
-    } else if (p[2] < chord[2] - span * 0.08) {
+    } else if (p[2] < chord[2] - span * 0.22) {
       return false
     }
   }
   return length3(sub3(p, outer)) <= Math.max(0.04, span * (female ? 0.62 : 0.85))
+}
+
+/**
+ * Male 扶突–禾髎 corridor in the male GLB's metres: anterolateral jaw /
+ * cheek, not the hand, nape, or the back of the ramus. Female meshes are
+ * ~232× this scale, so the box never matches a female sample.
+ */
+export function isMaleJawRibbonSample(point = [0, 0, 0], body = 'male') {
+  if (body !== 'male') return false
+  const p = asPathPoint(point)
+  return Math.abs(p[0]) < 0.10
+    && p[1] > 1.545
+    && p[1] < 1.665
+    && p[2] > -0.02
 }
 
 /**
@@ -384,8 +398,10 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
   const yMin = Math.min(neck[1], face[1]) - span * 0.22
   const yMax = Math.max(neck[1], face[1]) + span * 0.22
   if (p[1] < yMin || p[1] > yMax) return false
-  if (p[2] < Math.min(neck[2], face[2]) - span * 0.22) return false
-  const anteriorSlack = isFemaleLiBody(body) ? 0.9 : 0.22
+  const female = isFemaleLiBody(body)
+  const posteriorSlack = female ? 0.22 : 0.05
+  if (p[2] < Math.min(neck[2], face[2]) - span * posteriorSlack) return false
+  const anteriorSlack = female ? 0.9 : 0.22
   if (p[2] > Math.max(neck[2], face[2]) + span * anteriorSlack) return false
   const maxAbsX = Math.max(Math.abs(neck[0]), Math.abs(face[0]))
   if (Math.abs(p[0]) > maxAbsX + span * 0.45) return false
@@ -393,13 +409,12 @@ export function isLiFutuHeliaoHandleOk(point = [0, 0, 0], from = [0, 0, 0], to =
     ? clamp01((p[1] - neck[1]) / (face[1] - neck[1]))
     : 0.5
   const chordZ = neck[2] + (face[2] - neck[2]) * yT
-  if (
-    yT > 0.18
-    && yT < 0.82
-    && p[2] < chordZ + span * 0.02
-    && Math.abs(p[0]) < Math.abs(neck[0]) * 0.72
-  ) {
-    return false
+  if (yT > 0.18 && yT < 0.82 && p[2] < chordZ + span * 0.02) {
+    if (female) {
+      if (Math.abs(p[0]) < Math.abs(neck[0]) * 0.72) return false
+    } else {
+      return false
+    }
   }
   return true
 }

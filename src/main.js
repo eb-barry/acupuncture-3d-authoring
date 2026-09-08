@@ -98,6 +98,7 @@ import {
   kiYinguChangqiangOuterPoint,
   isLiFutuHeliaoHit,
   isLiFutuHeliaoHandleOk,
+  isMaleJawRibbonSample,
   liFutuHeliaoGuidePoints,
   liFutuHeliaoOuterPoint,
   liFutuHeliaoGuide,
@@ -2493,6 +2494,9 @@ function isUsableDigitPath(points, from, to) {
     const sample = point?.isVector3 ? toArray(point) : point
     if (!isOnDigitSkin(sample, from, to, 0.030)) return false
   }
+  const first = toArray(points[0])
+  const last = toArray(points[points.length - 1])
+  if (dist3(first, from) > 0.01 || dist3(last, to) > 0.01) return false
   return true
 }
 
@@ -2640,8 +2644,7 @@ function sampleDigitSkinPath(a, b, tipPos, tipNormal, {
   accept({ position: b.position, normal: b.normal }, {
     corridorFrom: palmarFrom,
     corridorTo: toArray(end),
-    maxOff: 0.012,
-    maxStep: 0.02,
+    maxOff: 0.016,
   })
   return points
 }
@@ -3128,21 +3131,11 @@ function snapLiHandleToSkinMale(placed, fromResolved, toResolved, rest = []) {
     new THREE.Vector3(...from).distanceTo(new THREE.Vector3(...to)),
     1e-6,
   )
-  const sideX = Math.abs(from[0]) >= Math.abs(to[0]) ? from[0] : to[0]
   const legal = (hit) => hit && liHandleOk(hit.position, from, to)
   const hit = liFaceSkinAtXY(placed.position[0], placed.position[1], from, to, legal)
-  if (hit) return { position: hit.position, normal: hit.normal }
-  const near = Math.max(statureWorld(0.008), span * 0.045)
-  const nearHit = closestSkinHit(placed.position, {
-    maxDistance: near,
-    sideX,
-    guideNormal: placed.normal || liFutuHeliaoGuide(
-      from,
-      to,
-      rest.length >= 2 ? closestTOnPolyline(rest, placed.position) : 0.5,
-    ),
-  })
-  if (legal(nearHit)) return { position: nearHit.position, normal: nearHit.normal }
+  if (hit && hit.position[2] >= Math.min(from[2], to[2]) - span * 0.03) {
+    return { position: hit.position, normal: hit.normal }
+  }
   return null
 }
 
@@ -3210,14 +3203,6 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
     1e-6,
   )
   const neck = Math.abs(a.position[0]) >= Math.abs(b.position[0]) ? a.position : b.position
-  const path = rest.length >= 2 ? rest : liGuidePoints(a.position, b.position)
-  const ordered = [...records].sort((left, right) => (
-    closestTOnPolyline(path, left.position) - closestTOnPolyline(path, right.position)
-  ))
-  const sanitized = ordered
-    .map((record) => snapLiHandleToSkinMale(record, a, b, path))
-    .filter(Boolean)
-  const hasUserHandles = sanitized.length > 0
   const count = Math.min(80, Math.max(32, Math.ceil(span / Math.max(statureWorld(0.004), span * 0.028)) + 18))
   const lift = statureWorld(SKIN_LIFT)
   const points = []
@@ -3232,34 +3217,55 @@ function snapLiFutuHeliaoToSkinMale(a, b, records = [], rest = []) {
   const legalAt = (t) => (hit) => {
     if (!hit) return false
     if (hit.position[2] < neck[2] - span * 0.03) return false
-    return liHandleOk(hit.position, a.position, b.position)
+    return liHit(hit.position, a.position, b.position, t)
   }
   const skinAt = (x, y, t) => liFaceSkinAtXY(x, y, a.position, b.position, legalAt(t))
   accept({ position: a.position, normal: a.normal })
-  const guides = hasUserHandles
-    ? catmullRomThrough(
-      [a.position, ...sanitized.map((record) => record.position), b.position],
-      24,
-    )
-    : liGuidePoints(a.position, b.position, count)
+  const guides = liGuidePoints(a.position, b.position, count)
   for (let index = 1; index < guides.length - 1; index += 1) {
     const t = index / (guides.length - 1)
     const sample = guides[index]
-    if (hasUserHandles) {
-      const control = sanitized.find((record) => (
-        Math.hypot(record.position[0] - sample[0], record.position[1] - sample[1]) < span * 0.012
-      ))
-      if (control) {
-        accept(control)
-        continue
-      }
-    }
     const hit = skinAt(sample[0], sample[1], t)
     if (hit) accept(hit)
   }
   accept({ position: b.position, normal: b.normal })
   if (points.length < 3) return null
-  const arrays = points.map((point) => [point.x, point.y, point.z])
+  const raw = points.map((point) => [point.x, point.y, point.z])
+  const filled = []
+  const fillRef = { current: null }
+  for (let index = 0; index < raw.length; index += 1) {
+    if (index > 0) {
+      const prev = raw[index - 1]
+      const curr = raw[index]
+      const gap = Math.hypot(curr[0] - prev[0], curr[1] - prev[1], curr[2] - prev[2])
+      const extra = Math.min(12, Math.floor(gap / 0.008))
+      for (let k = 1; k <= extra; k += 1) {
+        const u = k / (extra + 1)
+        const pathT = (index - 1 + u) / Math.max(raw.length - 1, 1)
+        const hit = skinAt(
+          prev[0] + (curr[0] - prev[0]) * u,
+          prev[1] + (curr[1] - prev[1]) * u,
+          pathT,
+        )
+        if (!hit) continue
+        if (hit.position[2] < Math.min(prev[2], curr[2]) - span * 0.04) continue
+        const lifted = liftHit(hit)
+        const last = fillRef.current
+        if (last) {
+          const toHit = [lifted.x - last.x, lifted.y - last.y, lifted.z - last.z]
+          const toEnd = [curr[0] - last.x, curr[1] - last.y, curr[2] - last.z]
+          const progress = toHit[0] * toEnd[0] + toHit[1] * toEnd[1] + toHit[2] * toEnd[2]
+          if (progress < 0) continue
+        }
+        appendSkinPoint(filled, lifted, fillRef)
+      }
+    }
+    appendSkinPoint(filled, new THREE.Vector3(...raw[index]), fillRef)
+  }
+  const arrays = pruneSharpPolylineTurns(
+    (filled.length >= 3 ? filled : points).map((point) => [point.x, point.y, point.z]),
+    -0.5,
+  )
   const simplified = simplifyPolylineWithNormals(
     arrays,
     arrays.map((_, index) => liFutuHeliaoGuide(
@@ -3991,8 +3997,10 @@ function restPathArrays(fromNode, toNode) {
     if (isLiFutuHeliaoPair(fromCode, toCode)) {
       const pathLen = polylineArcLength(cached)
       const chord = dist3(a.position, b.position)
-      if (isMaleStudioBody() && chord > 1e-4 && pathLen > chord * 2.4) return false
-      if (isDisorderedPolyline(cached, [a.position, b.position], { maxLengthRatio: 1.7 })) return false
+      if (isMaleStudioBody() && chord > 1e-4 && pathLen > chord * 1.45) return false
+      if (isDisorderedPolyline(cached, [a.position, b.position], {
+        maxLengthRatio: isMaleStudioBody() ? 1.4 : 1.7,
+      })) return false
       const mid = cached[Math.floor(cached.length / 2)]
       return Boolean(mid) && liHit(mid, a.position, b.position, 0.5)
     }
@@ -4075,14 +4083,6 @@ function snapHandleToSkin(placed, fromNode, toNode) {
     const snapped = snapLiHandleToSkin(placed, from, to, restPathArrays(fromNode, toNode))
     if (!isMaleStudioBody()) return snapped || placed
     if (snapped) return snapped
-    if (liHandleOk(placed.position, from.position, to.position)) {
-      const near = closestSkinHit(placed.position, {
-        maxDistance: statureWorld(0.02),
-        sideX: from.position[0],
-        guideNormal: placed.normal,
-      })
-      if (near && liHandleOk(near.position, from.position, to.position)) return near
-    }
     return placed
   }
   const sideX = pairSideX(fromNode, toNode)
@@ -4328,11 +4328,23 @@ function trimCache(cache, limit) {
  * Dragging uses the coarse step so a preview stays interactive; the settled
  * rebuild refines it.
  */
+function maleJawRibbonLocked(point) {
+  return isMaleJawRibbonSample(point, 'male') && isMaleStudioBody()
+}
+
+function maleJawOutward(point) {
+  const x = point[0] || 0
+  const len = Math.hypot(Math.sign(x) || 1, 0.1, 0.72) || 1
+  return [(Math.sign(x) || 1) / len, 0.1 / len, 0.72 / len]
+}
+
 function conformRunToSkin(points) {
   const scale = Math.max(statureScale(), 1e-3)
   const start = toArray(points[0])
   const end = toArray(points[points.length - 1])
   const digitRun = isDigitTipWrap(start, end, -1)
+  const skipDense = digitRun
+  const skipJawEdge = (a, b) => maleJawRibbonLocked(a) && maleJawRibbonLocked(b)
   const step = sampleStepForQuality(dragging ? 'coarse' : 'fine') * scale
   const snap = 0.02 * scale
   const pull = MAX_CONFORM_PULL * scale
@@ -4340,39 +4352,49 @@ function conformRunToSkin(points) {
   const key = [
     points.length,
     step,
-    digitRun ? 'digit' : 'body',
+    skipDense ? 'sparse' : 'body',
+    isMaleStudioBody() ? 'mj' : 'f',
     quantizeKey(points[0]),
     quantizeKey(mid),
     quantizeKey(points[points.length - 1]),
   ].join('|')
   const cached = conformCache.get(key)
   if (cached) return cached
-  // Fingers are ~8 mm radius: 2 mm chords between palmar and nail samples cut
-  // through the digit, and nearest-surface hops to the opposite wall.
-  const dense = digitRun
+  // Fingers and the male jaw are thin: 2 mm chords cut through and
+  // nearest-surface hops to the opposite wall, stacking the ribbon.
+  // Skip jaw edges even when they sit inside a longer LI run (hand→face).
+  const dense = skipDense
     ? points.map((point) => toArray(point))
-    : densifyPath(points.map((point) => toArray(point)), step)
+    : densifyPath(points.map((point) => toArray(point)), step, {
+      skipEdge: skipJawEdge,
+    })
+  const jawLocked = dense.map((point) => maleJawRibbonLocked(point))
   const lockMidlineX = Math.abs(start[0]) <= statureWorld(0.02)
     && Math.abs(end[0]) <= statureWorld(0.02)
   const estimate = conformPath(dense, (point) => nearestSurfaceFrame(point, null, snap), {
-    maxPull: digitRun ? Math.min(pull, 0.003) : pull,
-    minNormalDot: digitRun ? -1 : 0.2,
+    maxPull: skipDense ? Math.min(pull, 0.003) : pull,
+    minNormalDot: skipDense ? -1 : 0.2,
   })
   const guides = smoothPathNormals(estimate.normals, 2)
   const conformed = conformPath(dense, (point, guide) => surfaceFrameAt(point, guide, snap), {
     guides,
-    maxPull: digitRun ? Math.min(pull, 0.003) : pull,
-    minNormalDot: digitRun ? -1 : 0.2,
+    maxPull: skipDense ? Math.min(pull, 0.003) : pull,
+    minNormalDot: skipDense ? -1 : 0.2,
   })
   const run = {
     points: conformed.points.map((point, index) => {
+      if (jawLocked[index]) return dense[index]
       const placed = conformed.resolved[index] ? point : estimate.points[index]
       // 任督 x=0: nearest-point conform otherwise slides into the breasts
       // at the xiphoid dip and makes 鳩尾–巨闕 look crooked from the front.
       if (!lockMidlineX || !placed) return placed
       return [dense[index][0], placed[1], placed[2]]
     }),
-    normals: smoothPathNormals(conformed.normals, 2),
+    normals: smoothPathNormals(conformed.normals.map((normal, index) => {
+      if (!jawLocked[index]) return normal
+      const hopped = dist3(estimate.points[index], dense[index]) > 0.004
+      return hopped ? maleJawOutward(dense[index]) : (estimate.normals[index] || normal)
+    }), 2),
     unresolved: conformed.resolved.reduce(
       (total, ok, index) => (ok || estimate.resolved[index] ? total : total + 1),
       0,
