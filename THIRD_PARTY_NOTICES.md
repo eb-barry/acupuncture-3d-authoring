@@ -30,25 +30,7 @@
   `male_character.glb`, which avoids spiral shading artifacts under studio
   lighting. Reproducible via `scripts/compress_female_character_glb.py`.
   The earlier seam-repair script `scripts/repair_female_character_glb.py`
-  applied only to the previous 7.2MB female mesh and is not used on this asset.
-
-## Alternate body model (`human_glb`)
-
-- Title: [`human_glb`](https://sketchfab.com/3d-models/human-glb-1ac3176269f54db0a98e155efb84b900)
-- Creator: [aaravparakh](https://sketchfab.com/aaravparakh)
-- License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
-- Local file: `models/human.glb`
-- SHA-256: `08123599c9c3b57e9f0503e4f432bd18c73623cba6952c7c5752a7e1207f43cc`
-
-Changes made by this project: joined the original mesh primitives, welded
-equivalent vertices, recalculated outward normals, applied region-weighted
-Laplacian cleanup on back/inner-forearm/palm seam bands while locking face and
-fingertip neighborhoods, deepened inter-toe grooves on the true distal toe pads
-(min-Y foot tips for this asset), then added ten separate fingernail meshes and
-ten toenail meshes with a distinct pink material for acupuncture orientation.
-Vertex attributes were quantized and Meshopt-compressed using glTF-Transform
-4.4.2 without mesh simplification. These changes are not endorsed by the
-original creator.
+  applied only to a previous 7.2MB female mesh that is no longer in the repo.
 
 ## Acupuncture catalog
 
