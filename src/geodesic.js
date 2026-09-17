@@ -27,33 +27,63 @@ export function normalsAgree(a = [0, 1, 0], b = [0, 1, 0], minDot = 0.25) {
   return dot3(normalize3(a), normalize3(b)) >= minDot
 }
 
-/** Map coincident vertices to the first index at that position. */
+/**
+ * Map coincident vertices to the first index at that position.
+ * Nested Maps keyed by quantized XYZ avoid per-vertex string allocation,
+ * which previously stalled first load on 300k–500k vertex bodies.
+ */
 export function weldVertices(positions, scale = 1e5) {
-  const remap = new Array(positions.length)
-  const first = new Map()
-  for (let index = 0; index < positions.length; index += 1) {
+  const count = positions.length
+  const remap = new Array(count)
+  const root = new Map()
+  for (let index = 0; index < count; index += 1) {
     const point = positions[index]
-    const key = `${Math.round(point[0] * scale)}:${Math.round(point[1] * scale)}:${Math.round(point[2] * scale)}`
-    if (!first.has(key)) first.set(key, index)
-    remap[index] = first.get(key)
+    const ix = Math.round(point[0] * scale)
+    const iy = Math.round(point[1] * scale)
+    const iz = Math.round(point[2] * scale)
+    let yMap = root.get(ix)
+    if (!yMap) {
+      yMap = new Map()
+      root.set(ix, yMap)
+    }
+    let zMap = yMap.get(iy)
+    if (!zMap) {
+      zMap = new Map()
+      yMap.set(iy, zMap)
+    }
+    const existing = zMap.get(iz)
+    if (existing === undefined) {
+      zMap.set(iz, index)
+      remap[index] = index
+    } else {
+      remap[index] = existing
+    }
   }
   return remap
 }
 
+/** Pack undirected edge (a,b) into one Number key. Safe for < 2^26 vertices. */
+export function edgeKey(a, b) {
+  const lo = a < b ? a : b
+  const hi = a < b ? b : a
+  return lo * 0x4000000 + hi
+}
+
 /** Undirected edge graph; `triangles` is a flat list of vertex indices. */
 export function buildAdjacency(positions, triangles, remap) {
-  const adj = Array.from({ length: positions.length }, () => [])
-  const seen = new Set()
+  const count = positions.length
+  const adj = Array.from({ length: count }, () => [])
   const link = (ia, ib) => {
     const a = remap[ia]
     const b = remap[ib]
     if (a === b) return
-    const key = a < b ? `${a},${b}` : `${b},${a}`
-    if (seen.has(key)) return
-    seen.add(key)
+    const list = adj[a]
+    for (let cursor = 0; cursor < list.length; cursor += 1) {
+      if (list[cursor][0] === b) return
+    }
     const weight = dist3(positions[a], positions[b])
     if (weight < 1e-12) return
-    adj[a].push([b, weight])
+    list.push([b, weight])
     adj[b].push([a, weight])
   }
   for (let index = 0; index < triangles.length; index += 3) {
@@ -95,6 +125,97 @@ export function buildCombinedSurfaceGraph(chunks = []) {
     remap,
     offsets,
     adjacency: buildAdjacency(positions, triangles, remap),
+  }
+}
+
+/**
+ * Same as buildCombinedSurfaceGraph, but yields so the UI can paint / orbit
+ * while large female meshes weld and link ~1M triangles.
+ */
+export async function buildCombinedSurfaceGraphAsync(chunks = [], {
+  yieldEvery = 65536,
+  yieldFn = null,
+  isStale = null,
+} = {}) {
+  const pause = typeof yieldFn === 'function'
+    ? yieldFn
+    : () => new Promise((resolve) => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      } else {
+        setTimeout(resolve, 0)
+      }
+    })
+  const positions = []
+  const normals = []
+  const triangles = []
+  const offsets = []
+  let sinceYield = 0
+  for (const chunk of chunks) {
+    offsets.push(positions.length)
+    const base = positions.length
+    const chunkPositions = chunk.positions || []
+    const chunkNormals = chunk.normals || []
+    for (let index = 0; index < chunkPositions.length; index += 1) {
+      positions.push(chunkPositions[index])
+      normals.push(chunkNormals[index] || [0, 1, 0])
+      sinceYield += 1
+      if (sinceYield >= yieldEvery) {
+        sinceYield = 0
+        await pause()
+        if (isStale?.()) return null
+      }
+    }
+    const chunkTriangles = chunk.triangles || []
+    for (let index = 0; index < chunkTriangles.length; index += 1) {
+      triangles.push(base + chunkTriangles[index])
+      sinceYield += 1
+      if (sinceYield >= yieldEvery) {
+        sinceYield = 0
+        await pause()
+        if (isStale?.()) return null
+      }
+    }
+  }
+  await pause()
+  if (isStale?.()) return null
+  const remap = weldVertices(positions)
+  await pause()
+  if (isStale?.()) return null
+
+  const count = positions.length
+  const adj = Array.from({ length: count }, () => [])
+  const link = (ia, ib) => {
+    const a = remap[ia]
+    const b = remap[ib]
+    if (a === b) return
+    const list = adj[a]
+    for (let cursor = 0; cursor < list.length; cursor += 1) {
+      if (list[cursor][0] === b) return
+    }
+    const weight = dist3(positions[a], positions[b])
+    if (weight < 1e-12) return
+    list.push([b, weight])
+    adj[b].push([a, weight])
+  }
+  sinceYield = 0
+  for (let index = 0; index < triangles.length; index += 3) {
+    link(triangles[index], triangles[index + 1])
+    link(triangles[index + 1], triangles[index + 2])
+    link(triangles[index + 2], triangles[index])
+    sinceYield += 3
+    if (sinceYield >= yieldEvery) {
+      sinceYield = 0
+      await pause()
+      if (isStale?.()) return null
+    }
+  }
+  return {
+    positions,
+    normals,
+    remap,
+    offsets,
+    adjacency: adj,
   }
 }
 

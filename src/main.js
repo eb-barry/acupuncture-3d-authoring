@@ -146,7 +146,7 @@ import {
   REFERENCE_BODY_HEIGHT_M,
 } from './skinRibbon.js'
 import {
-  buildCombinedSurfaceGraph,
+  buildCombinedSurfaceGraphAsync,
   collapseOppositeWallSpikes,
   collapseSharpChordSpikes,
   densifyPolylineWithNormals,
@@ -457,6 +457,7 @@ let initialTarget = controls.target.clone()
 
 let modelMeshes = []
 let surfaceGraph = null
+let annotationRebuildToken = 0
 const geodesicCache = new Map()
 const restPathCache = new Map()
 let shortArcCache = null
@@ -2045,7 +2046,7 @@ function projectGeodesicSample(point, guideNormal) {
 function liftGeodesicPolyline(points, normals) {
   const cleaned = collapseOppositeWallSpikes(points, normals)
   const taut = tautOnSurfacePolyline(cleaned.points, cleaned.normals, {
-    iterations: 12,
+    iterations: 6,
     strength: 0.65,
     maxStep: 0.006,
     corridor: cleaned.points,
@@ -2078,6 +2079,7 @@ function clearPathCaches() {
 async function rebuildSurfaceGraph({ isStale } = {}) {
   clearPathCaches()
   normalMatrices.clear()
+  surfaceGraph = null
   const chunks = []
   const meshOffsets = new Map()
   for (const mesh of modelMeshes) {
@@ -2123,7 +2125,15 @@ async function rebuildSurfaceGraph({ isStale } = {}) {
     surfaceGraph = null
     return
   }
-  surfaceGraph = { ...buildCombinedSurfaceGraph(chunks), meshOffsets }
+  // Weld + adjacency previously blocked the main thread for seconds on the
+  // female mesh. Build with yields so orbit stays alive during first load.
+  const graph = await buildCombinedSurfaceGraphAsync(chunks, {
+    yieldEvery: 49152,
+    yieldFn: yieldToMain,
+    isStale,
+  })
+  if (!graph || isStale?.()) return
+  surfaceGraph = { ...graph, meshOffsets }
 }
 
 function globalTriangleCorners(mesh, faceIndex) {
@@ -5518,21 +5528,7 @@ function releaseLoadedBody() {
   modelMeshes = []
 }
 
-function rebuildAnnotations() {
-  if (isDevMode(import.meta.env)) window.__midlineSnap = []
-  clearAnnotationVisuals()
-
-  const displayIds = new Set(visibleMeridianIdList())
-
-  // Completed meridians (routes in state) always draw when checked on the right.
-  state.meridians
-    .filter((route) => displayIds.has(route.meridianId))
-    .forEach((route) => {
-      addRouteLineVisuals(route, skinCurveRuns(route))
-      if (isRouteSelected(route)) addRouteEditHandles(route)
-    })
-
-  // Show acupoints for every checked meridian on the right panel.
+function addAcupointVisuals(displayIds) {
   state.acupoints
     .filter((point) => displayIds.has(point.meridianId))
     .forEach((point) => {
@@ -5555,6 +5551,39 @@ function rebuildAnnotations() {
       annotationGroup.add(labelObject)
       markerVisuals.push({ mesh: marker, label: labelObject, point })
     })
+}
+
+/**
+ * Draw annotations without locking the tab. Completing 手太陰肺經 (or importing
+ * a full JSON) used to run every geodesic + ribbon conform on one tick and
+ * freeze orbit; yield after each route so the frame loop keeps running.
+ */
+function rebuildAnnotations() {
+  const token = ++annotationRebuildToken
+  void rebuildAnnotationsProgressive(token)
+}
+
+async function rebuildAnnotationsProgressive(token) {
+  if (token !== annotationRebuildToken) return
+  if (isDevMode(import.meta.env)) window.__midlineSnap = []
+  clearAnnotationVisuals()
+
+  const displayIds = new Set(visibleMeridianIdList())
+  addAcupointVisuals(displayIds)
+  updateMarkerScales()
+  await yieldToMain()
+  if (token !== annotationRebuildToken) return
+
+  const routes = state.meridians.filter((route) => displayIds.has(route.meridianId))
+  for (const route of routes) {
+    if (token !== annotationRebuildToken) return
+    // Never leave orbit dead if a previous click path disabled controls.
+    if (!orbitPointerDown && !dragging) controls.enabled = true
+    addRouteLineVisuals(route, skinCurveRuns(route))
+    if (isRouteSelected(route)) addRouteEditHandles(route)
+    await yieldToMain()
+  }
+  if (token !== annotationRebuildToken) return
   updateMarkerScales()
 }
 
@@ -6534,7 +6563,7 @@ async function measureFramedHeight(bodyId) {
   }
 }
 
-async function applyModel(gltf, name, hash = null, { isStale } = {}) {
+async function applyModel(gltf, name, hash = null, { isStale, onInteractive } = {}) {
   const root = gltf.scene
   const box = new THREE.Box3().setFromObject(root)
   const size = box.getSize(new THREE.Vector3())
@@ -6632,7 +6661,7 @@ async function applyModel(gltf, name, hash = null, { isStale } = {}) {
   refreshBodyFrontAxis()
   updateUI()
 
-  // Paint the mesh before BVH / surface-graph work freezes the main thread.
+  // Paint the mesh before BVH / surface-graph work; keep the UI interactive.
   await yieldToMain()
   if (isStale?.()) return
 
@@ -6644,6 +6673,10 @@ async function applyModel(gltf, name, hash = null, { isStale } = {}) {
       await yieldToMain()
       if (isStale?.()) return
     }
+    // Body is pickable; drop the loading veil before the geodesic graph.
+    onInteractive?.()
+    await yieldToMain()
+    if (isStale?.()) return
     await rebuildSurfaceGraph({ isStale })
   } catch (error) {
     console.warn('Surface graph rebuild failed', error)
@@ -7002,11 +7035,20 @@ async function loadBodyModel(bodyId, { keepDocument = false } = {}) {
     activeBody = body
     syncBodyModelSelect()
     setModelLoadingUi(`正在顯示${preset.label}模型…`)
-    await applyModel(gltf, preset.fileName, null, { isStale })
+    let unveiled = false
+    await applyModel(gltf, preset.fileName, null, {
+      isStale,
+      onInteractive: () => {
+        if (isStale() || unveiled) return
+        unveiled = true
+        clearModelLoadingUi()
+        setStatus(`${preset.label}模型已顯示 · 正在準備貼皮路徑…`)
+      },
+    })
     if (isStale()) return false
     setStatus(`${preset.label}模型已就緒 · 請匯入對應 JSON 穴位資料`)
     $('#model-status').textContent = `${preset.label} · ${preset.fileName}`
-    clearModelLoadingUi()
+    if (!unveiled) clearModelLoadingUi()
     return true
   } catch (error) {
     if (isStale()) return false
@@ -7060,9 +7102,16 @@ async function loadModel(file) {
     prepareModelMaterials(gltf)
     const inferred = inferBodyModel({ name: file.name, body: activeBody })
     activeBody = inferred
-    await applyModel(gltf, file.name)
+    let unveiled = false
+    await applyModel(gltf, file.name, null, {
+      onInteractive: () => {
+        if (unveiled) return
+        unveiled = true
+        clearModelLoadingUi()
+      },
+    })
     syncBodyModelSelect()
-    clearModelLoadingUi()
+    if (!unveiled) clearModelLoadingUi()
     toast(`已載入 ${file.name}`)
   } catch (error) {
     toast(`模型載入失敗：${error.message}`, 'error')
