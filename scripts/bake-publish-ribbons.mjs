@@ -40,6 +40,10 @@ function chromePath() {
 async function waitForStudio(browser, studioUrl, timeoutMs = 180000) {
   const page = await browser.newPage()
   page.setDefaultTimeout(timeoutMs)
+  page.setDefaultNavigationTimeout(timeoutMs)
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') console.error('[studio console]', msg.text())
+  })
   page.on('pageerror', (error) => console.error('[studio pageerror]', error.message))
   await page.goto(studioUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
   await page.waitForFunction(() => Boolean(window.__studio?.bakeFromJson), { timeout: timeoutMs })
@@ -83,6 +87,7 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath,
     headless: 'new',
+    protocolTimeout: 15 * 60 * 1000,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -96,7 +101,8 @@ async function main() {
   })
 
   try {
-    const page = await waitForStudio(browser, studioUrl)
+    const page = await waitForStudio(browser, studioUrl, 180000)
+    page.setDefaultTimeout(15 * 60 * 1000)
     for (const job of jobs) {
       console.log(`baking ${job.label} from ${job.input}`)
       const source = await readFile(job.input, 'utf8')
