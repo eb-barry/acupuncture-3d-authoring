@@ -13,7 +13,9 @@ import {
   exportFileName,
   inferBodyModel,
   parseDocument,
+  quantizeVec3,
   sanitizeRouteNode,
+  stripPublishRibbons,
   validateDocument,
 } from './document.js'
 import { cloneStudioDocument, isCurrentBodyLoad, resolveStudioBodyId, shouldLoadBodyModel } from './bodyLoad.js'
@@ -6409,17 +6411,58 @@ function applyHistory(nextState, message) {
   setStatus(message)
 }
 
+function pointToArray(point) {
+  if (Array.isArray(point) && point.length >= 3) return [point[0], point[1], point[2]]
+  if (point?.isVector3) return [point.x, point.y, point.z]
+  if (point && typeof point === 'object') return toArray(point)
+  return [0, 0, 0]
+}
+
+function bakeRouteRibbons(route) {
+  return skinCurveRuns(route).map((run) => {
+    const points = (run.points || []).map(pointToArray)
+    if (points.length < 2) return null
+    const conformed = conformRunToSkin(points)
+    const samples = (conformed.points || []).map((position, index) => ({
+      position: quantizeVec3(position),
+      normal: quantizeVec3(conformed.normals?.[index] || [0, 0, 1]),
+    }))
+    return samples.length >= 2 ? { samples } : null
+  }).filter(Boolean)
+}
+
+function bakePublishDocument(document) {
+  const body = inferBodyModel(document?.model)
+  const preset = BODY_MODELS[body]
+  return {
+    ...document,
+    version: 3,
+    model: {
+      ...document.model,
+      body,
+      name: document.model?.name || preset.fileName,
+    },
+    meridians: (document.meridians || []).map((route) => {
+      const { ribbons, ...rest } = route
+      return { ...rest, ribbons: bakeRouteRibbons(route) }
+    }),
+  }
+}
+
 function exportJSON() {
   const body = inferBodyModel(state.model)
   const preset = BODY_MODELS[body]
-  const payload = normalizeFixedStyles({
+  if (!modelMeshes.length || studioBodyId() !== body) {
+    return toast('請先載入與此地圖相同的身體模型，再匯出烤乾貼膚折線', 'error')
+  }
+  const payload = bakePublishDocument(normalizeFixedStyles({
     ...state,
     model: {
       ...state.model,
       body,
       name: state.model?.name || preset.fileName,
     },
-  })
+  }))
   const result = validateDocument(payload)
   if (!result.valid) return toast(`無法匯出：${result.errors[0]}`, 'error')
   const fileName = exportFileName(payload)
@@ -6428,7 +6471,8 @@ function exportJSON() {
   link.download = fileName
   link.click()
   URL.revokeObjectURL(link.href)
-  toast(`已匯出 ${fileName}（${preset.label}模型）`)
+  toast(`已匯出 ${fileName}（${preset.label}模型，已烤乾貼膚折線）`)
+  return payload
 }
 
 async function importJSON(file) {
@@ -6437,7 +6481,7 @@ async function importJSON(file) {
   const sourceBody = inferBodyModel(result.value.model)
   const targetBody = BODY_MODELS[activeBody] ? activeBody : 'male'
   const preset = BODY_MODELS[targetBody]
-  let next = bindDocumentToBody(result.value, targetBody)
+  let next = bindDocumentToBody(stripPublishRibbons(result.value), targetBody)
   const needsRetarget = sourceBody !== targetBody
   let retargetMissed = 0
 
@@ -7585,6 +7629,43 @@ if (isDevMode(import.meta.env)) {
         if (hit) hits.push({ y, p: hit.position.map((v) => Math.round(v * 1000) / 1000), n: hit.normal.map((v) => Math.round(v * 1000) / 1000) })
       }
       return hits
+    },
+    async bakeFromJson(jsonText) {
+      const parsed = parseDocument(typeof jsonText === 'string' ? jsonText : JSON.stringify(jsonText))
+      if (!parsed.valid) throw new Error(parsed.errors[0] || 'invalid-map')
+      const body = inferBodyModel(parsed.value.model)
+      if (studioBodyId() !== body || !modelMeshes.length) {
+        const loaded = await loadBodyModel(body, { keepDocument: true })
+        if (!loaded) throw new Error('model-load-failed')
+      }
+      if (!modelMeshes.length || studioBodyId() !== body) throw new Error('body-mismatch')
+      const previous = state
+      try {
+        const next = bindDocumentToBody(stripPublishRibbons(parsed.value), body)
+        state = normalizeFixedStyles({
+          ...next,
+          model: {
+            ...next.model,
+            body,
+            name: next.model?.name || BODY_MODELS[body].fileName,
+          },
+        })
+        const payload = bakePublishDocument(state)
+        const result = validateDocument(payload)
+        if (!result.valid) throw new Error(result.errors[0])
+        return {
+          payload,
+          body,
+          routes: payload.meridians.length,
+          ribbons: payload.meridians.reduce((count, route) => count + (route.ribbons?.length || 0), 0),
+          samples: payload.meridians.reduce(
+            (count, route) => count + (route.ribbons || []).reduce((sum, ribbon) => sum + ribbon.samples.length, 0),
+            0,
+          ),
+        }
+      } finally {
+        state = previous
+      }
     },
     frame(target, position) {
       if (orbitLocked) setOrbitLocked(false)

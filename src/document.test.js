@@ -4,6 +4,8 @@ import {
   exportFileName,
   inferBodyModel,
   parseDocument,
+  quantizeVec3,
+  stripPublishRibbons,
   validateDocument,
 } from './document.js'
 
@@ -115,6 +117,71 @@ describe('acupuncture document schema', () => {
       .toBe('meridian-map-v2-male-2026-08-13.json')
     expect(exportFileName(emptyDocument('female'), new Date('2026-08-13T00:00:00.000Z')))
       .toBe('meridian-map-v2-female-2026-08-13.json')
+    expect(exportFileName({ ...emptyDocument('male'), version: 3 }, new Date('2026-08-13T00:00:00.000Z')))
+      .toBe('meridian-map-v3-male-2026-08-13.json')
+  })
+
+  it('accepts version 3 documents with baked skin ribbons', () => {
+    const document = {
+      ...emptyDocument(),
+      version: 3,
+      meridians: [{
+        id: 'm1',
+        pairId: null,
+        meridianId: 'LU',
+        name: '手太陰肺經',
+        color: '#22c55e',
+        width: 3,
+        side: 'right',
+        nodes: [
+          { type: 'acupoint', pointId: 'p1', position: [0, 1, 0], normal: [0, 0, 1] },
+          { type: 'acupoint', pointId: 'p2', position: [0, 1.1, 0], normal: [0, 0, 1] },
+        ],
+        ribbons: [{
+          samples: [
+            { position: [0, 1, 0], normal: [0, 0, 1] },
+            { position: [0, 1.05, 0.002], normal: [0, 0.1, 0.995] },
+            { position: [0, 1.1, 0], normal: [0, 0, 1] },
+          ],
+        }],
+      }],
+      acupoints: [{
+        id: 'p1',
+        pairId: null,
+        name: '中府',
+        code: 'LU1',
+        meridianId: 'LU',
+        meridianName: '手太陰肺經',
+        sequence: 1,
+        side: 'right',
+        color: '#111111',
+        size: 10,
+        position: [0, 1, 0],
+        normal: [0, 0, 1],
+      }, {
+        id: 'p2',
+        pairId: null,
+        name: '雲門',
+        code: 'LU2',
+        meridianId: 'LU',
+        meridianName: '手太陰肺經',
+        sequence: 2,
+        side: 'right',
+        color: '#111111',
+        size: 10,
+        position: [0, 1.1, 0],
+        normal: [0, 0, 1],
+      }],
+    }
+    expect(validateDocument(document)).toEqual({ valid: true, errors: [] })
+    const parsed = parseDocument(JSON.stringify(document))
+    expect(parsed.valid).toBe(true)
+    expect(parsed.value.version).toBe(3)
+    expect(parsed.value.meridians[0].ribbons[0].samples).toHaveLength(3)
+    const editor = stripPublishRibbons(parsed.value)
+    expect(editor.version).toBe(2)
+    expect(editor.meridians[0].ribbons).toBeUndefined()
+    expect(quantizeVec3([1.23456789, -0.000004, 2], 5)).toEqual([1.23457, 0, 2])
   })
 
   it('migrates version 2 documents missing model.body', () => {

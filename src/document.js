@@ -54,13 +54,23 @@ const vector = {
 const meridianPalette = { enum: ['#ef4444', '#3b82f6', '#22c55e'] }
 const acupointPalette = { enum: ['#ef4444', '#3b82f6', '#22c55e', '#111111'] }
 
+const ribbonSample = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['position', 'normal'],
+  properties: {
+    position: vector,
+    normal: vector,
+  },
+}
+
 export const documentSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['format', 'version', 'model', 'settings', 'meridians', 'acupoints'],
   properties: {
     format: { const: 'acupuncture-3d' },
-    version: { const: 2 },
+    version: { enum: [2, 3] },
     model: {
       type: 'object',
       additionalProperties: false,
@@ -109,6 +119,21 @@ export const documentSchema = {
                 position: vector,
                 normal: vector,
                 style: { enum: ['along', 'linear', 'curve'] },
+              },
+            },
+          },
+          ribbons: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['samples'],
+              properties: {
+                samples: {
+                  type: 'array',
+                  minItems: 2,
+                  items: ribbonSample,
+                },
               },
             },
           },
@@ -263,12 +288,65 @@ export function migrateDocument(value) {
     }
   }
 
+  if (value.version === 3) {
+    return {
+      ...value,
+      meridians: (value.meridians || []).map((route) => ({
+        ...route,
+        nodes: migrateRouteNodes(route.nodes),
+        ribbons: sanitizeRibbons(route.ribbons),
+      })),
+    }
+  }
+
   return value
+}
+
+export function sanitizeRibbonSample(sample = {}) {
+  return {
+    position: [
+      Number(sample.position?.[0]) || 0,
+      Number(sample.position?.[1]) || 0,
+      Number(sample.position?.[2]) || 0,
+    ],
+    normal: [
+      Number(sample.normal?.[0]) || 0,
+      Number(sample.normal?.[1]) || 0,
+      Number(sample.normal?.[2]) || 0,
+    ],
+  }
+}
+
+export function sanitizeRibbons(ribbons = []) {
+  return (ribbons || []).map((ribbon) => ({
+    samples: (ribbon.samples || []).map(sanitizeRibbonSample),
+  })).filter((ribbon) => ribbon.samples.length >= 2)
+}
+
+export function stripPublishRibbons(document) {
+  if (!document || typeof document !== 'object') return document
+  return {
+    ...document,
+    version: 2,
+    meridians: (document.meridians || []).map((route) => {
+      const { ribbons, ...rest } = route
+      return rest
+    }),
+  }
+}
+
+export function quantizeVec3(value, digits = 5) {
+  const scale = 10 ** digits
+  return [0, 1, 2].map((index) => {
+    const rounded = Math.round((Number(value?.[index]) || 0) * scale) / scale
+    return rounded === 0 ? 0 : rounded
+  })
 }
 
 /** Download basename that distinguishes male vs female meridian JSON. */
 export function exportFileName(document, date = new Date()) {
   const body = inferBodyModel(document?.model)
   const day = date.toISOString().slice(0, 10)
-  return `meridian-map-v2-${body}-${day}.json`
+  const version = Number(document?.version) === 3 ? 3 : 2
+  return `meridian-map-v${version}-${body}-${day}.json`
 }
