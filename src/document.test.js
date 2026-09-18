@@ -182,6 +182,7 @@ describe('acupuncture document schema', () => {
     expect(editor.version).toBe(2)
     expect(editor.meridians[0].ribbons).toBeUndefined()
     expect(quantizeVec3([1.23456789, -0.000004, 2], 5)).toEqual([1.23457, 0, 2])
+    expect(quantizeVec3({ x: 0.14321, y: 1.38395, z: 0.03816 }, 5)).toEqual([0.14321, 1.38395, 0.03816])
   })
 
   it('migrates version 2 documents missing model.body', () => {

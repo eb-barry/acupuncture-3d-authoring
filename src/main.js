@@ -209,7 +209,16 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast
 
 const $ = (selector) => document.querySelector(selector)
 const makeId = () => crypto.randomUUID()
-const toArray = ({ x, y, z }) => [x, y, z]
+const toArray = (point) => {
+  if (Array.isArray(point)) {
+    return [Number(point[0]) || 0, Number(point[1]) || 0, Number(point[2]) || 0]
+  }
+  return [
+    Number(point?.x ?? point?.[0]) || 0,
+    Number(point?.y ?? point?.[1]) || 0,
+    Number(point?.z ?? point?.[2]) || 0,
+  ]
+}
 const PALETTE = [
   ['#ef4444', '紅色'],
   ['#3b82f6', '藍色'],
@@ -6420,12 +6429,12 @@ function pointToArray(point) {
 
 function bakeRouteRibbons(route) {
   return skinCurveRuns(route).map((run) => {
-    const points = (run.points || []).map(pointToArray)
+    const points = run.points || []
     if (points.length < 2) return null
     const conformed = conformRunToSkin(points)
     const samples = (conformed.points || []).map((position, index) => ({
-      position: quantizeVec3(position),
-      normal: quantizeVec3(conformed.normals?.[index] || [0, 0, 1]),
+      position: quantizeVec3(pointToArray(position)),
+      normal: quantizeVec3(pointToArray(conformed.normals?.[index] || [0, 0, 1])),
     }))
     return samples.length >= 2 ? { samples } : null
   }).filter(Boolean)
@@ -7653,6 +7662,16 @@ if (isDevMode(import.meta.env)) {
         const payload = bakePublishDocument(state)
         const result = validateDocument(payload)
         if (!result.valid) throw new Error(result.errors[0])
+        const extent = payload.meridians.reduce((max, route) => {
+          (route.ribbons || []).forEach((ribbon) => {
+            (ribbon.samples || []).forEach((sample) => {
+              const pos = sample.position || []
+              max = Math.max(max, Math.abs(pos[0] || 0), Math.abs(pos[1] || 0), Math.abs(pos[2] || 0))
+            })
+          })
+          return max
+        }, 0)
+        if (!(extent > 0.01)) throw new Error('baked-ribbons-collapsed')
         return {
           payload,
           body,

@@ -302,18 +302,21 @@ export function migrateDocument(value) {
   return value
 }
 
+export function vec3ToArray(value) {
+  if (Array.isArray(value)) {
+    return [Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0]
+  }
+  return [
+    Number(value?.x ?? value?.[0]) || 0,
+    Number(value?.y ?? value?.[1]) || 0,
+    Number(value?.z ?? value?.[2]) || 0,
+  ]
+}
+
 export function sanitizeRibbonSample(sample = {}) {
   return {
-    position: [
-      Number(sample.position?.[0]) || 0,
-      Number(sample.position?.[1]) || 0,
-      Number(sample.position?.[2]) || 0,
-    ],
-    normal: [
-      Number(sample.normal?.[0]) || 0,
-      Number(sample.normal?.[1]) || 0,
-      Number(sample.normal?.[2]) || 0,
-    ],
+    position: vec3ToArray(sample.position),
+    normal: vec3ToArray(sample.normal),
   }
 }
 
@@ -337,8 +340,8 @@ export function stripPublishRibbons(document) {
 
 export function quantizeVec3(value, digits = 5) {
   const scale = 10 ** digits
-  return [0, 1, 2].map((index) => {
-    const rounded = Math.round((Number(value?.[index]) || 0) * scale) / scale
+  return vec3ToArray(value).map((component) => {
+    const rounded = Math.round(component * scale) / scale
     return rounded === 0 ? 0 : rounded
   })
 }
