@@ -3,12 +3,14 @@ import {
   astarPath,
   buildAdjacency,
   buildCombinedSurfaceGraph,
+  buildCombinedSurfaceGraphAsync,
   collapseOppositeWallSpikes,
   collapseSharpChordSpikes,
   countChordSpikes,
   densifyPolyline,
   dist3,
   distanceToSegment3,
+  edgeKey,
   geodesicIsStable,
   polylineTurningEnergy,
   shortestSurfacePath,
@@ -150,6 +152,51 @@ describe('surface geodesic', () => {
       goalIds: [2],
       goalPoint: positions[2],
     })).toBeNull()
+  })
+
+  it('packs undirected edges into stable numeric keys', () => {
+    expect(edgeKey(3, 9)).toBe(edgeKey(9, 3))
+    expect(edgeKey(0, 1)).not.toBe(edgeKey(0, 2))
+    expect(edgeKey(100000, 200000)).toBe(100000 * 0x4000000 + 200000)
+  })
+
+  it('async surface graph matches the sync builder', async () => {
+    const left = {
+      positions: [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 1, 0],
+      ],
+      triangles: [0, 1, 2, 1, 3, 2],
+    }
+    const right = {
+      positions: [
+        [1, 0, 0],
+        [2, 0, 0],
+        [1, 1, 0],
+        [2, 1, 0],
+      ],
+      triangles: [0, 1, 2, 1, 3, 2],
+    }
+    const sync = buildCombinedSurfaceGraph([left, right])
+    const asyncGraph = await buildCombinedSurfaceGraphAsync([left, right], {
+      yieldEvery: 2,
+      yieldFn: async () => {},
+    })
+    expect(asyncGraph.positions).toEqual(sync.positions)
+    expect(asyncGraph.remap).toEqual(sync.remap)
+    expect(asyncGraph.adjacency.length).toBe(sync.adjacency.length)
+    const start = sync.remap[0]
+    const goal = sync.remap[sync.offsets[1] + 3]
+    const path = shortestSurfacePath({
+      adjacency: asyncGraph.adjacency,
+      positions: asyncGraph.positions,
+      startSeeds: [{ id: start, cost: 0 }],
+      goalIds: [goal],
+      goalPoint: asyncGraph.positions[goal],
+    })
+    expect(path?.points?.length).toBeGreaterThan(2)
   })
 
   it('walks across welded 16-bit mesh chunks that share a seam', () => {
