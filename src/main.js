@@ -6458,6 +6458,27 @@ function bakePublishDocument(document) {
   }
 }
 
+async function bakePublishDocumentAsync(document) {
+  const body = inferBodyModel(document?.model)
+  const preset = BODY_MODELS[body]
+  const meridians = []
+  for (const route of document.meridians || []) {
+    const { ribbons, ...rest } = route
+    meridians.push({ ...rest, ribbons: bakeRouteRibbons(route) })
+    await yieldToMain()
+  }
+  return {
+    ...document,
+    version: 3,
+    model: {
+      ...document.model,
+      body,
+      name: document.model?.name || preset.fileName,
+    },
+    meridians,
+  }
+}
+
 function exportJSON() {
   const body = inferBodyModel(state.model)
   const preset = BODY_MODELS[body]
@@ -7659,7 +7680,7 @@ if (isDevMode(import.meta.env)) {
             name: next.model?.name || BODY_MODELS[body].fileName,
           },
         })
-        const payload = bakePublishDocument(state)
+        const payload = await bakePublishDocumentAsync(state)
         const result = validateDocument(payload)
         if (!result.valid) throw new Error(result.errors[0])
         const extent = payload.meridians.reduce((max, route) => {
@@ -7673,7 +7694,7 @@ if (isDevMode(import.meta.env)) {
         }, 0)
         if (!(extent > 0.01)) throw new Error('baked-ribbons-collapsed')
         return {
-          payload,
+          json: JSON.stringify(payload),
           body,
           routes: payload.meridians.length,
           ribbons: payload.meridians.reduce((count, route) => count + (route.ribbons?.length || 0), 0),

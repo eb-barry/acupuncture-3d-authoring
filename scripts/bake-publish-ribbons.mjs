@@ -58,7 +58,7 @@ async function bakeOne(page, jsonText) {
       routes: result.routes,
       ribbons: result.ribbons,
       samples: result.samples,
-      json: JSON.stringify(result.payload),
+      json: result.json,
     }
   }, jsonText)
 }
@@ -87,7 +87,7 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath,
     headless: 'new',
-    protocolTimeout: 15 * 60 * 1000,
+    protocolTimeout: 45 * 60 * 1000,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -102,7 +102,7 @@ async function main() {
 
   try {
     const page = await waitForStudio(browser, studioUrl, 180000)
-    page.setDefaultTimeout(15 * 60 * 1000)
+    page.setDefaultTimeout(45 * 60 * 1000)
     for (const job of jobs) {
       console.log(`baking ${job.label} from ${job.input}`)
       const source = await readFile(job.input, 'utf8')
